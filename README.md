@@ -30,8 +30,10 @@
 
 在 `fibonacci(40)` 的基准测试中，得益于 JIT 优化，本实现的性能表现优异：
 
-*   **解释模式 (Interpreter)**: ~1.25s (首次运行速度,Lua大约需要5s一次)
-*   **JIT 编译后 (GraalVM)**: ~1.25s (达到原生 Java/C 级别性能)
+*   **解释模式 (Interpreter)**: ~ 1.12s
+*   **JIT 编译后 (GraalVM)**: ~ 1.2s
+*   **Lua 解释器**: ~ 4.6s
+*   **Lua JIT**: ~ 0.96s
 
 *(注：这是基于消除 `LuaNumber` 包装对象、打通原生 `long` 通道后的测试结果)*
 
