@@ -8,5 +8,5 @@ module org.graalvm.lua {
   requires java.management;
     exports com.zhhz.truffle.lua;
   provides  com.oracle.truffle.api.provider.TruffleLanguageProvider with
-          LuaLanguageProvider;
+          com.zhhz.truffle.lua.LuaLanguageProvider;
 }
