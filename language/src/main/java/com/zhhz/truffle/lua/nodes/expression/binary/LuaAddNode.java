@@ -70,15 +70,18 @@ public abstract class LuaAddNode extends LuaBinaryNode {
         return left + right;
     }
 
-    // 【关键】确保这个特化存在！
-    @Specialization
+    // 1. 乐观路径：假设是 long，如果不溢出就一直用这个
+    @Specialization(rewriteOn = ArithmeticException.class)
     protected Object doLong(long left, long right) {
-        try {
-            return Math.addExact(left, right); // 使用 addExact 可以处理溢出
-        } catch (ArithmeticException e) {
-            // 溢出后，转为 double 计算
-            return  (double)left + (double)right;
-        }
+        return Math.addExact(left, right); // 使用 addExact 可以处理溢出
+    }
+
+    // 2. 溢出后的路径：一旦上面抛出异常，节点重写为使用这个方法
+    // 或者依靠 DSL 的类型匹配，只要能处理 (long, long) 返回 double 即可
+    @Specialization
+    protected double doLongOverflow(long left, long right) {
+        // 这里执行浮点加法
+        return (double) left + (double) right;
     }
 
     @Specialization
