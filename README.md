@@ -30,8 +30,10 @@
 
 在 `fibonacci(40)` 的基准测试中，得益于 JIT 优化，本实现的性能表现优异：
 
-*   **解释模式 (Interpreter)**: ~ 1.12s
-*   **JIT 编译后 (GraalVM)**: ~ 1.2s
+*   **解释模式 (Interpreter)**: ~ 1.12s (JDK 21)
+*   **JIT 编译后 (GraalVM)**: ~ 1.2s (JDK 21)
+*   **解释模式 (Interpreter)**: ~ 0.7s (JDK 25)
+*   **JIT 编译后 (GraalVM)**: ~ 0.32s (JDK 25)
 *   **Lua 解释器**: ~ 4.6s
 *   **Lua JIT**: ~ 0.96s
 
