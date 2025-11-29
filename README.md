@@ -69,6 +69,11 @@ public class Main {
 }
 ```
 
+### 运行测试文件需如下参数
+```bash
+  -ea --add-opens org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED --add-opens org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED --enable-native-access=org.graalvm.truffle -Dpolyglot.engine.WarnInterpreterOnly=false
+```
+
 ## 📂 项目结构
 
 *   `src/main/java/com/zhhz/truffle/lua/parser`: **前端解析**。基于 ANTLR4 的词法分析器和语法分析器，以及 `AstBuilder` (Visitor) 用于构建 AST。
