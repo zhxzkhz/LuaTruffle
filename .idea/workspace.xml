@@ -1,0 +1,469 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="d6a38670-e690-4d99-8e31-f689eec9277f" name="更改" comment="首次上传" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager">
+    <option name="groupingKeys">
+      <option value="directory" />
+      <option value="module" />
+      <option value="repository" />
+    </option>
+  </component>
+  <component name="ExportToHTMLSettings">
+    <option name="OUTPUT_DIRECTORY" value="$PROJECT_DIR$/../LuaTruffle\exportToHTML" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Interface" />
+        <option value="AnnotationType" />
+        <option value="Class" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0.jar!/com/oracle/truffle/api/CompilerDirectives.class" root0="SKIP_INSPECTION" />
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0.jar!/com/oracle/truffle/api/HostCompilerDirectives.class" root0="SKIP_INSPECTION" />
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0.jar!/com/oracle/truffle/api/TruffleLanguage.class" root0="SKIP_INSPECTION" />
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0.jar!/com/oracle/truffle/api/frame/FrameSlotKind.class" root0="SKIP_INSPECTION" />
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0.jar!/com/oracle/truffle/api/nodes/RootNode.class" root0="SKIP_INSPECTION" />
+    <setting file="jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-runtime/24.2.0/truffle-runtime-24.2.0.jar!/com/oracle/truffle/runtime/OptimizedBlockNode.class" root0="SKIP_INSPECTION" />
+  </component>
+  <component name="MavenRunner">
+    <option name="vmOptions" value="-Dfile.encoding=utf8" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7
+}</component>
+  <component name="ProjectId" id="33K4ILCpix0jcV6Dfu2ak5POLvJ" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="1" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;JUnit.LuaBinaryOperatorsTest (1).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.LuaBinaryOperatorsTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.LuaExpressionTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.LuaIntegrationTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.LuaIntegrationTest.testStringMetatable.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.LuaStatementTest.executor&quot;: &quot;Run&quot;,
+    &quot;Maven.language [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.language [compile].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.language [test].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.launcher [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.launcher [compile].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.launcher [package].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.launcher [test].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language [compile].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language [package].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language [test].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language-parent [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language-parent [compile].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language-parent [org.apache.maven.plugins:maven-clean-plugin:3.2.0:clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language-parent [package].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.lua-language-parent [verify].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage [compile].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage [test].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage-parent [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage-parent [install].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage-parent [org.apache.maven.plugins:maven-clean-plugin:3.2.0:clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage-parent [package].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.simplelanguage-parent [test].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.standalone [package].executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SHELLCHECK.PATH&quot;: &quot;C:\\Users\\Administrator\\AppData\\Roaming\\JetBrains\\IntelliJIdea2025.2\\plugins\\Shell Script\\shellcheck.exe&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;E:/java/LuaTruffle/standalone/src/main/resources&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;project.structure.last.edited&quot;: &quot;项目&quot;,
+    &quot;project.structure.proportion&quot;: &quot;0.15&quot;,
+    &quot;project.structure.side.proportion&quot;: &quot;0.35632184&quot;,
+    &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;http.proxy&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;,
+    &quot;应用程序.LuaMain.executor&quot;: &quot;Run&quot;,
+    &quot;应用程序.SLMain.executor&quot;: &quot;Run&quot;,
+    &quot;应用程序.com.zhhz.truffle.lua.launcher.LuaMain.executor&quot;: &quot;Run&quot;,
+    &quot;应用程序.com.zhhz.truffle.lua.launcher.SLMain (1).executor&quot;: &quot;Run&quot;,
+    &quot;应用程序.com.zhhz.truffle.lua.launcher.SLMain.executor&quot;: &quot;Run&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CreateClassDialog.RecentsKey">
+      <recent name="com.zhhz.truffle.lua.parser" />
+    </key>
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="E:\java\LuaTruffle\standalone\src\main\resources" />
+      <recent name="E:\java\LuaTruffle\language\src\main\resources\META-INF\native-image\org.graalvm.truffle\truffle-lua" />
+      <recent name="E:\java\LuaTruffle\language\src\test\java" />
+      <recent name="E:\java\LuaTruffle\language\src\main\java\com\zhhz\truffle\lua\parser" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="E:\java\LuaTruffle\launcher\src\main" />
+      <recent name="E:\java\LuaTruffle\launcher\src\test\resources" />
+      <recent name="E:\java\LuaTruffle\launcher\src" />
+      <recent name="E:\java\LuaTruffle\language\src\main" />
+      <recent name="E:\java\LuaTruffle\language\src\test\java\com\zhhz\truffle\lua\test" />
+    </key>
+    <key name="IntroduceConstantDialog.RECENTS_KEY">
+      <recent name="com.zhhz.truffle.lua.runtime.LuaContext" />
+    </key>
+    <key name="MoveClassesOrPackagesDialog.RECENTS_KEY">
+      <recent name="com.zhhz.truffle.lua.nodes.access" />
+      <recent name="com.zhhz.truffle.lua.builtins" />
+    </key>
+    <key name="CopyClassDialog.RECENTS_KEY">
+      <recent name="com.zhhz.truffle.lua.builtins" />
+      <recent name="com.zhhz.truffle.lua.nodes.controlflow" />
+      <recent name="com.zhhz.truffle.lua.test" />
+    </key>
+  </component>
+  <component name="RunManager" selected="应用程序.LuaMain">
+    <configuration name="LuaMain" type="Application" factoryName="Application" temporary="true">
+      <option name="ALTERNATIVE_JRE_PATH" value="graalvm-21" />
+      <option name="ALTERNATIVE_JRE_PATH_ENABLED" value="true" />
+      <option name="MAIN_CLASS_NAME" value="com.zhhz.truffle.lua.launcher.LuaMain" />
+      <option name="VM_PARAMETERS" value="-ea" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.oracle.truffle.lua.launcher.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="LuaExpressionTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="language" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.zhhz.truffle.lua.test.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.zhhz.truffle.lua.test" />
+      <option name="MAIN_CLASS_NAME" value="com.zhhz.truffle.lua.test.LuaExpressionTest" />
+      <option name="METHOD_NAME" value="" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="-ea  --add-opens org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED --add-opens org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED --enable-native-access=org.graalvm.truffle -Dpolyglot.engine.WarnInterpreterOnly=false" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="LuaIntegrationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="language" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.zhhz.truffle.lua.test.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.zhhz.truffle.lua.test" />
+      <option name="MAIN_CLASS_NAME" value="com.zhhz.truffle.lua.test.LuaIntegrationTest" />
+      <option name="METHOD_NAME" value="" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="-ea  --add-opens org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED --add-opens org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED --enable-native-access=org.graalvm.truffle -Dpolyglot.engine.WarnInterpreterOnly=false" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="LuaStatementTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="language" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.zhhz.truffle.lua.test.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.zhhz.truffle.lua.test" />
+      <option name="MAIN_CLASS_NAME" value="com.zhhz.truffle.lua.test.LuaStatementTest" />
+      <option name="METHOD_NAME" value="" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="-ea  --add-opens org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED --add-opens org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED --enable-native-access=org.graalvm.truffle -Dpolyglot.engine.WarnInterpreterOnly=false" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="lua-language-parent [compile]" type="MavenRunConfiguration" factoryName="Maven">
+      <MavenSettings>
+        <option name="myGeneralSettings" />
+        <option name="myRunnerSettings">
+          <MavenRunnerSettings>
+            <option name="delegateBuildToMaven" value="false" />
+            <option name="environmentProperties">
+              <map />
+            </option>
+            <option name="jreName" value="#USE_PROJECT_JDK" />
+            <option name="mavenProperties">
+              <map />
+            </option>
+            <option name="passParentEnv" value="true" />
+            <option name="skipTests" value="false" />
+            <option name="vmOptions" value="-Dfile.encoding=utf8" />
+          </MavenRunnerSettings>
+        </option>
+        <option name="myRunnerParameters">
+          <MavenRunnerParameters>
+            <option name="cmdOptions" />
+            <option name="profiles">
+              <set />
+            </option>
+            <option name="goals">
+              <list>
+                <option value="compile" />
+              </list>
+            </option>
+            <option name="multimoduleDir" />
+            <option name="pomFileName" value="pom.xml" />
+            <option name="profilesMap">
+              <map />
+            </option>
+            <option name="projectsCmdOptionValues">
+              <list />
+            </option>
+            <option name="resolveToWorkspace" value="false" />
+            <option name="workingDirPath" value="$PROJECT_DIR$" />
+          </MavenRunnerParameters>
+        </option>
+      </MavenSettings>
+      <method v="2" />
+    </configuration>
+    <configuration name="lua-language-parent [package]" type="MavenRunConfiguration" factoryName="Maven">
+      <MavenSettings>
+        <option name="myGeneralSettings">
+          <MavenGeneralSettings>
+            <option name="alwaysUpdateSnapshots" value="false" />
+            <option name="checksumPolicy" value="NOT_SET" />
+            <option name="customMavenHome" />
+            <option name="emulateTerminal" value="false" />
+            <option name="failureBehavior" value="NOT_SET" />
+            <option name="localRepository" value="" />
+            <option name="mavenHome" value="已捆绑(Maven 3)" />
+            <option name="mavenHomeTypeForPersistence" value="BUNDLED3" />
+            <option name="nonRecursive" value="false" />
+            <option name="outputLevel" value="INFO" />
+            <option name="printErrorStackTraces" value="false" />
+            <option name="showDialogWithAdvancedSettings" value="false" />
+            <option name="threads" />
+            <option name="useMavenConfig" value="true" />
+            <option name="userSettingsFile" value="" />
+            <option name="workOffline" value="false" />
+          </MavenGeneralSettings>
+        </option>
+        <option name="myRunnerSettings">
+          <MavenRunnerSettings>
+            <option name="delegateBuildToMaven" value="false" />
+            <option name="environmentProperties">
+              <map />
+            </option>
+            <option name="jreName" value="#USE_PROJECT_JDK" />
+            <option name="mavenProperties">
+              <map />
+            </option>
+            <option name="passParentEnv" value="true" />
+            <option name="skipTests" value="false" />
+            <option name="vmOptions" value="-Dfile.encoding=gbk" />
+          </MavenRunnerSettings>
+        </option>
+        <option name="myRunnerParameters">
+          <MavenRunnerParameters>
+            <option name="cmdOptions" />
+            <option name="profiles">
+              <set />
+            </option>
+            <option name="goals">
+              <list>
+                <option value="package" />
+              </list>
+            </option>
+            <option name="multimoduleDir" />
+            <option name="pomFileName" value="pom.xml" />
+            <option name="profilesMap">
+              <map />
+            </option>
+            <option name="projectsCmdOptionValues">
+              <list />
+            </option>
+            <option name="resolveToWorkspace" value="false" />
+            <option name="workingDirPath" value="$PROJECT_DIR$" />
+          </MavenRunnerParameters>
+        </option>
+      </MavenSettings>
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="JUnit.LuaExpressionTest" />
+      <item itemvalue="JUnit.LuaIntegrationTest" />
+      <item itemvalue="JUnit.LuaStatementTest" />
+      <item itemvalue="Maven.lua-language-parent [compile]" />
+      <item itemvalue="Maven.lua-language-parent [package]" />
+      <item itemvalue="应用程序.LuaMain" />
+    </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="应用程序.LuaMain" />
+        <item itemvalue="JUnit.LuaExpressionTest" />
+        <item itemvalue="JUnit.LuaStatementTest" />
+        <item itemvalue="JUnit.LuaIntegrationTest" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="d6a38670-e690-4d99-8e31-f689eec9277f" name="更改" comment="" />
+      <created>1759052348778</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1759052348778</updated>
+      <workItem from="1759052350208" duration="875000" />
+      <workItem from="1759053292793" duration="264000" />
+      <workItem from="1759053656064" duration="5807000" />
+      <workItem from="1759061240527" duration="897000" />
+      <workItem from="1759064143906" duration="596000" />
+      <workItem from="1759068779576" duration="680000" />
+      <workItem from="1759069516690" duration="129000" />
+      <workItem from="1759069681297" duration="40000" />
+      <workItem from="1759069742437" duration="90000" />
+      <workItem from="1759069862403" duration="715000" />
+      <workItem from="1759073634712" duration="979000" />
+      <workItem from="1759101815441" duration="3156000" />
+      <workItem from="1759105263842" duration="380000" />
+      <workItem from="1759106268694" duration="2220000" />
+      <workItem from="1759108556624" duration="15505000" />
+      <workItem from="1759125253942" duration="121000" />
+      <workItem from="1759125672884" duration="618000" />
+      <workItem from="1759126516622" duration="30272000" />
+      <workItem from="1759189409682" duration="5436000" />
+      <workItem from="1759318399424" duration="12021000" />
+      <workItem from="1759411756574" duration="730000" />
+      <workItem from="1759454932733" duration="9588000" />
+      <workItem from="1759539050042" duration="6780000" />
+    </task>
+    <task id="LOCAL-00001" summary="首次上传">
+      <option name="closed" value="true" />
+      <created>1764336696861</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1764336696861</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="1" />
+    <MESSAGE value="首次上传" />
+    <option name="LAST_COMMIT_MESSAGE" value="首次上传" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/LuaException.java</url>
+          <line>103</line>
+          <option name="timeStamp" value="27" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/target/generated-sources/annotations/com/zhhz/truffle/lua/builtins/LuaPrintBuiltinFactory.java</url>
+          <line>87</line>
+          <option name="timeStamp" value="114" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/util/LuaUnboxNode.java</url>
+          <line>111</line>
+          <option name="timeStamp" value="239" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/util/LuaUnboxNode.java</url>
+          <line>106</line>
+          <option name="timeStamp" value="240" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/builtins/LuaSetMetatableBuiltinNode.java</url>
+          <line>32</line>
+          <option name="timeStamp" value="257" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/expression/binary/LuaConcatNode.java</url>
+          <line>79</line>
+          <option name="timeStamp" value="269" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/access/LuaWriteArgumentNode.java</url>
+          <line>55</line>
+          <option name="timeStamp" value="274" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>jar://$MAVEN_REPOSITORY$/org/graalvm/truffle/truffle-api/24.2.0/truffle-api-24.2.0-sources.jar!/com/oracle/truffle/api/interop/AssertUtils.java</url>
+          <line>143</line>
+          <option name="timeStamp" value="281" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/access/LuaReadLocalVariableNode.java</url>
+          <line>136</line>
+          <option name="timeStamp" value="285" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/language/src/main/java/com/zhhz/truffle/lua/nodes/access/LuaWriteLocalVariableNode.java</url>
+          <line>96</line>
+          <option name="timeStamp" value="286" />
+        </line-breakpoint>
+        <breakpoint enabled="true" type="java-exception">
+          <properties class="org.graalvm.polyglot.PolyglotException" package="org.graalvm.polyglot" />
+          <option name="timeStamp" value="287" />
+        </breakpoint>
+      </breakpoints>
+      <default-breakpoints>
+        <breakpoint type="java-exception">
+          <properties>
+            <option name="NOTIFY_UNCAUGHT" value="false" />
+          </properties>
+        </breakpoint>
+      </default-breakpoints>
+    </breakpoint-manager>
+    <pin-to-top-manager>
+      <pinned-members>
+        <PinnedItemInfo parentTag="com.oracle.truffle.api.impl.FrameWithoutBoxing" memberName="descriptor" />
+        <PinnedItemInfo parentTag="com.oracle.truffle.runtime.OptimizedBlockNode" memberName="executor" />
+        <PinnedItemInfo parentTag="com.zhhz.truffle.lua.nodes.controlflow.LuaReturnNode" memberName="returnExpressions" />
+        <PinnedItemInfo parentTag="com.zhhz.truffle.lua.parser.LuaNodeParser" memberName="functions" />
+        <PinnedItemInfo parentTag="com.zhhz.truffle.lua.nodes.controlflow.LuaBlockNode" memberName="block" />
+        <PinnedItemInfo parentTag="com.oracle.truffle.api.impl.FrameWithoutBoxing" memberName="arguments" />
+      </pinned-members>
+    </pin-to-top-manager>
+    <watches-manager>
+      <configuration name="Application">
+        <watch expression="frame.getFrameDescriptor().getAuxiliarySlots()" language="JAVA" custom="org.graalvm.polyglot.Context" />
+      </configuration>
+    </watches-manager>
+  </component>
+</project>

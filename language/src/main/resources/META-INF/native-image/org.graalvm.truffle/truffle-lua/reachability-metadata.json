@@ -1,0 +1,24 @@
+{
+  "reflection": [
+    {
+      "type": "com.zhhz.truffle.lua.builtins.OsLibrary",
+      "methods": [
+        {
+          "name": "clock",
+          "parameterTypes": []
+        }
+      ],
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.StringLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    }
+  ]
+}
