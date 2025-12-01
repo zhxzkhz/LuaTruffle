@@ -514,9 +514,6 @@ public class LuaNodeParser extends LuaBaseParser {
 
             int start = leftNode.getSourceCharIndex();
             int length = rightNode.getSourceEndIndex() - start;
-            if (length + start > source.getLength()){
-                System.out.println("source = " + source.getCharacters());
-            }
             result.setSourceSection(start, length);
             result.addExpressionTag();
 
@@ -648,6 +645,15 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaExpressionNode visitStringChar(LuaParser.StringCharContext ctx) {
+            var name = ctx.start;
+            LuaStringLiteralNode node = new LuaStringLiteralNode(unescapeLuaString(asTruffleString(name,true).toJavaStringUncached()));
+            node.addExpressionTag();
+            setSourceSectionFromContext(node,ctx);
+            return node;
+        }
+
+        @Override
+        public LuaExpressionNode visitStringNormal(LuaParser.StringNormalContext ctx) {
             var name = ctx.start;
             LuaStringLiteralNode node = new LuaStringLiteralNode(unescapeLuaString(asTruffleString(name,true).toJavaStringUncached()));
             node.addExpressionTag();
@@ -797,7 +803,6 @@ public class LuaNodeParser extends LuaBaseParser {
         @Override
         public LuaExpressionNode visitFuncCall(LuaParser.FuncCallContext ctx) {
             LuaExpressionNode functionNode = visit(ctx.prefixexp());
-
             LuaExpressionNode[] argNodes = visitArgsAsArray(ctx.args());
             for (LuaExpressionNode node : argNodes) {
                 if (node == null){
