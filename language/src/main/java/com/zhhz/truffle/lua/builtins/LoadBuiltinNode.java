@@ -15,6 +15,8 @@ import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
+import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+
 @NodeInfo(shortName = "load")
 public abstract class LoadBuiltinNode extends LuaBuiltinNode {
 
@@ -152,7 +154,4 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
         return sb.toString();
     }
 
-    private TruffleString toTruffleString(String s) {
-        return TruffleString.fromJavaStringUncached(s, TruffleString.Encoding.UTF_8);
-    }
 }
