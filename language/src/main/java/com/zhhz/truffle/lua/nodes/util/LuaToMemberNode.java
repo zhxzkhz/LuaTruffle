@@ -73,7 +73,7 @@ public abstract class LuaToMemberNode extends Node {
 
     @Specialization
     protected static String fromTruffleString(TruffleString value,
-                    @Cached(inline = false) TruffleString.ToJavaStringNode toJavaStringNode) {
+                    @Cached TruffleString.ToJavaStringNode toJavaStringNode) {
         return toJavaStringNode.execute(value);
     }
 

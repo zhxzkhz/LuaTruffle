@@ -9,6 +9,8 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.util.LuaCoerceToStringNode;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
+import java.util.Arrays;
+
 /**
  * 实现了Lua的 'print' 内置函数。
  */
@@ -50,7 +52,6 @@ public abstract class LuaPrintBuiltinNode extends LuaBuiltinNode {
             return "";
         }
         StringBuilder sb = new StringBuilder();
-
         TruffleString first = toStringNode.execute(arguments[0]);
         sb.append(toJavaStringNode.execute(first));
 
