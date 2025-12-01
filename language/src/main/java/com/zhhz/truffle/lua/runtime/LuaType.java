@@ -84,13 +84,13 @@ public final class LuaType implements TruffleObject {
     // 布尔值
     public static final LuaType BOOLEAN = new LuaType("Boolean", InteropLibrary::isBoolean);
 
-    // 对象：指代拥有成员（members）的东西，通常对应 Lua 的 Table
-    public static final LuaType OBJECT = new LuaType("Object", InteropLibrary::hasMembers);
+    // 表
+    public static final LuaType TABLE = new LuaType("Table",  (l, v) -> v instanceof LuaTable);
 
     // 函数：指代可执行的东西
     public static final LuaType FUNCTION = new LuaType("Function", InteropLibrary::isExecutable);
 
-    // 多返回值结果：目前逻辑是总是返回 true，这可能是一个特殊的内部类型或兜底类型
+    // 多返回值结果
     public static final LuaType LuaMultiValue = new LuaType("LuaMultiValue", (l, v) -> v instanceof LuaMultiValue);
 
     /*
@@ -102,7 +102,7 @@ public final class LuaType implements TruffleObject {
      * @CompilationFinal(dimensions = 1): 告诉编译器这个数组的内容在运行时是不变的，
      * 允许 JIT 编译器在部分求值时将其视为常量进行优化（例如循环展开）。
      */
-    @CompilationFinal(dimensions = 1) public static final LuaType[] PRECEDENCE = new LuaType[]{NIL, NUMBER, STRING, BOOLEAN, FUNCTION, OBJECT, LuaMultiValue};
+    @CompilationFinal(dimensions = 1) public static final LuaType[] PRECEDENCE = new LuaType[]{NIL, NUMBER, STRING, BOOLEAN, FUNCTION, TABLE, LuaMultiValue};
 
     private final String name;
     private final TypeCheck isInstance;
