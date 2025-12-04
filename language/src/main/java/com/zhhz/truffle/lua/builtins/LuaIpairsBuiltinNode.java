@@ -23,7 +23,7 @@ public abstract class LuaIpairsBuiltinNode extends LuaBuiltinNode {
 
     @Specialization
     public Object doIPairs(Object[] arguments) {
-        if (arguments.length == 0 || !(arguments[0] instanceof LuaTable table)) {
+        if (arguments.length == 0) {
             throw LuaException.create("bad argument #1 to 'ipairs' (table expected)",this);
         }
 
@@ -33,7 +33,7 @@ public abstract class LuaIpairsBuiltinNode extends LuaBuiltinNode {
         // 3. 初始控制变量 (0)
         return new LuaMultiValue(new Object[]{
                 getIteratorFunction(),
-                table,
+                arguments[0],
                 0L // 初始索引是 0
         });
     }

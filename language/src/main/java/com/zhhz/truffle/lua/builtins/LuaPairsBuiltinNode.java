@@ -23,7 +23,7 @@ public abstract class LuaPairsBuiltinNode extends LuaBuiltinNode {
 
     @Specialization
     public Object doPairs(Object[] arguments,@CachedLibrary(limit = "3") DynamicObjectLibrary objLib) {
-        if (arguments.length == 0 || !(arguments[0] instanceof LuaTable table)) {
+        if (arguments.length == 0) {
             throw LuaException.create("bad argument #1 to 'pairs' (table expected)",this);
         }
 
@@ -41,7 +41,7 @@ public abstract class LuaPairsBuiltinNode extends LuaBuiltinNode {
         // 3. 用 Object[] 返回
         return new LuaMultiValue(new Object[]{
                 nextFunction,
-                table,
+                arguments[0],
                 LuaNil.SINGLETON
         });
     }
