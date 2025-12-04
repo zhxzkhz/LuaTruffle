@@ -85,8 +85,10 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
             }
 
         } else {
-
-            throw new RuntimeException("LuaReturnNode 返回值错误");
+            finalArguments = new Object[argCount];
+            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
+            finalArguments[argCount - 1] = lastResult;
+            //throw new RuntimeException("LuaReturnNode 返回值错误");
         }
 
 

@@ -1,16 +1,19 @@
 package com.zhhz.truffle.lua.nodes.access;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.dsl.Fallback;
-import com.oracle.truffle.api.dsl.NodeChild;
-import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.*;
 import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.interop.UnknownIdentifierException;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
+import com.zhhz.truffle.lua.nodes.util.LuaToMemberNode;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaNil;
@@ -80,6 +83,27 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
         return result;
     }
 
+    // userdata 对象处理方法
+    @Specialization(replaces = "readObjectProperty", limit = "CACHE_LIMIT")
+    protected static Object doHostObject(TruffleObject object, Object key,
+                                         @Bind Node node,
+                                          @CachedLibrary("object") InteropLibrary objects,
+                                          @Cached LuaToMemberNode asMember) {
+        try {
+            return objects.readMember(object, asMember.execute(node, key));
+        } catch (UnsupportedMessageException | UnknownIdentifierException e) {
+            throw LuaException.undefinedProperty(node, key);
+        }
+    }
+
+    // --- 回退路径 (Fallback) ---
+    @Fallback
+    protected Object doNonTable(Object object, Object key) {
+        return readWithMetatable(object, key);
+        //throw LuaException.create("attempt to index a " + getTypeName(table) + " value " + String.format(" (global '%s')", getUnresolvedVariableName()),this);
+    }
+
+
     // --- 慢路径：元表处理 ---
 
     /**
@@ -89,6 +113,8 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     @TruffleBoundary
     private Object readWithMetatable(Object table, Object key) {
         LuaTable metatable = getContext().getEffectiveMetatable(table);
+
+        System.out.println("table = " + table.getClass());
 
         if (metatable == null) {
             return LuaNil.SINGLETON; // 没有元表，查找结束
@@ -130,6 +156,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
         return LuaNil.SINGLETON;
     }
 
+
     /**
      * 辅助方法，用于在 __index 表链中进行查找。
      */
@@ -161,13 +188,6 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
         }
         // 超过最大深度，抛出错误
         throw LuaException.create("metatable __index chain too deep",this);
-    }
-
-    // --- 回退路径 (Fallback) ---
-    @Fallback
-    protected Object doNonTable(Object object, Object key) {
-        return readWithMetatable(object, key);
-        //throw LuaException.create("attempt to index a " + getTypeName(table) + " value " + String.format(" (global '%s')", getUnresolvedVariableName()),this);
     }
 
     // --- 卫语句 ---

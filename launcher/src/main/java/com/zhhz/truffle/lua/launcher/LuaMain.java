@@ -42,9 +42,11 @@ package com.zhhz.truffle.lua.launcher;
 
 import org.graalvm.polyglot.*;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.net.URL;
 import java.util.Objects;
 
 public final class LuaMain {
@@ -56,12 +58,18 @@ public final class LuaMain {
      */
     public static void main(String[] args) throws IOException {
 
-        String fileName = "fibonacci.lua";
+        String fileName = "main.lua";
 
-        ClassLoader classLoader = LuaMain.class.getClassLoader();
-        InputStreamReader reader = new InputStreamReader(Objects.requireNonNull(classLoader.getResourceAsStream(fileName)));
+        // 2. 获取根目录的 URL (传入空字符串 "")
+        String projectPath = System.getProperty("user.dir");
 
-        Source source = Source.newBuilder(Lua, reader ,fileName).build();
+        // 拼接 Maven 标准目录结构
+        String resourcesPath = projectPath + File.separator + "launcher" + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + fileName;
+
+        //ClassLoader classLoader = LuaMain.class.getClassLoader();
+        //InputStreamReader reader = new InputStreamReader(Objects.requireNonNull(classLoader.getResourceAsStream(fileName)));
+        //Source source = Source.newBuilder(Lua, reader ,fileName).build();
+        Source source = Source.newBuilder(Lua, new File(resourcesPath)).build();
 
         System.exit(executeSource(source));
 

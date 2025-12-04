@@ -5,8 +5,6 @@ function fibonacci(n)
   return fibonacci(n-1) + fibonacci(n-2)
 end
 
-while true do
-  local start = os.clock()
-  print(fibonacci(40))
-  print(os.clock() - start)
-end
+local start = os.clock()
+print(fibonacci(40))
+print(os.clock() - start)

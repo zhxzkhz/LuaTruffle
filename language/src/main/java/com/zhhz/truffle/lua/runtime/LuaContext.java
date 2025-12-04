@@ -43,6 +43,7 @@ package com.zhhz.truffle.lua.runtime;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.dsl.Bind;
@@ -56,12 +57,17 @@ import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.builtins.*;
+import com.zhhz.truffle.lua.builtins.pack.LoadLibBuiltinNodeGen;
+import com.zhhz.truffle.lua.builtins.pack.LuaPathSearcherNodeGen;
+import com.zhhz.truffle.lua.builtins.pack.PreloadSearcherNodeGen;
+import com.zhhz.truffle.lua.builtins.pack.SearchPathBuiltinNodeGen;
 import org.graalvm.polyglot.Context;
 
 import java.io.PrintWriter;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.file.FileSystems;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -92,6 +98,12 @@ public final class LuaContext {
     // 【1. 新增】一个用于存储【类型默认元表】的 Map
     private final Map<Class<?>, LuaTable> typeMetatables = new HashMap<>();
 
+    // 默认的搜索路径，模拟标准 Lua
+    // ? 代表模块名。分号 ; 分隔不同的路径。
+    private static final String DEFAULT_PATH = "./?.lua;./?/init.lua";
+
+    private boolean packagePathInitialized = false;
+
     public LuaContext(LuaLanguage language, Env env) {
         this.env = env;
 
@@ -113,6 +125,8 @@ public final class LuaContext {
         LuaBoolean.get(this,false);
         //安装核心库
         installBuiltins();
+        //初始化 package 表
+        setupPackageSystem();
 
     }
 
@@ -152,6 +166,13 @@ public final class LuaContext {
         return TruffleString.fromJavaStringUncached(s,LuaLanguage.STRING_ENCODING);
     }
 
+    public boolean isPackagePathInitialized() {
+        return packagePathInitialized;
+    }
+
+    public void setPackagePathInitialized(boolean initialized) {
+        this.packagePathInitialized = initialized;
+    }
 
     private void installBuiltins() {
 
@@ -163,6 +184,7 @@ public final class LuaContext {
         installBuiltin("loadstring", loadFactory);
 
         installBuiltin("print",LuaPrintBuiltinNodeGen::create);
+        installBuiltin("require", LuaRequireBuiltinNodeGen::create);
         installBuiltin("error",LuaErrorBuiltinNodeGen::create);
         installBuiltin("next",LuaNextBuiltinNodeGen::create);
         installBuiltin("pairs",LuaPairsBuiltinNodeGen::create);
@@ -197,6 +219,92 @@ public final class LuaContext {
         this.typeMetatables.put(TruffleString.class, stringMetatable);
     }
 
+    private void setupPackageSystem() {
+        LuaTable packageTable = new LuaTable(tableShape);
+        globals.rawset("package", packageTable);
+
+
+        // 1. 基础字段
+        packageTable.rawset("loaded", new LuaTable(tableShape));
+        packageTable.rawset("preload", new LuaTable(tableShape));
+        packageTable.rawset("path", toTruffleString(DEFAULT_PATH)); // "./?.lua;..."
+
+        // Windows 用 \，其他用 /
+        String dirSep = FileSystems.getDefault().getSeparator();
+        packageTable.rawset("config", toTruffleString(dirSep + "\n;\n?\n!\n-"));
+
+        // 2. 注册 package 函数
+        installFunctionIntoTable(packageTable, "searchpath", SearchPathBuiltinNodeGen::create);
+        installFunctionIntoTable(packageTable, "loadlib", LoadLibBuiltinNodeGen::create);
+
+        // 3. 初始化 package.searchers (Lua 5.2+) / package.loaders (Lua 5.1)
+        // 这是一个包含函数的表（数组）
+        LuaTable searchers = new LuaTable(tableShape);
+
+        // Searcher 1: Preload (检查 package.preload)
+        installFunctionIntoArray(searchers, 1, PreloadSearcherNodeGen::create);
+
+        // Searcher 2: Lua Path (使用 package.path 查找文件)
+        installFunctionIntoArray(searchers, 2, LuaPathSearcherNodeGen::create);
+
+        packageTable.rawset("searchers", searchers);
+    }
+
+    private void installFunctionIntoArray(LuaTable table, int index, Supplier<LuaBuiltinNode> factory) {
+        RootNode root = new BuiltinRootNode(language, factory);
+        table.arrayRawSet(index, new LuaFunction(this.functionShape,root.getCallTarget()));
+    }
+
+    /**
+     * 根据入口脚本的 Source 初始化 package.path
+     * 只有在第一次解析主脚本时调用。
+     */
+    public void initPackagePath(Source source) {
+        // 1. 获取 package 表
+        Object pkgObj = globals.rawget("package");
+        if (!(pkgObj instanceof LuaTable packageTable)) {
+            return; // 防御性编程
+        }
+
+        // 2. 计算基准目录
+        TruffleFile rootDir;
+        if (source.getPath() != null) {
+            // 如果是文件（例如 java -jar ... script.lua）
+            // 获取该文件所在的目录
+            TruffleFile scriptFile = env.getPublicTruffleFile(source.getPath());
+            rootDir = scriptFile.getParent();
+        } else {
+            // 如果是 REPL 或 字符串代码 (eval "...")
+            // 使用当前工作目录
+            rootDir = env.getCurrentWorkingDirectory();
+        }
+
+        if (rootDir == null) {
+            rootDir = env.getCurrentWorkingDirectory();
+        }
+
+        // 3. 构建新的 path 字符串
+        // 目标格式: /script/dir/?.lua;/script/dir/?/init.lua;./?.lua...
+
+        String rootPath = rootDir.getAbsoluteFile().getPath();
+
+        // 确保路径以分隔符结尾，方便拼接
+        String separator = env.getFileNameSeparator();
+        if (!rootPath.endsWith(separator)) {
+            rootPath += separator;
+        }
+
+        // 拼接模板
+        String newPath =
+                rootPath + "?" + ".lua;" +
+                        rootPath + "?" + separator + "init.lua;" +
+                        DEFAULT_PATH.replace("/", separator);
+        // 4. 更新 package.path
+        packageTable.rawset("path", toTruffleString(newPath));
+
+        // 日志 (可选)
+        // System.out.println("Lua package.path set to: " + newPath);
+    }
 
     /**
      * 【新增】创建并缓存 ipairs 迭代器函数的辅助方法。

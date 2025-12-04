@@ -182,6 +182,12 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
     @Override
     protected CallTarget parse(ParsingRequest request) {
         Source source = request.getSource();
+        LuaContext context = LuaContext.get(null);
+        if (!context.isPackagePathInitialized()) {
+            context.initPackagePath(source);
+            context.setPackagePathInitialized(true);
+        }
+
         return LuaNodeParser.parseRootLua(this, source);
     }
 
