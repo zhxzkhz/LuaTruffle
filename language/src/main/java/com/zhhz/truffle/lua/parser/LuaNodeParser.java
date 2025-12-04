@@ -34,8 +34,7 @@ public class LuaNodeParser extends LuaBaseParser {
         parseLuaImpl(source, visitor);
 
         final int functionStartPos = 0;
-        final int functionEndPos = source.getLength() - 1;
-
+        final int functionEndPos =  Math.max(source.getLength() - 1,0);
         final SourceSection functionSrc = source.createSection(functionStartPos, functionEndPos);
 
         LuaStatementNode rootBlock = visitor.rootBlock;

@@ -14,7 +14,6 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.access.LuaReadTableNode;
-import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaValue;
 
@@ -53,10 +52,12 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         Object functionValue = unpackResult(rawFunctionValue);
 
         // --- 2. 检查可调用性 ---
-        if (!(functionValue instanceof LuaFunction luaFunction)) { // 简化了 if 语句
+        if (!library.isExecutable(functionValue)) { // 简化了 if 语句
             String message = getMessage(functionValue);
             throw LuaException.create(message, this);
         }
+
+
 
         // 2. 【参数处理优化】
         int argCount = this.argumentNodes.length;
@@ -64,7 +65,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         // 优化：无参调用直接处理
         if (argCount == 0) {
             try {
-                return execReturn(luaFunction,null);
+                return execReturn(functionValue,null);
             } catch (UnsupportedTypeException | ArityException | UnsupportedMessageException e) {
                 throw LuaException.undefinedFunction(this, e);
             }
@@ -127,14 +128,14 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         //    这个职责现在完全交给了 LuaFunction.Execute 消息处理器。
 
         try {
-            return execReturn(luaFunction, finalArguments);
+            return execReturn(functionValue, finalArguments);
         } catch (ArityException | UnsupportedTypeException | UnsupportedMessageException e) {
             // Execute was not successful.
             throw LuaException.undefinedFunction(this, e);
         }
     }
 
-    private Object execReturn(LuaFunction functionValue,Object[] finalArguments) throws UnsupportedMessageException, UnsupportedTypeException, ArityException {
+    private Object execReturn(Object functionValue,Object[] finalArguments) throws UnsupportedMessageException, UnsupportedTypeException, ArityException {
         Object result;
         if (finalArguments == null){
             result = library.execute(functionValue);

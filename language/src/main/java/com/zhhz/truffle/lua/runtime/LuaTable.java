@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+
 /**
  * 代表Lua的table类型 (最终的组合模型)。
  *
@@ -92,8 +94,17 @@ public final class LuaTable extends LuaValue {
         // 如果键不是一个有效的数组索引，或者索引越界，
         // 我们就在内部的 DynamicObject (properties) 中查找它。
         // objLib.getOrDefault 是一个高性能的操作，它利用了 Truffle 的 Shape 优化。
+        Object ts;
+        if (key instanceof String string){
+            ts = toTruffleString(string);
+        } else {
+            ts = key;
+        }
+        return objLib.getOrDefault(this, ts, LuaNil.SINGLETON);
+    }
 
-        return objLib.getOrDefault(this, key, LuaNil.SINGLETON);
+    public Object rawget(Object key) {
+        return rawget(key,DynamicObjectLibrary.getUncached());
     }
 
     public void rawset(Object key, Object value) {
@@ -101,10 +112,16 @@ public final class LuaTable extends LuaValue {
             arrayRawSet(((Double) key).intValue(), value);
             return;
         }
-        if (value == LuaNil.SINGLETON) {
-            DynamicObjectLibrary.getUncached().removeKey(this, key);
+        Object ts;
+        if (key instanceof String string){
+            ts = toTruffleString(string);
         } else {
-            DynamicObjectLibrary.getUncached().put(this, key, value);
+            ts = key;
+        }
+        if (value == LuaNil.SINGLETON) {
+            DynamicObjectLibrary.getUncached().removeKey(this, ts);
+        } else {
+            DynamicObjectLibrary.getUncached().put(this, ts, value);
         }
     }
 
