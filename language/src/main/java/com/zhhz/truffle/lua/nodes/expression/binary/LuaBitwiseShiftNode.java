@@ -42,9 +42,9 @@ public abstract class LuaBitwiseShiftNode extends LuaBinaryNode { // 假设继�
     @Fallback
     @CompilerDirectives.TruffleBoundary
     protected Object doGeneric(Object left, Object right,
-                               @Cached("create()") LuaCoerceToIntegerNode coerceLeft,
-                               @Cached("create()") LuaCoerceToIntegerNode coerceRight,
-                               @Cached("create()") LuaMetatableNode metatableNode) {
+                               @Cached(value = "create()", neverDefault = true) LuaCoerceToIntegerNode coerceLeft,
+                               @Cached(value = "create()", neverDefault = true) LuaCoerceToIntegerNode coerceRight,
+                               @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode) {
 
         boolean leftIsNum = isNumberOrString(left);
         boolean rightIsNum = isNumberOrString(right);

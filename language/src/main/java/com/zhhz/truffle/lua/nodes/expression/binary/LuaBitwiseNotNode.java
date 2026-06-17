@@ -28,9 +28,9 @@ public abstract class LuaBitwiseNotNode extends LuaExpressionNode {
     // --- 慢速/通用路径 ---
     @Fallback
     protected Object doGeneric(Object operand,
-                               @Cached("create()") LuaCoerceToIntegerNode coerceNode,
+                               @Cached(value = "create()", neverDefault = true) LuaCoerceToIntegerNode coerceNode,
                                // 注意：这里需要一元元方法查找器
-                               @Cached("create()") LuaMetatableNode metatableNode) {
+                               @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode) {
 
         // 1. 尝试转换为整数
         Long lOperand = coerceNode.execute(operand);

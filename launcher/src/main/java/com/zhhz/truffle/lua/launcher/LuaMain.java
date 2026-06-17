@@ -58,13 +58,14 @@ public final class LuaMain {
      */
     public static void main(String[] args) throws IOException {
 
-        String fileName = "main.lua";
-
-        // 2. 获取根目录的 URL (传入空字符串 "")
-        String projectPath = System.getProperty("user.dir");
-
-        // 拼接 Maven 标准目录结构
-        String resourcesPath = projectPath + File.separator + "launcher" + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + fileName;
+        String resourcesPath;
+        if (args.length > 0) {
+             resourcesPath = args[0];
+        } else {
+             // 拼接 Maven 标准目录结构
+            String projectPath = System.getProperty("user.dir");
+            resourcesPath = projectPath + File.separator + "launcher" + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "fibonacci.lua";
+        }
 
         //ClassLoader classLoader = LuaMain.class.getClassLoader();
         //InputStreamReader reader = new InputStreamReader(Objects.requireNonNull(classLoader.getResourceAsStream(fileName)));

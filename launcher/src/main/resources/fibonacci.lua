@@ -6,5 +6,5 @@ function fibonacci(n)
 end
 
 local start = os.clock()
-print(fibonacci(40))
+print(fibonacci(50))
 print(os.clock() - start)

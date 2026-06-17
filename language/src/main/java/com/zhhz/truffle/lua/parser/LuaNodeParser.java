@@ -664,8 +664,8 @@ public class LuaNodeParser extends LuaBaseParser {
         public LuaExpressionNode visitExpVararg(LuaParser.ExpVarargContext ctx) {
             // 1. 语义检查：如果当前函数不是可变参数函数，使用 `...` 是语法错误
             if (!LuaNodeParser.this.isVariadic) {
-                // 你应该抛出一个解析异常，或者语法错误
-                throw new RuntimeException("cannot use '...' outside a vararg function");
+                // 抛出带有行列号的 LuaParseError
+                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 3, "cannot use '...' outside a vararg function");
             }
 
             // 2. 创建节点，传入当前函数的固定参数个数
@@ -1027,17 +1027,17 @@ public class LuaNodeParser extends LuaBaseParser {
                 return LuaWriteTableNodeGen.create(tableNode, keyNode);
 
             }
-            case LuaParser.FuncCallContext ignored -> throw  new LuaParseError(
+            case LuaParser.FuncCallContext ignored -> throw new LuaParseError(
                     source,
                     prefixExpCtx.start.getLine(),
-                    prefixExpCtx.start.getCharPositionInLine() + 1,
+                    prefixExpCtx.start.getCharPositionInLine(),
                     prefixExpCtx.getText().length(),
                     "syntax error near '='"
             );
             default -> throw new LuaParseError(
                     source,
                     prefixExpCtx.start.getLine(),
-                    prefixExpCtx.start.getCharPositionInLine() + 1,
+                    prefixExpCtx.start.getCharPositionInLine(),
                     prefixExpCtx.getText().length(),
                     "syntax error: unexpected symbol near '=' (cannot assign to " + prefixExpCtx.getClass().getSimpleName() + ")"
             );
@@ -1312,8 +1312,17 @@ public class LuaNodeParser extends LuaBaseParser {
         // 这个操作会完成 FrameDescriptor 的构建，该描述符定义了此函数栈帧的布局（即包含了多少个局部变量槽位）。
         FrameDescriptor frameDescriptor = exitFunctionScope();
 
-        // TODO: 暂时从函数名开始标记位置,后续需要优化为整个函数位置
-        int start = funcNameCtx != null ? funcNameCtx.start.getStartIndex() : funcBody.start.getStartIndex();
+        int start;
+        if (funcNameCtx != null && funcNameCtx.start != null) {
+            // Function definition like: function foo()
+            start = funcNameCtx.start.getStartIndex();
+        } else if (funcBody.getParent() != null && funcBody.getParent().start != null && funcBody.getParent().start.getText().equals("function")) {
+            // Anonymous function definition like: function()
+            start = funcBody.getParent().start.getStartIndex();
+        } else {
+            // Fallback
+            start = funcBody.start.getStartIndex();
+        }
         final SourceSection functionSrc = source.createSection(start, funcBody.stop.getStopIndex() - start + 1);
 
         // 【创建根节点】创建函数的 RootNode。这是 Truffle 中任何可执行代码单元的顶层容器。
@@ -1338,9 +1347,9 @@ public class LuaNodeParser extends LuaBaseParser {
 
     // 辅助方法，用于从 ANTLR Context 设置 SourceSection
     private static void setSourceSectionFromContext(LuaStatementNode node, ParserRuleContext ctx) {
-        int start = ctx.getStart().getStartIndex();
-        int length = ctx.getStart().getStopIndex() - start + 1;
-        node.setSourceSection(start, length);
+            int start = ctx.getStart().getStartIndex();
+            int length = ctx.getStop().getStopIndex() - start + 1;
+            node.setSourceSection(start, length);
     }
 
 

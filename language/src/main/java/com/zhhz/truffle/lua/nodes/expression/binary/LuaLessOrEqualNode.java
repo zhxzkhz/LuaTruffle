@@ -133,7 +133,7 @@ public abstract class LuaLessOrEqualNode extends LuaBinaryNode {
      */
     @Fallback
     public static Object typeError(Object left, Object right,
-                                   @Cached("create()") LuaMetatableNode metatableNode,
+                                   @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode,
                                    @Bind Node node) {
 
         Object result = metatableNode.execute(left, right, LuaMetatables.__LE);

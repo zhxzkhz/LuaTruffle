@@ -16,7 +16,7 @@ public class LuaExpressionTest extends AbstractLuaTest {
     public void setUp() {
         // 创建一个新的上下文，并指定允许访问我们的 "lua" 语言
         // 根据你的具体实现，可能需要 .allowAllAccess(true) 或其他选项
-        this.context = Context.create("lua");
+        this.context = newContextBuilder("lua").build();
     }
 
     @AfterEach
