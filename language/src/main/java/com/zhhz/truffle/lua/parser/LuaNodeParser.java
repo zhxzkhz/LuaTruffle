@@ -54,10 +54,13 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private int currentFixedParamCount;
     private boolean currentIsVariadic;
-    private final Deque<int[]> paramStateStack = new ArrayDeque<>();
+    private final Deque<ParamState> paramStateStack = new ArrayDeque<>();
     private int loopDepth;
     private final Deque<FunctionControlInfo> controlInfoStack = new ArrayDeque<>();
     private final Deque<BlockControlInfo> blockInfoStack = new ArrayDeque<>();
+    private static final LuaExpressionNode[] EMPTY_EXPRESSIONS = new LuaExpressionNode[0];
+    private static final LuaStatementNode[] EMPTY_STATEMENTS = new LuaStatementNode[0];
+    private static final LuaCloseSlotNode[] EMPTY_CLOSE_NODES = new LuaCloseSlotNode[0];
     private int nextBlockId;
     private boolean suppressLocalTracking;
 
@@ -156,7 +159,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 }
             }
             LuaBlockNode blockNode = new LuaBlockNode(
-                    bodyNodes.toArray(new LuaStatementNode[0]),
+                    bodyNodes.toArray(EMPTY_STATEMENTS),
                     createCloseNodes(blockInfo),
                     blockInfo.path()
             );
@@ -418,14 +421,12 @@ public class LuaNodeParser extends LuaBaseParser {
             // 1. 【创建 varNodes】
             //    调用一个辅助方法来处理 varlist，得到所有写入目标的节点数组。
 
-            List<LuaWriteVariableNode> writeNodes = new ArrayList<>();
-            for (LuaParser.VarContext varCtx : ctx.varlist().var()) {
+            List<LuaParser.VarContext> vars = ctx.varlist().var();
+            LuaWriteVariableNode[] varNodes = new LuaWriteVariableNode[vars.size()];
+            for (int i = 0; i < vars.size(); i++) {
                 // 对于 varlist 中的每一个 var，我们都调用另一个更具体的辅助方法来创建写入节点。
-                writeNodes.add(createWriteNodeForVar(varCtx));
+                varNodes[i] = createWriteNodeForVar(vars.get(i));
             }
-
-            LuaWriteVariableNode[] varNodes = writeNodes.toArray(new LuaWriteVariableNode[0]);
-
 
             // 2. 【创建 valuesNode】
             //    调用另一个辅助方法来处理 explist，得到值的提供者。
@@ -449,10 +450,9 @@ public class LuaNodeParser extends LuaBaseParser {
             // 我们的目标是创建一个 `LuaWriteVariableNode[]` 数组，
             // 其中的每个节点都指向一个【新创建】的 FrameSlot。
 
-            List<LuaWriteVariableNode> writeNodesList = new ArrayList<>();
-
             List<TerminalNode> names = ctx.attnamelist().NAME();
             List<LuaParser.AttribContext> attributes = ctx.attnamelist().attrib();
+            LuaWriteVariableNode[] writeNodes = new LuaWriteVariableNode[names.size()];
             boolean hasClose = false;
             for (int i = 0; i < names.size(); i++) {
                 TerminalNode nameNode = names.get(i);
@@ -468,13 +468,13 @@ public class LuaNodeParser extends LuaBaseParser {
                 LuaWriteLocalVariableNode writeNode = LuaWriteLocalVariableNodeGen.create(slotIndex);
                 srcFromToken(writeNode, nameNode.getSymbol());
 
-                writeNodesList.add(writeNode);
+                writeNodes[i] = writeNode;
             }
 
             // 3. 【创建最终的赋值节点】
             //    将“目标”和“来源”组合成一个多重赋值语句节点。
             //    Truffle DSL 会为我们生成 LuaMultiAssignmentNodeGen 类。
-            LuaMultiAssignmentNode node = new LuaMultiAssignmentNode(writeNodesList.toArray(new LuaWriteVariableNode[0]), valueExpList);
+            LuaMultiAssignmentNode node = new LuaMultiAssignmentNode(writeNodes, valueExpList);
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -536,26 +536,11 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaStatementNode visitRetstat(LuaParser.RetstatContext ctx) {
-            final LuaExpressionNode[] valueNodes;
-            // 检查是否存在 explist (即是否有返回值)
-            if (ctx.explist() != null) {
-                // 如果有返回值，遍历 explist 中的所有 exp
-                int numReturns = ctx.explist().exp().size();
-                valueNodes = new LuaExpressionNode[numReturns];
-
-                for (int i = 0; i < numReturns; i++) {
-                    // 递归访问每个表达式，并确保它是一个表达式节点
-                    valueNodes[i] = expressionVisitor.visit(ctx.explist().exp(i));
-                }
-            } else {
-                // 如果没有返回值 (例如 return;)，创建一个空数组
-                valueNodes = new LuaExpressionNode[0];
-            }
+            final LuaExpressionNode[] valueNodes = visitExpListAsArray(ctx.explist());
 
             // 创建 LuaReturnNode
             final LuaReturnNode returnNode = new LuaReturnNode(valueNodes);
 
-            final int start = ctx.getStart().getStartIndex();
             //内容范围问题后续修复
             setSourceSectionFromContext(returnNode,ctx);
 
@@ -576,14 +561,17 @@ public class LuaNodeParser extends LuaBaseParser {
             return visit(ctx.functioncall());
         }
 
-        private LuaExpressionNode createBinary(ParserRuleContext ctx, List<? extends ParserRuleContext> children,  TerminalNode op) {
-            if (op == null) {
-                assert children.size() == 1;
-                return visit(children.getFirst());
-            } else {
-                assert children.size() == 2;
-                return createBinary(ctx, op.getSymbol(), visit(children.get(0)), visit(children.get(1)));
+        private LuaExpressionNode createBinary(ParserRuleContext ctx, Token opToken, LuaParser.ExpContext leftCtx, LuaParser.ExpContext rightCtx) {
+            if (leftCtx == null) {
+                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), ctx.getText().length(), "missing left expression operand");
             }
+            if (opToken == null) {
+                return visit(leftCtx);
+            }
+            if (rightCtx == null) {
+                throw new LuaParseError(source, opToken.getLine(), opToken.getCharPositionInLine(), opToken.getText().length(), "missing right expression operand");
+            }
+            return createBinary(ctx, opToken, visit(leftCtx), visit(rightCtx));
         }
 
         private LuaExpressionNode createBinary(ParserRuleContext ctx, Token opToken, LuaExpressionNode leftNode, LuaExpressionNode rightNode) {
@@ -629,54 +617,54 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaExpressionNode visitExpLogicalOr(LuaParser.ExpLogicalOrContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.OR());
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpLogicalAnd(LuaParser.ExpLogicalAndContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.AND());
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpComparison(LuaParser.ExpComparisonContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.getToken(ctx.op.getType(), 0));
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
 
         @Override
         public LuaExpressionNode visitExpBitwiseOr(LuaParser.ExpBitwiseOrContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.getToken(ctx.op.getType(), 0));
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
 
         @Override
         public LuaExpressionNode visitExpBitwiseXor(LuaParser.ExpBitwiseXorContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.SQUIG());
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpBitwiseAnd(LuaParser.ExpBitwiseAndContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.AMP());
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpBitwiseShift(LuaParser.ExpBitwiseShiftContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.getToken(ctx.op.getType(), 0));
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpConcat(LuaParser.ExpConcatContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.DD());
+            return createBinary(ctx, ctx.DD() == null ? null : ctx.DD().getSymbol(), ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpAddSub(LuaParser.ExpAddSubContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.getToken(ctx.op.getType(), 0));
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
         @Override
         public LuaExpressionNode visitExpMulDivMod(LuaParser.ExpMulDivModContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.getToken(ctx.op.getType(), 0));
+            return createBinary(ctx, ctx.op, ctx.exp(0), ctx.exp(1));
         }
 
 
@@ -700,7 +688,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaExpressionNode visitExpPower(LuaParser.ExpPowerContext ctx) {
-            return createBinary(ctx, ctx.getRuleContexts(ParserRuleContext.class), ctx.CARET());
+            return createBinary(ctx, ctx.CARET() == null ? null : ctx.CARET().getSymbol(), ctx.exp(0), ctx.exp(1));
         }
 
         @Override
@@ -768,7 +756,10 @@ public class LuaNodeParser extends LuaBaseParser {
                 throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 3, "cannot use '...' outside a vararg function");
             }
 
-            return new LuaReadVarargsNode(LuaNodeParser.this.currentFixedParamCount);
+            LuaExpressionNode node = new LuaReadVarargsNode(LuaNodeParser.this.currentFixedParamCount);
+            node.addExpressionTag();
+            setSourceSectionFromContext(node, ctx);
+            return node;
         }
 
         @Override
@@ -866,12 +857,13 @@ public class LuaNodeParser extends LuaBaseParser {
                 return table;
             }
 
-            List<LuaTableFieldInitializerNode> initializers = new ArrayList<>();
+            List<LuaParser.FieldContext> fields = ctx.fieldlist().field();
+            List<LuaTableFieldInitializerNode> initializers = new ArrayList<>(fields.size());
 
             // 【关键】我们需要一个计数器来追踪列表式字段的索引
             int nextArrayIndex = 1; // Lua 数组索引从 1 开始
 
-            for (LuaParser.FieldContext fieldCtx : ctx.fieldlist().field()) {
+            for (LuaParser.FieldContext fieldCtx : fields) {
                 if (fieldCtx instanceof LuaParser.FieldKeyExprContext keyExprCtx) {
                     // --- 情况 A: [exp1] = exp2 ---
                     LuaExpressionNode keyNode = expressionVisitor.visit(keyExprCtx.exp(0));
@@ -1121,22 +1113,20 @@ public class LuaNodeParser extends LuaBaseParser {
         // 1. 防御性检查：处理语法中允许为空的情况
         // 如果上下文为 null（例如没有参数的函数调用），直接返回一个长度为 0 的数组
         if (ctx == null) {
-            return new LuaExpressionNode[0];
+            return EMPTY_EXPRESSIONS;
         }
 
-        // 2. 准备容器：创建一个列表用于暂存转换后的 Truffle 节点
-        List<LuaExpressionNode> expressions = new ArrayList<>();
+        List<LuaParser.ExpContext> expContexts = ctx.exp();
+        LuaExpressionNode[] expressions = new LuaExpressionNode[expContexts.size()];
 
         // 3. 遍历解析树：ctx.exp() 是 ANTLR 生成的方法，返回该规则下所有匹配的表达式(exp)上下文
-        for (LuaParser.ExpContext expCtx : ctx.exp()) {
+        for (int i = 0; i < expressions.length; i++) {
             // 4. 递归访问/转换：委托 expressionVisitor 将单个 ANTLR 表达式上下文转换为具体的 Truffle AST 节点
             // 这里的 expressionVisitor 通常是一个继承自 LuaParserBaseVisitor<LuaExpressionNode> 的实例
-            expressions.add(expressionVisitor.visit(expCtx));
+            expressions[i] = expressionVisitor.visit(expContexts.get(i));
         }
 
-        // 5. 格式转换与返回：将 List 转换为强类型的 LuaExpressionNode 数组
-        // 在 Truffle 节点开发中，通常首选数组而非 List 来存储 @Children 子节点，以优化内存占用和遍历性能
-        return expressions.toArray(new LuaExpressionNode[0]);
+        return expressions;
     }
 
     /**
@@ -1150,7 +1140,7 @@ public class LuaNodeParser extends LuaBaseParser {
         switch (argsCtx) {
             case null -> {
                 // 在某些语法中可能没有 args
-                return new LuaExpressionNode[0];
+                return EMPTY_EXPRESSIONS;
             }
 
             // --- 【关键】使用 instanceof 进行分派 ---
@@ -1219,7 +1209,7 @@ public class LuaNodeParser extends LuaBaseParser {
         }
 
 
-        List<LuaStatementNode> prologueStatements = new ArrayList<>();
+        LuaStatementNode[] prologueStatements = new LuaStatementNode[parameterNames.size()];
         for (int i = 0; i < parameterNames.size(); i++) {
             TruffleString paramName = parameterNames.get(i);
             // 查找槽位索引
@@ -1228,10 +1218,10 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 为每个参数创建一个 LuaWriteArgumentNode
             // 参数 i 对应 argument 数组中的索引 i
-            prologueStatements.add(LuaWriteArgumentNodeGen.create(i, slotIndex));
+            prologueStatements[i] = LuaWriteArgumentNodeGen.create(i, slotIndex);
         }
 
-        return new LuaBlockNode(prologueStatements.toArray(new LuaStatementNode[0]));
+        return new LuaBlockNode(prologueStatements);
     }
 
     /**
@@ -1438,7 +1428,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private static LuaCloseSlotNode[] createCloseNodes(BlockControlInfo blockInfo) {
         if (blockInfo.closeSlots.isEmpty()) {
-            return new LuaCloseSlotNode[0];
+            return EMPTY_CLOSE_NODES;
         }
         LuaCloseSlotNode[] result = new LuaCloseSlotNode[blockInfo.closeSlots.size()];
         for (int i = 0; i < result.length; i++) {
@@ -1449,6 +1439,9 @@ public class LuaNodeParser extends LuaBaseParser {
     }
 
     private static LuaCloseSlotNode[] createCloseOnJumpNodes(FunctionControlInfo info, PendingGoto pendingGoto, LabelInfo label) {
+        if (info.closeSlots.isEmpty()) {
+            return EMPTY_CLOSE_NODES;
+        }
         List<LuaCloseSlotNode> result = new ArrayList<>();
         for (Integer localId : pendingGoto.visibleLocalIds()) {
             if (label.visibleLocalIds().contains(localId)) {
@@ -1459,7 +1452,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 result.add(new LuaCloseSlotNode(closeSlot.slotIndex(), closeSlot.name()));
             }
         }
-        return result.toArray(new LuaCloseSlotNode[0]);
+        return result.isEmpty() ? EMPTY_CLOSE_NODES : result.toArray(EMPTY_CLOSE_NODES);
     }
 
     private LocalAttribute parseLocalAttribute(LuaParser.AttribContext ctx) {
@@ -1500,6 +1493,8 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private record CloseSlot(int declarationId, int slotIndex, TruffleString name) {}
 
+    private record ParamState(int fixedParamCount, boolean variadic) {}
+
 
     /**
      * 解析一个函数定义，并将其转换为一个 LuaFunctionLiteralNode 表达式节点。
@@ -1530,9 +1525,9 @@ public class LuaNodeParser extends LuaBaseParser {
         }
 
         // 处理 '...' (可变参数标记)
-        // 检查 parlist 中是否包含 "..." 的 token
-        // 或者是 ParlistVarargContext
-        if (parList instanceof LuaParser.ParlistVarargContext || parList.getText().endsWith("...")) {
+        // 检查 parlist 中是否包含 "..." 的 token。
+        if (parList instanceof LuaParser.ParlistVarargContext
+                || parList instanceof LuaParser.ParlistNamelistContext parCtx && parCtx.DDD() != null) {
             isVariadic = true;
         }
 
@@ -1565,7 +1560,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 suppressLocalTracking = false;
             }
 
-            paramStateStack.push(new int[]{currentFixedParamCount, currentIsVariadic ? 1 : 0});
+            paramStateStack.push(new ParamState(currentFixedParamCount, currentIsVariadic));
             paramStatePushed = true;
             currentFixedParamCount = fixedParamCount;
             currentIsVariadic = isVariadic;
@@ -1603,9 +1598,9 @@ public class LuaNodeParser extends LuaBaseParser {
                 exitFunctionScope();
             }
             if (paramStatePushed) {
-                int[] prev = paramStateStack.pop();
-                currentFixedParamCount = prev[0];
-                currentIsVariadic = prev[1] != 0;
+                ParamState prev = paramStateStack.pop();
+                currentFixedParamCount = prev.fixedParamCount();
+                currentIsVariadic = prev.variadic();
             }
         }
 
