@@ -61,6 +61,7 @@ public class LuaNodeParser extends LuaBaseParser {
     private static final LuaExpressionNode[] EMPTY_EXPRESSIONS = new LuaExpressionNode[0];
     private static final LuaStatementNode[] EMPTY_STATEMENTS = new LuaStatementNode[0];
     private static final LuaCloseSlotNode[] EMPTY_CLOSE_NODES = new LuaCloseSlotNode[0];
+    private static final LuaTableFieldInitializerNode[] EMPTY_TABLE_FIELD_INITIALIZERS = new LuaTableFieldInitializerNode[0];
     private int nextBlockId;
     private boolean suppressLocalTracking;
 
@@ -95,7 +96,7 @@ public class LuaNodeParser extends LuaBaseParser {
             return;
         }
         BlockControlInfo block = blockInfoStack.peek();
-        block.localDeclarationIds.add(declarationId);
+        block.localDeclarationIds.set(declarationId);
         if (attribute == LocalAttribute.CLOSE) {
             CloseSlot closeSlot = new CloseSlot(declarationId, slotIndex, name);
             block.closeSlots.add(closeSlot);
@@ -384,10 +385,10 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 3. 【为循环变量声明 FrameSlot 和写入节点】
             //    循环变量 (namelist) 是这个新作用域的局部变量。
-            List<TruffleString> loopVarNames = parseNameList(ctx.namelist());
+            List<TerminalNode> loopVarNames = ctx.namelist().NAME();
             LuaWriteLocalVariableNode[] writeNodes = new LuaWriteLocalVariableNode[loopVarNames.size()];
             for (int i = 0; i < loopVarNames.size(); i++) {
-                TruffleString varName = loopVarNames.get(i);
+                TruffleString varName = asTruffleString(loopVarNames.get(i).getSymbol(), false);
                 // 声明槽位
                 int slotIndex = declareLocalVariable(varName);
                 // 创建写入节点
@@ -578,28 +579,28 @@ public class LuaNodeParser extends LuaBaseParser {
 
             final LuaExpressionNode leftUnboxed = LuaUnboxNodeGen.create(leftNode);
             final LuaExpressionNode rightUnboxed = LuaUnboxNodeGen.create(rightNode);
-            final LuaExpressionNode result = switch (opToken.getText()) {
-                case "+" -> LuaAddNodeGen.create(leftUnboxed, rightUnboxed);
-                case "-" -> LuaSubNodeGen.create(leftUnboxed, rightUnboxed);
-                case "*" -> LuaMulNodeGen.create(leftUnboxed, rightUnboxed);
-                case "/" -> LuaDivNodeGen.create(leftUnboxed, rightUnboxed);
-                case "//" -> LuaFloorDivNodeGen.create(leftUnboxed, rightUnboxed);
-                case "%" -> LuaModNodeGen.create(leftUnboxed, rightUnboxed);
-                case "^" -> LuaPowerNodeGen.create(leftUnboxed, rightUnboxed);
-                case ".." -> LuaConcatNodeGen.create(leftUnboxed, rightUnboxed);
-                case "<" -> LuaLessThanNodeGen.create(leftUnboxed, rightUnboxed);
-                case "<=" -> LuaLessOrEqualNodeGen.create(leftUnboxed, rightUnboxed);
-                case ">" -> LuaGreaterThanNodeGen.create(leftUnboxed, rightUnboxed);
-                case ">=" -> LuaGreaterOrEqualNodeGen.create(leftUnboxed, rightUnboxed);
-                case "==" -> LuaEqualNodeGen.create(leftUnboxed, rightUnboxed);
-                case "~=" -> LuaLogicalNotNodeGen.create(LuaEqualNodeGen.create(leftUnboxed, rightUnboxed));
-                case "|" -> LuaBitwiseOrNodeGen.create(leftUnboxed, rightUnboxed);
-                case "~" -> LuaBitwiseXorNodeGen.create(leftUnboxed, rightUnboxed);
-                case "&" -> LuaBitwiseAndNodeGen.create(leftUnboxed, rightUnboxed);
-                case ">>" -> LuaBitwiseShiftNodeGen.create(false, leftUnboxed, rightUnboxed);
-                case "<<" -> LuaBitwiseShiftNodeGen.create(true, leftUnboxed, rightUnboxed);
-                case "and" -> new LuaLogicalAndNode(leftUnboxed, rightUnboxed);
-                case "or" -> new LuaLogicalOrNode(leftUnboxed, rightUnboxed);
+            final LuaExpressionNode result = switch (opToken.getType()) {
+                case LuaParser.PLUS -> LuaAddNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.MINUS -> LuaSubNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.STAR -> LuaMulNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.SLASH -> LuaDivNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.SS -> LuaFloorDivNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.PER -> LuaModNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.CARET -> LuaPowerNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.DD -> LuaConcatNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.LT -> LuaLessThanNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.LE -> LuaLessOrEqualNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.GT -> LuaGreaterThanNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.GE -> LuaGreaterOrEqualNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.EE -> LuaEqualNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.SQEQ -> LuaLogicalNotNodeGen.create(LuaEqualNodeGen.create(leftUnboxed, rightUnboxed));
+                case LuaParser.PIPE -> LuaBitwiseOrNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.SQUIG -> LuaBitwiseXorNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.AMP -> LuaBitwiseAndNodeGen.create(leftUnboxed, rightUnboxed);
+                case LuaParser.GG -> LuaBitwiseShiftNodeGen.create(false, leftUnboxed, rightUnboxed);
+                case LuaParser.LL -> LuaBitwiseShiftNodeGen.create(true, leftUnboxed, rightUnboxed);
+                case LuaParser.AND -> new LuaLogicalAndNode(leftUnboxed, rightUnboxed);
+                case LuaParser.OR -> new LuaLogicalOrNode(leftUnboxed, rightUnboxed);
                 default -> throw new RuntimeException("unexpected operation: " + opToken.getText());
             };
 
@@ -671,15 +672,14 @@ public class LuaNodeParser extends LuaBaseParser {
         @Override
         public LuaExpressionNode visitExpUnop(LuaParser.ExpUnopContext ctx) {
             LuaExpressionNode operandNode = visit(ctx.exp());
-            String op = ctx.op.getText();
 
-            final LuaExpressionNode resultNode = switch (op) {
-                case "-" -> LuaUnaryMinusNodeGen.create(operandNode);
-                case "not" -> LuaLogicalNotNodeGen.create(operandNode);
-                case "#" -> LuaLengthNodeGen.create(operandNode);
-                case "~" -> LuaBitwiseNotNodeGen.create(operandNode);
+            final LuaExpressionNode resultNode = switch (ctx.op.getType()) {
+                case LuaParser.MINUS -> LuaUnaryMinusNodeGen.create(operandNode);
+                case LuaParser.NOT -> LuaLogicalNotNodeGen.create(operandNode);
+                case LuaParser.POUND -> LuaLengthNodeGen.create(operandNode);
+                case LuaParser.SQUIG -> LuaBitwiseNotNodeGen.create(operandNode);
                 default ->
-                        throw new LuaParseError(source, ctx.op.getLine(), ctx.op.getCharPositionInLine(), ctx.op.getText().length(), "unexpected unary operator: " + op);
+                        throw new LuaParseError(source, ctx.op.getLine(), ctx.op.getCharPositionInLine(), ctx.op.getText().length(), "unexpected unary operator: " + ctx.op.getText());
             };
 
             setSourceSectionFromContext(resultNode, ctx);
@@ -851,7 +851,7 @@ public class LuaNodeParser extends LuaBaseParser {
         @Override
         public LuaExpressionNode visitTableconstructor(LuaParser.TableconstructorContext ctx) {
             if (ctx.fieldlist() == null) {
-                var table = new LuaTableConstructorNode(new LuaTableFieldInitializerNode[0]);
+                var table = new LuaTableConstructorNode(EMPTY_TABLE_FIELD_INITIALIZERS);
                 table.addExpressionTag();
                 setSourceSectionFromContext(table,ctx);
                 return table;
@@ -891,7 +891,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 }
             }
 
-            LuaTableConstructorNode node = new LuaTableConstructorNode(initializers.toArray(new LuaTableFieldInitializerNode[0]));
+            LuaTableConstructorNode node = new LuaTableConstructorNode(initializers.toArray(EMPTY_TABLE_FIELD_INITIALIZERS));
             node.addExpressionTag();
             setSourceSectionFromContext(node, ctx);
             return node;
@@ -1171,33 +1171,6 @@ public class LuaNodeParser extends LuaBaseParser {
 
 
     /**
-     * 辅助方法：解析一个 nameList 语法节点，并将其中的所有标识符
-     * 提取为一个 TruffleString 的列表。
-     *
-     * @param nameListCtx ANTLR 的 nameList 上下文对象。
-     * @return 一个包含所有变量名的 List<TruffleString>。
-     */
-    private List<TruffleString> parseNameList(LuaParser.NamelistContext nameListCtx) {
-        if (nameListCtx == null) {
-            // 在某些语法中 namelist 可能是可选的，做个健壮性检查
-            return Collections.emptyList();
-        }
-
-        List<TruffleString> names = new ArrayList<>();
-
-        // ANTLR 会将所有匹配 `NAME` 规则的 TerminalNode 收集到一个列表中。
-        // 我们可以通过 `nameListCtx.NAME()` 来访问这个列表。
-        for (TerminalNode nameNode : nameListCtx.NAME()) {
-            // 1. 获取标识符的文本内容 (e.g., "k", "v")
-            // 2. 将 TerminalNode 转换为 TruffleString
-            // 3. 添加到结果列表中
-            names.add(asTruffleString(nameNode.getSymbol(), false));
-        }
-
-        return names;
-    }
-
-    /**
      * 为函数创建一个“序言”节点。
      * 这个节点负责在函数开始时，将传入的参数写入局部变量槽位。
      * @param parameterNames 参数名列表
@@ -1233,7 +1206,7 @@ public class LuaNodeParser extends LuaBaseParser {
         List<TerminalNode> names = funcNameCtx.NAME();
 
         if (names.size() == 1 && funcNameCtx.COL() == null) {
-            TruffleString varName = toTruffleString(names.getFirst().getText());
+            TruffleString varName = asTruffleString(names.getFirst().getSymbol(), false);
             return getLuaWriteVariableNode(varName);
         }
 
@@ -1245,7 +1218,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
         // 2. 迭代中间部分 `... .b ...`
         for (int i = 1; i < names.size() - 1; i++) {
-            TruffleString keyName = toTruffleString(names.get(i).getText());
+            TruffleString keyName = asTruffleString(names.get(i).getSymbol(), false);
             LuaExpressionNode keyNode = new LuaStringLiteralNode(keyName);
             // 不断地用 LuaReadTableNode 包装
             currentReceiver = LuaReadTableNodeGen.create(currentReceiver, keyNode);
@@ -1257,7 +1230,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 funcNameCtx.NAME(names.size() - 1) :
                 names.getLast();
 
-        TruffleString finalKeyName = toTruffleString(finalNameNode.getText());
+        TruffleString finalKeyName = asTruffleString(finalNameNode.getSymbol(), false);
         LuaExpressionNode finalKeyNode = new LuaStringLiteralNode(finalKeyName);
 
         // 最终，我们得到了一个指向 `a.b` 的表达式 (currentReceiver)
@@ -1394,18 +1367,18 @@ public class LuaNodeParser extends LuaBaseParser {
         if (!isPrefix(label.blockPath(), pendingGoto.blockPath())) {
             throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "goto '" + token.getText() + "' jumps into a block");
         }
-        for (Integer labelLocalId : label.visibleLocalIds()) {
-            if (!pendingGoto.visibleLocalIds().contains(labelLocalId)) {
-                throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "goto '" + token.getText() + "' jumps into the scope of a local variable");
-            }
+        BitSet targetOnlyLocals = (BitSet) label.visibleLocalIds().clone();
+        targetOnlyLocals.andNot(pendingGoto.visibleLocalIds());
+        if (!targetOnlyLocals.isEmpty()) {
+            throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "goto '" + token.getText() + "' jumps into the scope of a local variable");
         }
     }
 
-    private List<Integer> visibleLocalIds() {
-        List<Integer> result = new ArrayList<>();
+    private BitSet visibleLocalIds() {
+        BitSet result = new BitSet();
         Iterator<BlockControlInfo> iterator = blockInfoStack.descendingIterator();
         while (iterator.hasNext()) {
-            result.addAll(iterator.next().localDeclarationIds);
+            result.or(iterator.next().localDeclarationIds);
         }
         return result;
     }
@@ -1442,11 +1415,13 @@ public class LuaNodeParser extends LuaBaseParser {
         if (info.closeSlots.isEmpty()) {
             return EMPTY_CLOSE_NODES;
         }
+        BitSet localsToClose = (BitSet) pendingGoto.visibleLocalIds().clone();
+        localsToClose.andNot(label.visibleLocalIds());
+        if (localsToClose.isEmpty()) {
+            return EMPTY_CLOSE_NODES;
+        }
         List<LuaCloseSlotNode> result = new ArrayList<>();
-        for (Integer localId : pendingGoto.visibleLocalIds()) {
-            if (label.visibleLocalIds().contains(localId)) {
-                continue;
-            }
+        for (int localId = localsToClose.nextSetBit(0); localId >= 0; localId = localsToClose.nextSetBit(localId + 1)) {
             CloseSlot closeSlot = info.closeSlots.get(localId);
             if (closeSlot != null) {
                 result.add(new LuaCloseSlotNode(closeSlot.slotIndex(), closeSlot.name()));
@@ -1475,7 +1450,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private static final class BlockControlInfo {
         private final int[] path;
-        private final List<Integer> localDeclarationIds = new ArrayList<>();
+        private final BitSet localDeclarationIds = new BitSet();
         private final List<CloseSlot> closeSlots = new ArrayList<>();
 
         private BlockControlInfo(int[] path) {
@@ -1487,9 +1462,9 @@ public class LuaNodeParser extends LuaBaseParser {
         }
     }
 
-    private record LabelInfo(TruffleString label, Token token, int[] blockPath, List<Integer> visibleLocalIds) {}
+    private record LabelInfo(TruffleString label, Token token, int[] blockPath, BitSet visibleLocalIds) {}
 
-    private record PendingGoto(TruffleString label, Token token, LuaGotoNode node, int[] blockPath, List<Integer> visibleLocalIds) {}
+    private record PendingGoto(TruffleString label, Token token, LuaGotoNode node, int[] blockPath, BitSet visibleLocalIds) {}
 
     private record CloseSlot(int declarationId, int slotIndex, TruffleString name) {}
 
@@ -1508,8 +1483,11 @@ public class LuaNodeParser extends LuaBaseParser {
     private LuaExpressionNode parseFunction(LuaParser.FuncnameContext funcNameCtx, LuaParser.FuncbodyContext funcBody, TruffleString functionName) {
         // --- 1. 参数解析 ---
         // 初始化一个列表，用于存储解析出的函数参数的名称。
-        List<TruffleString> parameterNames = new ArrayList<>();
         var parList = funcBody.parlist();
+        int explicitParamCount = parList instanceof LuaParser.ParlistNamelistContext parCtx
+                ? parCtx.namelist().NAME().size()
+                : 0;
+        List<TruffleString> parameterNames = new ArrayList<>(explicitParamCount + (funcNameCtx != null && funcNameCtx.COL() != null ? 1 : 0));
         boolean isVariadic = false;
 
 
@@ -1615,7 +1593,7 @@ public class LuaNodeParser extends LuaBaseParser {
         // 【创建函数字面量节点】
         // 这个节点是一个表达式节点。当它在运行时被执行时，它的作用就是创建一个真正的 LuaFunction 对象（闭包）。
         // 这个闭包对象将编译好的代码（通过 rootNode.getCallTarget() 获取）与当前的词法环境打包在一起。
-        var func = new LuaFunctionLiteralNode(rootNode.getCallTarget(),funcNameCtx != null ? toTruffleString(funcNameCtx.NAME().getLast().getText()) : null);
+        var func = new LuaFunctionLiteralNode(rootNode.getCallTarget(),funcNameCtx != null ? asTruffleString(funcNameCtx.NAME().getLast().getSymbol(), false) : null);
         // 为节点附加源代码位置信息，用于调试和错误报告。
         func.addExpressionTag();
 
