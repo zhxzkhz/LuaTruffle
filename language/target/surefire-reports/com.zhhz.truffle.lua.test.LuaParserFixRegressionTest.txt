@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.zhhz.truffle.lua.test.LuaParserFixRegressionTest
+-------------------------------------------------------------------------------
+Tests run: 78, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.887 s -- in com.zhhz.truffle.lua.test.LuaParserFixRegressionTest

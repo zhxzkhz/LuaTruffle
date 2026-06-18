@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.zhhz.truffle.lua.test.LuaBinaryOperatorsTest
+-------------------------------------------------------------------------------
+Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.414 s -- in com.zhhz.truffle.lua.test.LuaBinaryOperatorsTest
