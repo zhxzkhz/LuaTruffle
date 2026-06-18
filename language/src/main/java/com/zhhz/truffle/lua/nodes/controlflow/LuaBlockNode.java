@@ -41,13 +41,18 @@
 package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.BlockNode;
+import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 
 /**
@@ -58,24 +63,74 @@ import java.util.List;
  * 已经足够高效且更容易理解。
  */
 @NodeInfo(shortName = "block", description = "A block of statements")
-public final class LuaBlockNode extends LuaStatementNode implements BlockNode.ElementExecutor<LuaStatementNode> {
+public final class LuaBlockNode extends LuaStatementNode {
 
-    /**
-     * 【核心】使用 @Child 注解来持有所有的子语句节点。
-     * 这是一个标准的、健壮的设计。
-     */
-    @Child private BlockNode<LuaStatementNode> block;
+    @Children private final LuaStatementNode[] statements;
+    @Children private final LuaCloseSlotNode[] closeNodes;
+    private final Map<TruffleString, Integer> labelTargets;
+    private final int[] blockPath;
 
     public LuaBlockNode(LuaStatementNode[] bodyNodes) {
-        this.block = bodyNodes.length > 0 ? BlockNode.create(bodyNodes, this) : null;
+        this(bodyNodes, new LuaCloseSlotNode[0], new int[0]);
+    }
+
+    public LuaBlockNode(LuaStatementNode[] bodyNodes, LuaCloseSlotNode[] closeNodes, int[] blockPath) {
+        this.statements = bodyNodes;
+        this.closeNodes = closeNodes;
+        this.blockPath = blockPath;
+        this.labelTargets = buildLabelTargets(bodyNodes);
     }
 
 
     @Override
     public void executeVoid(VirtualFrame frame) {
-        if (this.block != null) {
-            this.block.executeVoid(frame, BlockNode.NO_ARGUMENT);
+        try {
+            int index = 0;
+            while (index < statements.length) {
+                statements[index].executeVoid(frame);
+                index++;
+            }
+        } catch (LuaGotoException e) {
+            Integer target = e.targetsBlock(blockPath) ? labelTargets.get(e.getLabel()) : null;
+            if (target == null) {
+                close(frame, LuaNil.SINGLETON);
+                throw e;
+            }
+
+            int index = target;
+            while (index < statements.length) {
+                try {
+                    statements[index].executeVoid(frame);
+                    index++;
+                } catch (LuaGotoException nested) {
+                    Integer nestedTarget = nested.targetsBlock(blockPath) ? labelTargets.get(nested.getLabel()) : null;
+                    if (nestedTarget == null) {
+                        close(frame, LuaNil.SINGLETON);
+                        throw nested;
+                    }
+                    index = nestedTarget;
+                }
+            }
+        } catch (Throwable t) {
+            close(frame, closeErrorObject(t));
+            throw t;
         }
+
+        close(frame, LuaNil.SINGLETON);
+    }
+
+    private void close(VirtualFrame frame, Object errorObject) {
+        for (int i = closeNodes.length - 1; i >= 0; i--) {
+            closeNodes[i].executeClose(frame, errorObject);
+        }
+    }
+
+    private static Object closeErrorObject(Throwable throwable) {
+        if (throwable instanceof ControlFlowException) {
+            return LuaNil.SINGLETON;
+        }
+        String message = throwable.getMessage();
+        return message == null ? LuaNil.SINGLETON : message;
     }
 
     /**
@@ -83,14 +138,26 @@ public final class LuaBlockNode extends LuaStatementNode implements BlockNode.El
      * @return An unmodifiable list of the statements in this block.
      */
     public List<LuaStatementNode> getBlock() {
-        if (block == null) {
+        if (statements.length == 0) {
             return Collections.emptyList();
         }
-        return Collections.unmodifiableList(Arrays.asList(block.getElements()));
+        return Collections.unmodifiableList(Arrays.asList(statements));
     }
 
-    @Override
-    public void executeVoid(VirtualFrame frame, LuaStatementNode node, int index, int argument) {
-        node.executeVoid(frame);
+    public List<TruffleString> getLabels() {
+        if (labelTargets.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return Collections.unmodifiableList(new ArrayList<>(labelTargets.keySet()));
+    }
+
+    private static Map<TruffleString, Integer> buildLabelTargets(LuaStatementNode[] statements) {
+        Map<TruffleString, Integer> result = new HashMap<>();
+        for (int i = 0; i < statements.length; i++) {
+            if (statements[i] instanceof LuaLabelNode labelNode) {
+                result.put(labelNode.getLabel(), i + 1);
+            }
+        }
+        return result;
     }
 }

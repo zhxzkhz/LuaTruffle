@@ -16,32 +16,17 @@ public class LuaNumericForRepeatingNode extends Node implements RepeatingNode {
 
     /** 循环变量（如 'i'）在栈帧中的 Slot 索引 */
     private final int loopVarIndex;
-
-    // =========================================================================
-    // 运行时状态 (Runtime State)
-    // 注意：在 AST 节点中存储运行时数据（limit, step）会导致 AST 变为有状态的（Stateful）。
-    // 如果同一个 AST 被多个线程并发执行，这里会产生竞态条件。
-    // 解决方法：在生产环境中，应将这些值存储在 VirtualFrame 的临时槽位中，或者通过专门的状态对象传递。
-    // =========================================================================
-    private long limit;
-    private long step;
+    private final int limitIndex;
+    private final int stepIndex;
 
     /** 循环体内的语句节点 */
     @Child private LuaStatementNode bodyNode;
 
-    public LuaNumericForRepeatingNode(int loopVarIndex, LuaStatementNode bodyNode) {
+    public LuaNumericForRepeatingNode(int loopVarIndex, int limitIndex, int stepIndex, LuaStatementNode bodyNode) {
         this.loopVarIndex = loopVarIndex;
+        this.limitIndex = limitIndex;
+        this.stepIndex = stepIndex;
         this.bodyNode = bodyNode;
-    }
-
-    /** 由父节点 LuaNumericForNode 在循环启动前设置 */
-    public void setLimit(long limit) {
-        this.limit = limit;
-    }
-
-    /** 由父节点 LuaNumericForNode 在循环启动前设置 */
-    public void setStep(long step) {
-        this.step = step;
     }
 
     /**
@@ -56,6 +41,8 @@ public class LuaNumericForRepeatingNode extends Node implements RepeatingNode {
         // 直接读取 Long 类型，因为父节点已经强制设置了 FrameSlotKind.Long，
         // 这里不会有装箱/拆箱（Boxing）开销。
         long currentValue = frame.getLong(loopVarIndex);
+        long limit = frame.getLong(limitIndex);
+        long step = frame.getLong(stepIndex);
 
         // 2. 【边界检查】
         // Lua 语义：

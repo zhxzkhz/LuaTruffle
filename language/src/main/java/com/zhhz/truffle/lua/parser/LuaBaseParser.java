@@ -45,12 +45,14 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
     protected final Stack<Scope> scopeStack;
 
     protected final Stack<FrameDescriptor.Builder> fdBuilderStack;
+    private int nextLocalDeclarationId;
 
     protected LuaBaseParser(LuaLanguage language, Source source) {
         this.language = language;
         this.source = source;
         this.scopeStack = new Stack<>();
         this.fdBuilderStack = new Stack<>();
+        this.nextLocalDeclarationId = 0;
         sourceString = LuaContext.toTruffleString(source.getCharacters().toString());
     }
 
@@ -59,6 +61,7 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
         this.source = source;
         this.scopeStack = scopes;
         this.fdBuilderStack = stack;
+        this.nextLocalDeclarationId = 0;
         sourceString = LuaContext.toTruffleString(source.getCharacters().toString());
     }
 
@@ -201,9 +204,22 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
      * @return 该变量对应的槽位索引。
      */
     protected int declareLocalVariable(TruffleString name) {
+        return declareLocalVariable(name, LocalAttribute.NONE);
+    }
+
+    protected int declareLocalVariable(TruffleString name, LocalAttribute attribute) {
         int slotIndex = fdBuilderStack.peek().addSlot(FrameSlotKind.Illegal, name, null);
-        scopeStack.peek().variables.put(name, slotIndex);
+        int declarationId = nextLocalDeclarationId++;
+        scopeStack.peek().variables.put(name, new LocalVariable(slotIndex, attribute, declarationId));
+        onLocalVariableDeclared(name, attribute, slotIndex, declarationId);
         return slotIndex;
+    }
+
+    protected void onLocalVariableDeclared(TruffleString name, LocalAttribute attribute, int slotIndex, int declarationId) {
+    }
+
+    protected int declareHiddenSlot(Object identifier) {
+        return fdBuilderStack.peek().addSlot(FrameSlotKind.Illegal, identifier, null);
     }
 
     /**
@@ -216,12 +232,13 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
         int functionBoundaryDepth = 0;
         for (int i = scopeStack.size() - 1; i >= 0; i--) {
             var scope = scopeStack.get(i);
-            if (scope.variables.containsKey(name)) {
-                int slotIndex = scope.variables.get(name);
+            LocalVariable variable = scope.variables.get(name);
+            if (variable != null) {
+                int slotIndex = variable.slotIndex();
                 //int depth = scopeStack.size() - 1 - i;
                 boolean isUpvalue = (functionBoundaryDepth > 0);
                 int resultDepth = isUpvalue ? functionBoundaryDepth : 0;
-                return new VariableResolutionResult(slotIndex, resultDepth, isUpvalue);
+                return new VariableResolutionResult(slotIndex, resultDepth, isUpvalue, variable.attribute(), variable.declarationId());
             }
             // 如果我们刚刚检查过的是一个函数边界，增加 upvalue 深度计数
             if (scope.isFunctionBoundary) {
@@ -234,11 +251,19 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
     /**
      * @param depth 0 = local, >0 = upvalue
      */ // 辅助类，用于封装查找结果
-    protected record VariableResolutionResult(int slotIndex, int depth, boolean isUpvalue) {}
+    protected record VariableResolutionResult(int slotIndex, int depth, boolean isUpvalue, LocalAttribute attribute, int declarationId) {}
+
+    protected enum LocalAttribute {
+        NONE,
+        CONST,
+        CLOSE
+    }
+
+    protected record LocalVariable(int slotIndex, LocalAttribute attribute, int declarationId) {}
 
     // 定义一个 Scope 内部类
     protected static class Scope {
-        final Map<TruffleString, Integer> variables = new HashMap<>();
+        final Map<TruffleString, LocalVariable> variables = new HashMap<>();
         final boolean isFunctionBoundary; // 标记这是否是一个函数作用域的开始
 
         Scope(boolean isFunctionBoundary) {

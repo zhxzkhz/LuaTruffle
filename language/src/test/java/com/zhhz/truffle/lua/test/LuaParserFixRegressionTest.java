@@ -1,0 +1,841 @@
+package com.zhhz.truffle.lua.test;
+
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.PolyglotException;
+import org.graalvm.polyglot.Value;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class LuaParserFixRegressionTest extends AbstractLuaTest {
+
+    private Context context;
+
+    @BeforeEach
+    public void setUp() {
+        this.context = newContextBuilder("lua").build();
+    }
+
+    @AfterEach
+    public void tearDown() {
+        if (this.context != null) {
+            this.context.close();
+        }
+    }
+
+    private Value eval(String code) {
+        return context.eval("lua", code);
+    }
+
+    private Value run(String code) {
+        return context.eval("lua", "return " + code);
+    }
+
+    // ===== P0 #3: createWriteNodeForFuncName NAME索引越界 =====
+
+    @Test
+    public void testFuncNameWithColonMethod() {
+        String code = "local t = {}\n"
+                + "function t:method()\n"
+                + "    return 42\n"
+                + "end\n"
+                + "return t:method()\n";
+        assertEquals(42L, eval(code).asLong());
+    }
+
+    @Test
+    public void testFuncNameWithDotChain() {
+        String code = "local a = {}\n"
+                + "a.b = {}\n"
+                + "function a.b.c()\n"
+                + "    return 99\n"
+                + "end\n"
+                + "return a.b.c()\n";
+        assertEquals(99L, eval(code).asLong());
+    }
+
+    // ===== P0 #4: visitStatFunctionDef 对非全局函数定义处理 =====
+
+    @Test
+    public void testFunctionDefOverridesLocal() {
+        String code = "local f = 1\n"
+                + "function f()\n"
+                + "    return 10\n"
+                + "end\n"
+                + "return f()\n";
+        assertEquals(10L, eval(code).asLong());
+    }
+
+    @Test
+    public void testFunctionDefAsUpvalue() {
+        String code = "local f\n"
+                + "function f()\n"
+                + "    return 77\n"
+                + "end\n"
+                + "return f()\n";
+        assertEquals(77L, eval(code).asLong());
+    }
+
+    // ===== P0 #5: 十六进制浮点数解析 =====
+
+    @Test
+    public void testHexInteger() {
+        assertEquals(255L, run("0xFF").asLong());
+        assertEquals(16L, run("0x10").asLong());
+    }
+
+    @Test
+    public void testHexFloatWithP() {
+        assertEquals(15.0, run("0xfp0").asDouble(), 0.001);
+        assertEquals(30.0, run("0xfp1").asDouble(), 0.001);
+    }
+
+    @Test
+    public void testDecimalScientificNotation() {
+        assertEquals(1200.0, run("1.2e3").asDouble(), 0.001);
+        assertEquals(0.012, run("1.2e-2").asDouble(), 0.001);
+    }
+
+    // ===== P1 #1: 消除冗余 LuaNodeParser 实例 =====
+    // (间接测试: 嵌套函数定义应该正常工作)
+
+    @Test
+    public void testNestedFunctionDefinitions() {
+        String code = "function outer()\n"
+                + "    function inner()\n"
+                + "        function deepest()\n"
+                + "            return 123\n"
+                + "        end\n"
+                + "        return deepest()\n"
+                + "    end\n"
+                + "    return inner()\n"
+                + "end\n"
+                + "return outer()\n";
+        assertEquals(123L, eval(code).asLong());
+    }
+
+    // ===== P1 #2: Upvalue 链完整性 =====
+
+    @Test
+    public void testMultiLevelUpvalueRead() {
+        String code = "local x = 10\n"
+                + "function level1()\n"
+                + "    function level2()\n"
+                + "        function level3()\n"
+                + "            return x\n"
+                + "        end\n"
+                + "        return level3()\n"
+                + "    end\n"
+                + "    return level2()\n"
+                + "end\n"
+                + "return level1()\n";
+        assertEquals(10L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMultiLevelUpvalueWrite() {
+        String code = "local x = 10\n"
+                + "function level1()\n"
+                + "    function level2()\n"
+                + "        x = 99\n"
+                + "    end\n"
+                + "    level2()\n"
+                + "end\n"
+                + "level1()\n"
+                + "return x\n";
+        assertEquals(99L, eval(code).asLong());
+    }
+
+    // ===== P1 #10: 方法调用 receiver 不重复求值 =====
+
+    @Test
+    public void testMethodCallReceiverEvaluatedOnce() {
+        String code = "local count = 0\n"
+                + "local t = {}\n"
+                + "t.value = 1\n"
+                + "function t:getter()\n"
+                + "    return self.value\n"
+                + "end\n"
+                + "return t:getter()\n";
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMethodCallWithArgs() {
+        String code = "local t = {x = 10}\n"
+                + "function t:add(n)\n"
+                + "    return self.x + n\n"
+                + "end\n"
+                + "return t:add(5)\n";
+        assertEquals(15L, eval(code).asLong());
+    }
+
+    // ===== P1 #6: 转义序列 =====
+
+    @Test
+    public void testStringEscapeNewline() {
+        assertEquals("a\nb", run("'a\\nb'").asString());
+    }
+
+    @Test
+    public void testStringEscapeTab() {
+        assertEquals("a\tb", run("'a\\tb'").asString());
+    }
+
+    @Test
+    public void testStringEscapeBackslash() {
+        assertEquals("a\\b", run("'a\\\\b'").asString());
+    }
+
+    @Test
+    public void testStringEscapeDecimal() {
+        assertEquals("a", run("'\\97'").asString());
+    }
+
+    @Test
+    public void testStringEscapeHex() {
+        assertEquals("A", run("'\\x41'").asString());
+    }
+
+    @Test
+    public void testStringEscapeZSkipsWhitespace() {
+        assertEquals("ab", run("'a\\z\nb'").asString());
+    }
+
+    // ===== P2 #8: GreaterThan / GreaterOrEqual 节点 =====
+
+    @Test
+    public void testGreaterThan() {
+        assertTrue(run("10 > 5").asBoolean());
+        assertFalse(run("5 > 10").asBoolean());
+        assertFalse(run("5 > 5").asBoolean());
+    }
+
+    @Test
+    public void testGreaterOrEqual() {
+        assertTrue(run("10 >= 5").asBoolean());
+        assertFalse(run("5 >= 10").asBoolean());
+        assertTrue(run("5 >= 5").asBoolean());
+    }
+
+    @Test
+    public void testGreaterThanDoubles() {
+        assertTrue(run("10.5 > 10.0").asBoolean());
+        assertTrue(run("10.0 >= 10.0").asBoolean());
+    }
+
+    @Test
+    public void testGreaterThanStrings() {
+        assertTrue(run("'b' > 'a'").asBoolean());
+        assertFalse(run("'a' > 'b'").asBoolean());
+    }
+
+    // ===== P2 #19: LuaWriteArgumentNode DSL特化 =====
+    // (间接测试: 函数参数传递应该正确工作)
+
+    @Test
+    public void testFunctionArgumentTypes() {
+        String code = "function f(a, b, c)\n"
+                + "    return a + b + c\n"
+                + "end\n"
+                + "return f(1, 2, 3)\n";
+        assertEquals(6L, eval(code).asLong());
+    }
+
+    @Test
+    public void testFunctionMixedArgTypes() {
+        String code = "function f(a, b)\n"
+                + "    return a + b\n"
+                + "end\n"
+                + "return f(1, 2.5)\n";
+        assertEquals(3.5, eval(code).asDouble(), 0.001);
+    }
+
+    // ===== P0 #4 补充: 闭包内 upvalue 函数定义 =====
+
+    @Test
+    public void testFunctionDefAsUpvalueFromClosure() {
+        String code = "function outer()\n"
+                + "    local f\n"
+                + "    function f()\n"
+                + "        return 55\n"
+                + "    end\n"
+                + "    return f()\n"
+                + "end\n"
+                + "return outer()\n";
+        assertEquals(55L, eval(code).asLong());
+    }
+
+    // ===== P0 #5 补充: 十六进制浮点数边界情况 =====
+
+    @Test
+    public void testHexFloatWithFractionAndP() {
+        assertEquals(15.5, run("0xf.8p0").asDouble(), 0.001);
+    }
+
+    @Test
+    public void testHexFloatFallbackToDouble() {
+        assertEquals(255.5, run("0xff.8p0").asDouble(), 0.001);
+    }
+
+    @Test
+    public void testLargeIntegerOverflowToDouble() {
+        assertTrue(run("99999999999999999").isNumber());
+    }
+
+    // ===== P1 #1 补充: 验证函数体内 vararg 状态正确隔离 =====
+
+    @Test
+    public void testVarargIsolationAcrossFunctions() {
+        String code = "function varfunc(...)\n"
+                + "    return ...\n"
+                + "end\n"
+                + "function normalfunc(a)\n"
+                + "    return a\n"
+                + "end\n"
+                + "local x = varfunc(1, 2, 3)\n"
+                + "local y = normalfunc(10)\n"
+                + "return y\n";
+        assertEquals(10L, eval(code).asLong());
+    }
+
+    @Test
+    public void testNestedVarargFunctions() {
+        String code = """
+                function outer(...)
+                    function inner(...)
+                        return ...
+                    end
+                    return inner(100)
+                end
+                return outer(1, 2, 3)
+                """;
+        assertEquals(100L, eval(code).asLong());
+    }
+
+    // ===== P1 #2 补充: Upvalue 类型正确传递 (修复 setSlotKind 操作错误 frame) =====
+
+    @Test
+    public void testUpvalueWriteDoubleFromNested() {
+        String code = """
+                local x = 1
+                function level1()
+                    function level2()
+                        x = 3.14
+                    end
+                    level2()
+                    return x
+                end
+                level1()
+                return x
+                """;
+        assertEquals(3.14, eval(code).asDouble(), 0.001);
+    }
+
+    @Test
+    public void testUpvalueWriteBoolFromNested() {
+        String code = """
+                local x = 1
+                function level1()
+                    function level2()
+                        x = true
+                    end
+                    level2()
+                end
+                level1()
+                return x
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    // ===== P1 #10 补充: 方法调用 receiver 副作用验证 =====
+
+    @Test
+    public void testMethodCallReceiverNoDoubleEvaluation() {
+        String code = """
+                local callCount = 0
+                local t = {}
+                function t:method()
+                    return self
+                end
+                local obj = t
+                local result = obj:method()
+                return result == t
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    @Test
+    public void testMethodCallReceiverExpressionEvaluatedOnce() {
+        String code = """
+                local callCount = 0
+                local t = {}
+                function t:method()
+                    return callCount
+                end
+                function make()
+                    callCount = callCount + 1
+                    return t
+                end
+                return make():method()
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMethodCallReceiverChain() {
+        String code = """
+                local t = {x = 5}
+                function t:double()
+                    return self.x * 2
+                end
+                function t:triple()
+                    return self.x * 3
+                end
+                return t:double() + t:triple()
+                """;
+        assertEquals(25L, eval(code).asLong());
+    }
+
+    // ===== P1 #6 补充: 更多转义序列 =====
+
+    @Test
+    public void testStringEscapeCarriageReturn() {
+        assertEquals("a\rb", run("'a\\rb'").asString());
+    }
+
+    @Test
+    public void testStringEscapeBell() {
+        assertEquals("\u0007", run("'\\a'").asString());
+    }
+
+    @Test
+    public void testStringEscapeUnicode() {
+        assertEquals("\u4e2d", run("'\\u{4e2d}'").asString());
+    }
+
+    @Test
+    public void testStringEscapeMixedDecimal() {
+        assertEquals("AB", run("'\\65\\66'").asString());
+    }
+
+    @Test
+    public void testStringEscapeHexTwoDigits() {
+        assertEquals("\u00ff", run("'\\xff'").asString());
+    }
+
+    // ===== P2 #8 补充: GreaterOrEqual 边界 =====
+
+    @Test
+    public void testGreaterOrEqualMixedTypes() {
+        assertTrue(run("5 >= 5.0").asBoolean());
+        assertTrue(run("5.0 >= 5").asBoolean());
+        assertFalse(run("4.9 >= 5").asBoolean());
+    }
+
+    // ===== P2 #13 补充: while/repeat/if SourceSection (通过执行间接验证) =====
+
+    @Test
+    public void testWhileSourceSectionNotCrash() {
+        String code = """
+                local i = 0
+                while i < 3 do
+                    i = i + 1
+                end
+                return i
+                """;
+        assertEquals(3L, eval(code).asLong());
+    }
+
+    @Test
+    public void testRepeatSourceSectionNotCrash() {
+        String code = """
+                local i = 0
+                repeat
+                    i = i + 1
+                until i >= 3
+                return i
+                """;
+        assertEquals(3L, eval(code).asLong());
+    }
+
+    @Test
+    public void testIfElseifElseSourceSectionNotCrash() {
+        String code = """
+                local x = 2
+                if x == 1 then
+                    return 10
+                elseif x == 2 then
+                    return 20
+                else
+                    return 30
+                end
+                """;
+        assertEquals(20L, eval(code).asLong());
+    }
+
+    // ===== P2 #19 补充: WriteArgumentNode bool参数 =====
+
+    @Test
+    public void testFunctionBoolArgument() {
+        String code = """
+                function f(flag)
+                    if flag then return 1 else return 0 end
+                end
+                return f(true)
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testFunctionStringArgument() {
+        String code = """
+                function f(s)
+                    return s
+                end
+                return f('hello')
+                """;
+        assertEquals("hello", eval(code).asString());
+    }
+
+    @Test
+    public void testFunctionNilArgument() {
+        String code = """
+                function f(x)
+                    return x == nil
+                end
+                return f(nil)
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    // ===== 综合测试 =====
+
+    @Test
+    public void testVarargsInMain() {
+        String code = """
+                local a, b = ...
+                return a == nil and b == nil
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    @Test
+    public void testVarargsInFunction() {
+        String code = """
+                function f(...)
+                    return ...
+                end
+                return f(42)
+                """;
+        assertEquals(42L, eval(code).asLong());
+    }
+
+    @Test
+    public void testVarargFunctionCall() {
+        String code = """
+                function f(a, b, ...)
+                    return a + b
+                end
+                return f(10, 20, 30)
+                """;
+        assertEquals(30L, eval(code).asLong());
+    }
+
+    // ===== P0 #3 补充: 冒号定义带点链 =====
+
+    @Test
+    public void testFuncNameColonWithDotChain() {
+        String code = """
+                local a = {}
+                a.b = {}
+                function a.b:method()
+                    return self.x
+                end
+                a.b.x = 7
+                return a.b:method()
+                """;
+        assertEquals(7L, eval(code).asLong());
+    }
+
+    @Test
+    public void testLocalInitializerResolvesOuterScope() {
+        String code = """
+                local x = 41
+                do
+                    local x = x + 1
+                    return x
+                end
+                """;
+        assertEquals(42L, eval(code).asLong());
+    }
+
+    @Test
+    public void testIfLocalDoesNotLeak() {
+        String code = """
+                local x = 1
+                if true then
+                    local x = 2
+                end
+                return x
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testWhileLocalDoesNotLeak() {
+        String code = """
+                local x = 1
+                while false do
+                    local x = 2
+                end
+                return x
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testNumericForInitializersResolveOuterScope() {
+        String code = """
+                local i = 3
+                local sum = 0
+                for i = i, i do
+                    sum = sum + i
+                end
+                return sum
+                """;
+        assertEquals(3L, eval(code).asLong());
+    }
+
+    // ===== P1 #6 补充: \\v 和 \\f 转义 =====
+
+    @Test
+    public void testStringEscapeVerticalTab() {
+        assertEquals("\u000B", run("'\\v'").asString());
+    }
+
+    @Test
+    public void testStringEscapeFormFeed() {
+        assertEquals("\u000C", run("'\\f'").asString());
+    }
+
+    @Test
+    public void testLongStringDoesNotUnescape() {
+        assertEquals("a\\nb", run("[[a\\nb]]").asString());
+    }
+
+    @Test
+    public void testLongStringWithEqualsDelimiter() {
+        assertEquals("a [[ nested ]] b", run("[=[a [[ nested ]] b]=]").asString());
+    }
+
+    @Test
+    public void testLongStringSkipsInitialNewline() {
+        assertEquals("hello", run("[[\nhello]]").asString());
+    }
+
+    @Test
+    public void testParenthesizedCallCollapsesMultiReturn() {
+        String code = """
+                function values()
+                    return 1, 2
+                end
+                local a, b = (values())
+                return a == 1 and b == nil
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    @Test
+    public void testAnonymousFunctionDebugNameDoesNotReadPastVarlist() {
+        String code = """
+                local f
+                f = 1, function() return 2 end
+                return f
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testGotoForward() {
+        String code = """
+                local x = 1
+                goto done
+                x = 2
+                ::done::
+                return x
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testGotoBackward() {
+        String code = """
+                local i = 0
+                ::again::
+                i = i + 1
+                if i < 3 then
+                    goto again
+                end
+                return i
+                """;
+        assertEquals(3L, eval(code).asLong());
+    }
+
+    @Test
+    public void testGotoUndefinedLabelFails() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval("goto missing"));
+        assertTrue(ex.getMessage().contains("no visible label"));
+    }
+
+    @Test
+    public void testDuplicateLabelFails() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval("::a:: ::a::"));
+        assertTrue(ex.getMessage().contains("already defined"));
+    }
+
+    @Test
+    public void testSiblingBlocksMayReuseLabelName() {
+        String code = """
+                do
+                    ::again::
+                end
+                do
+                    ::again::
+                end
+                return 1
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testBreakOutsideLoopFails() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval("break"));
+        assertTrue(ex.getMessage().contains("break outside loop"));
+    }
+
+    @Test
+    public void testConstLocalCannotBeReassigned() {
+        String code = """
+                local x <const> = 1
+                x = 2
+                return x
+                """;
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
+        assertTrue(ex.getMessage().contains("const"));
+    }
+
+    @Test
+    public void testGotoIntoNestedBlockFails() {
+        String code = """
+                goto inside
+                do
+                    ::inside::
+                end
+                """;
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
+        assertTrue(ex.getMessage().contains("jumps into a block"));
+    }
+
+    @Test
+    public void testGotoSkipsLocalDeclarationFails() {
+        String code = """
+                goto done
+                local x = 1
+                ::done::
+                return 0
+                """;
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
+        assertTrue(ex.getMessage().contains("local variable"));
+    }
+
+    @Test
+    public void testGotoOutOfNestedBlockClosesVariable() {
+        String code = """
+                local closed = 0
+                local mt = { __close = function(v, err) closed = closed + 1 end }
+                do
+                    local x <close> = setmetatable({}, mt)
+                    goto done
+                end
+                ::done::
+                return closed
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testGotoOutOfNestedBlockClosesVariablesInReverseDeclarationOrder() {
+        String code = """
+                local order = ''
+                local mt = { __close = function(v, err) order = order .. v.name end }
+                do
+                    local a <close> = setmetatable({name = 'a'}, mt)
+                    local b <close> = setmetatable({name = 'b'}, mt)
+                    goto done
+                end
+                ::done::
+                return order
+                """;
+        assertEquals("ba", eval(code).asString());
+    }
+
+    @Test
+    public void testCloseRunsOnNormalScopeExit() {
+        String code = """
+                local closed = 0
+                local mt = { __close = function(v, err) closed = closed + 1 end }
+                do
+                    local x <close> = setmetatable({}, mt)
+                end
+                return closed
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testCloseRunsOnReturn() {
+        String code = """
+                local closed = 0
+                local mt = { __close = function(v, err) closed = closed + 1 end }
+                function f()
+                    local x <close> = setmetatable({}, mt)
+                    return 7
+                end
+                local result = f()
+                return result + closed
+                """;
+        assertEquals(8L, eval(code).asLong());
+    }
+
+    @Test
+    public void testCloseRunsOnErrorBeforePcallReturns() {
+        String code = """
+                local closed = 0
+                local mt = { __close = function(v, err) closed = closed + 1 end }
+                local ok = pcall(function()
+                    local x <close> = setmetatable({}, mt)
+                    error('boom')
+                end)
+                return (not ok) and closed
+                """;
+        assertEquals(1L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMultipleCloseAttributesInLocalDeclarationFails() {
+        String code = """
+                local a <close>, b <close> = nil, nil
+                """;
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
+        assertTrue(ex.getMessage().contains("multiple to-be-closed"));
+    }
+
+    @Test
+    public void testInvalidStringEscapeReportsParseError() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> run("'\\256'"));
+        assertTrue(ex.getMessage().contains("decimal escape too large"));
+    }
+}

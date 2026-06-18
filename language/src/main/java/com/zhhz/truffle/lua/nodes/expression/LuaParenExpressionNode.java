@@ -44,6 +44,8 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
 /**
  * 一个 {@link LuaExpressionNode}，表示带括号的表达式，例如 `(a + b)`。
@@ -74,7 +76,12 @@ public class LuaParenExpressionNode extends LuaExpressionNode {
      */
     @Override
     public Object executeGeneric(VirtualFrame frame) {
-        return expression.executeGeneric(frame);
+        Object value = expression.executeGeneric(frame);
+        if (value instanceof LuaMultiValue multiValue && multiValue.isMultiValue()) {
+            Object[] values = (Object[]) multiValue.values();
+            return values.length == 0 ? LuaNil.SINGLETON : values[0];
+        }
+        return value;
     }
 
     /**

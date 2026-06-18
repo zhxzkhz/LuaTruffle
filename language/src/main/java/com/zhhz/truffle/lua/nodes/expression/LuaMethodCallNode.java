@@ -2,76 +2,139 @@ package com.zhhz.truffle.lua.nodes.expression;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.instrumentation.Tag;
+import com.oracle.truffle.api.interop.ArityException;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
+import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
+import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.strings.TruffleString;
+import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
-import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.nodes.access.LuaReadTableNode;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaValue;
 
-/**
- * 代表 Lua 方法调用表达式的 AST 节点，例如 't:foo(a, b)'。
- * 这个节点负责处理 ':' 语法糖，即自动将 t 作为第一个参数传入。
- */
-public class LuaMethodCallNode extends LuaExpressionNode {
+@NodeInfo(shortName = "method_call")
+public final class LuaMethodCallNode extends LuaExpressionNode {
 
-    @Child private LuaExpressionNode targetNode; // 用于计算被调用对象 (例如 't') 的节点
-    private final String methodName;    // 方法名 (例如 "foo")
-    @Children private final LuaExpressionNode[] argumentNodes; // 用于计算显式参数 (例如 a, b) 的节点数组
+    @Child private LuaExpressionNode receiverNode;
+    @Child private LuaExpressionNode methodKeyNode;
+    @Children private final LuaExpressionNode[] argumentNodes;
+    @Child private InteropLibrary library;
 
-    public LuaMethodCallNode(LuaExpressionNode targetNode, String methodName, LuaExpressionNode[] argumentNodes) {
-        this.targetNode = targetNode;
-        this.methodName = methodName;
+    public LuaMethodCallNode(LuaExpressionNode receiverNode, LuaExpressionNode methodKeyNode, LuaExpressionNode[] argumentNodes) {
+        this.receiverNode = receiverNode;
+        this.methodKeyNode = methodKeyNode;
         this.argumentNodes = argumentNodes;
+        this.library = InteropLibrary.getFactory().createDispatched(3);
+    }
 
-        // 我们需要一个子节点来从 targetNode 中读取方法函数
-        // 这里为了简化，我们先在 execute 方法里直接处理。
-        // 一个更优化的设计会在这里创建一个 ReadPropertyNode。
+    private Object unpackResult(Object result) {
+        if (result instanceof Object[] multi) {
+            return multi.length > 0 ? multi[0] : null;
+        }
+        return result;
     }
 
     @Override
-    @ExplodeLoop // 告诉 Truffle 展开这个循环，以提高性能
+    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
-        // 1. 计算出目标对象的值，例如执行完代表 't' 的节点后得到 table 对象。
-        Object targetValue = targetNode.executeGeneric(frame);
+        Object receiverValue = receiverNode.executeGeneric(frame);
 
-        // 2. 从目标对象中查找方法函数。
-        // 这通常需要一个慢速路径（@TruffleBoundary）的操作来访问对象的属性。
-        // 这里我们假设有一个辅助方法 `lookupMethod`。
-        LuaFunction function = lookupMethod(targetValue, methodName);
+        Object methodKey = methodKeyNode.executeGeneric(frame);
+        Object functionValue = unpackResult(LuaReadTableNode.readUncached(this, receiverValue, methodKey));
 
-        // --- 这就是与 LuaFunctionCallNode 最关键的区别 ---
-        // 3. 准备最终传递给函数的参数数组。
-        // 数组的长度是显式参数的长度 + 1。
-        final int numArgs = argumentNodes.length;
-        Object[] finalArguments = new Object[numArgs + 1];
-
-        // 4. 将目标对象自身作为第一个参数（self）放入数组。
-        finalArguments[0] = targetValue;
-
-        // 5. 计算并放入其他的显式参数。
-        for (int i = 0; i < numArgs; i++) {
-            finalArguments[i + 1] = argumentNodes[i].executeGeneric(frame);
+        if (!library.isExecutable(functionValue)) {
+            String message = getMessage(functionValue);
+            throw LuaException.create(message, this);
         }
 
-        // 6. 调用函数，并传入包含了 'self' 的完整参数列表。
-        return function.getCallTarget().call(finalArguments);
+        int explicitArgCount = this.argumentNodes.length;
+        int totalArgCount = explicitArgCount + 1;
+
+        if (explicitArgCount == 0) {
+            try {
+                return execReturn(functionValue, new Object[]{receiverValue});
+            } catch (UnsupportedTypeException | ArityException | UnsupportedMessageException e) {
+                throw LuaException.undefinedFunction(this, e);
+            }
+        }
+
+        final Object[] prefixArgs = new Object[explicitArgCount - 1 + 1];
+        prefixArgs[0] = receiverValue;
+        for (int i = 0; i < explicitArgCount - 1; i++) {
+            Object rawArg = this.argumentNodes[i].executeGeneric(frame);
+            if (rawArg instanceof LuaMultiValue luaMultiValue) {
+                if (luaMultiValue.isMultiValue()) {
+                    prefixArgs[i + 1] = ((Object[]) luaMultiValue.values())[0];
+                } else {
+                    prefixArgs[i + 1] = luaMultiValue.values();
+                }
+            } else if (rawArg instanceof Object[] || rawArg == null) {
+                throw LuaException.create("unexpected multi-return or nil in method call argument", this);
+            } else {
+                prefixArgs[i + 1] = rawArg;
+            }
+        }
+
+        Object lastResult = this.argumentNodes[explicitArgCount - 1].executeGeneric(frame);
+        Object[] finalArguments;
+
+        if (lastResult instanceof LuaMultiValue luaMultiValue) {
+            if (luaMultiValue.isMultiValue()) {
+                Object[] values = (Object[]) luaMultiValue.values();
+                int totalLength = prefixArgs.length + values.length;
+                finalArguments = new Object[totalLength];
+                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
+                System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
+            } else {
+                finalArguments = new Object[prefixArgs.length + 1];
+                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
+                finalArguments[prefixArgs.length] = luaMultiValue.values();
+            }
+        } else if (lastResult instanceof Object[] || lastResult == null) {
+            throw LuaException.create("unexpected multi-return or nil in method call argument", this);
+        } else {
+            finalArguments = new Object[prefixArgs.length + 1];
+            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
+            finalArguments[prefixArgs.length] = lastResult;
+        }
+
+        try {
+            return execReturn(functionValue, finalArguments);
+        } catch (ArityException | UnsupportedTypeException | UnsupportedMessageException e) {
+            throw LuaException.undefinedFunction(this, e);
+        }
+    }
+
+    private Object execReturn(Object functionValue, Object[] finalArguments) throws UnsupportedMessageException, UnsupportedTypeException, ArityException {
+        Object result = library.execute(functionValue, finalArguments);
+        if (result instanceof LuaMultiValue luaMultiValue) {
+            if (luaMultiValue.isMultiValue()) {
+                return luaMultiValue;
+            } else {
+                return luaMultiValue.values();
+            }
+        }
+        return result;
     }
 
     @TruffleBoundary
-    private LuaFunction lookupMethod(Object target, String key) {
-        // 在这里实现从一个 Lua 对象（比如 table）中查找函数的逻辑。
-        // 这可能涉及到元表（metatable）的查找。
-        // if (target instanceof LuaTable) {
-        //     return (LuaFunction) ((LuaTable) target).get(key);
-        // }
-        // ...
-        // throw new RuntimeException("Attempt to call a method on a non-table value");
-        /*
-        // 这是一个伪实现
-        if (target instanceof YourLuaTableClass) {
-            return (LuaFunction) ((YourLuaTableClass)target).read(key);
-        }
-
-         */
-        throw new UnsupportedOperationException("Method call on non-table object not implemented");
+    private String getMessage(Object functionValue) {
+        String typeName = (functionValue instanceof LuaValue)
+                ? ((LuaValue) functionValue).getTypeName()
+                : "java object";
+        return String.format("attempt to call a %s value", typeName);
     }
 
+    @Override
+    public boolean hasTag(Class<? extends Tag> tag) {
+        if (tag == StandardTags.CallTag.class) {
+            return true;
+        }
+        return super.hasTag(tag);
+    }
 }

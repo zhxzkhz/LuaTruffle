@@ -51,7 +51,7 @@ public abstract class LuaWriteUpvalueNode extends LuaWriteVariableNode {
             return;
         }
 
-        frame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Object);
+        parentFrame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Object);
         parentFrame.setObject(getSlotIndex(), value);
     }
 }

@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
@@ -28,12 +29,9 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     // 最佳实践是将这些状态存储在 VirtualFrame 的临时槽位（Frame Slots）或单独的 State 对象中。
     // =========================================================================
 
-    /** 迭代器函数 (Iterator Function)，例如 pairs 返回的 next 函数 */
-    private Object iteratorFunc;
-    /** 不变状态 (State)，例如 pairs 返回的 table */
-    private Object state;
-    /** 控制变量 (Control Variable)，例如遍历到的当前 Key，初始值为 nil */
-    private Object controlVar;
+    private final int iteratorFuncIndex;
+    private final int stateIndex;
+    private final int controlVarIndex;
 
     /**
      * 负责将迭代产生的值（k, v）写入局部变量的节点数组。
@@ -55,24 +53,14 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     @Child
     private InteropLibrary funcLib;
 
-    public LuaGenericForRepeatingNode(LuaWriteLocalVariableNode[] writeNodes, LuaStatementNode bodyNode) {
+    public LuaGenericForRepeatingNode(int iteratorFuncIndex, int stateIndex, int controlVarIndex,
+                                      LuaWriteLocalVariableNode[] writeNodes, LuaStatementNode bodyNode) {
+        this.iteratorFuncIndex = iteratorFuncIndex;
+        this.stateIndex = stateIndex;
+        this.controlVarIndex = controlVarIndex;
         this.writeNodes = writeNodes;
         this.bodyNode = bodyNode;
         this.funcLib = InteropLibrary.getFactory().createDispatched(3);
-    }
-
-    // --- 状态设置方法 (由 LuaGenericForNode 在循环开始前调用) ---
-
-    public void setIteratorFunc(Object iteratorFunc) {
-        this.iteratorFunc = iteratorFunc;
-    }
-
-    public void setState(Object state) {
-        this.state = state;
-    }
-
-    public void setControlVar(Object controlVar) {
-        this.controlVar = controlVar;
     }
 
     /**
@@ -84,17 +72,22 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     @Override
     @ExplodeLoop
     public boolean executeRepeating(VirtualFrame frame) {
-        Object[] loopVarValues = null;
+        Object[] loopVarValues;
+        Object iteratorFunc = frame.getObject(iteratorFuncIndex);
+        Object state = frame.getObject(stateIndex);
+        Object controlVar = frame.getObject(controlVarIndex);
 
         // 1. 【调用迭代器函数】
         // Lua 语义：func(state, control_var)
         try {
             // 使用 InteropLibrary 执行函数，传入状态和当前的控制变量
-            Object result = funcLib.execute(this.iteratorFunc, this.state, this.controlVar);
+            Object result = funcLib.execute(iteratorFunc, state, controlVar);
 
             // 处理返回值：兼容返回单个值或多值数组的情况
             if (result instanceof LuaMultiValue luaMultiValue) {
                 loopVarValues = (Object[]) luaMultiValue.values();
+            } else {
+                loopVarValues = new Object[]{result};
             }
 
         } catch (Exception e) {
@@ -105,11 +98,13 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
 
         // 2. 【更新控制变量】
         // Lua 核心语义：迭代器返回的 *第一个值* 更新为新的控制变量
-        this.controlVar = loopVarValues != null ? loopVarValues[0] : LuaNil.SINGLETON;
+        Object nextControlVar = loopVarValues.length > 0 ? loopVarValues[0] : LuaNil.SINGLETON;
+        frame.getFrameDescriptor().setSlotKind(controlVarIndex, FrameSlotKind.Object);
+        frame.setObject(controlVarIndex, nextControlVar);
 
         // 3. 【检查终止条件】
         // Lua 核心语义：如果第一个返回值为 nil，则循环终止
-        if (this.controlVar == LuaNil.SINGLETON) {
+        if (nextControlVar == LuaNil.SINGLETON) {
             return false; // 返回 false 通知 LoopNode 停止循环
         }
 

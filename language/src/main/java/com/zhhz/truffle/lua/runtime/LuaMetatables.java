@@ -57,6 +57,7 @@ public final class LuaMetatables {
     public static final TruffleString __CALL = toTruffleString("__call");           // t() (作为函数调用)
     public static final TruffleString __CONCAT = toTruffleString("__concat");       // .. (字符串连接)
     public static final TruffleString __GC = toTruffleString("__gc");               // 垃圾回收 (在 Truffle 中通常较难精确实现)
+    public static final TruffleString __CLOSE = toTruffleString("__close");         // to-be-closed 变量 (Lua 5.4)
     public static final TruffleString __MODE = toTruffleString("__mode");           // 用于弱引用 table (weak tables)
     public static final TruffleString __METATABLE = toTruffleString("__metatable"); // 用于保护元表 (getmetatable/setmetatable)
     public static final TruffleString __NAME = toTruffleString("__name");           // 用于 `tostring` 默认输出 (Lua 5.4+)

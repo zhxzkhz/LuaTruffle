@@ -86,7 +86,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
                     prefixArgs[i] = luaMultiValue.values();
                 }
             } else  if (rawArg instanceof Object[] || rawArg == null) {
-                throw new RuntimeException("不能返回数组祸空");
+                throw new RuntimeException("unexpected array or null return value");
             } else {
                 prefixArgs[i] = rawArg;
             }
@@ -116,7 +116,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
                 finalArguments[argCount - 1] = luaMultiValue.values();
             }
         } else  if (lastResult instanceof Object[] || lastResult == null) {
-            throw new RuntimeException("不能返回数组祸空");
+            throw new RuntimeException("unexpected array or null return value");
         }  else {
             finalArguments = new Object[argCount];
             System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);

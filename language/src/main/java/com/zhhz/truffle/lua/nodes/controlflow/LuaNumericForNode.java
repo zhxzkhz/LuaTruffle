@@ -34,6 +34,8 @@ public class LuaNumericForNode extends LuaStatementNode {
      * 数值循环的变量（如 'i'）通常是局部的，直接通过 Frame Slot 访问性能最高。
      */
     private final int loopVariableIndex;
+    private final int limitIndex;
+    private final int stepIndex;
 
     /** 负责将表达式结果强制转换为数字的节点 */
     @Child private LuaCoerceToNumberNode coerceNode;
@@ -46,18 +48,22 @@ public class LuaNumericForNode extends LuaStatementNode {
     private LoopNode loopNode;
 
     public LuaNumericForNode(int loopVariableIndex,
+                             int limitIndex,
+                             int stepIndex,
                              LuaExpressionNode startNode,
                              LuaExpressionNode limitNode,
                              LuaExpressionNode stepNode,
                              LuaStatementNode bodyNode) {
         this.loopVariableIndex = loopVariableIndex;
+        this.limitIndex = limitIndex;
+        this.stepIndex = stepIndex;
         this.startNode = startNode;
         this.limitNode = limitNode;
         this.stepNode = stepNode;
         // 创建转换节点，用于处理 Lua 的弱类型特性（如字符串 "10" 转数字 10）
         this.coerceNode = LuaCoerceToNumberNode.create();
         // 创建 LoopNode，包裹具体的重复执行逻辑 (RepeatingNode)
-        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaNumericForRepeatingNode(this.loopVariableIndex, bodyNode));
+        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaNumericForRepeatingNode(this.loopVariableIndex, this.limitIndex, this.stepIndex, bodyNode));
     }
 
 
@@ -83,16 +89,11 @@ public class LuaNumericForNode extends LuaStatementNode {
         // 显式设置 Slot 类型为 Long。
         // 这对 Graal 编译器非常重要，它能避免后续读取时的装箱/拆箱开销。
         frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Long);
+        frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Long);
+        frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Long);
         frame.setLong(loopVariableIndex, startValue);
-
-        // 3. 【状态注入】
-        // 将计算好的 limit 和 step 注入到 RepeatingNode 中。
-        // ⚠️警告：这种直接修改 Node 字段的做法在多线程共享 AST 场景下是不安全的（Not Thread-Safe）。(待优化)
-        // 在生产级实现中，建议通过 Frame 传递这些临时状态，或使用 Context 对象。
-        if (this.loopNode.getRepeatingNode() instanceof LuaNumericForRepeatingNode luaNumericForRepeatingNode){
-            luaNumericForRepeatingNode.setLimit(limitValue);
-            luaNumericForRepeatingNode.setStep(stepValue);
-        }
+        frame.setLong(limitIndex, limitValue);
+        frame.setLong(stepIndex, stepValue);
 
         // 4. 【启动循环】
         // LoopNode 会接管控制权，不断调用 RepeatingNode.executeRepeating

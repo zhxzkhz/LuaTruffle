@@ -114,7 +114,7 @@ public final class LuaReturnNode extends LuaStatementNode {
                 }
             } else  if (rawArg instanceof Object[] || rawArg == null) {
                 //如果返回数值则报错,然后修改返回数组的方法
-                throw new RuntimeException("不能返回数组祸空");
+                throw new RuntimeException("不能返回数组或空");
             } else {
                 prefixArgs[i] = rawArg;
             }
@@ -130,24 +130,19 @@ public final class LuaReturnNode extends LuaStatementNode {
         if (lastResult instanceof LuaMultiValue luaMultiValue) {
             if (luaMultiValue.isMultiValue()){
                 Object[] values = (Object[]) luaMultiValue.values();
-                // --- 情况 1: 最后一个参数返回了多值 ---
-                // 计算总长度
                 int totalLength = (argCount - 1) + values.length;
                 finalArguments = new Object[totalLength];
 
-                // 只有这里发生了真正的数组复制
                 System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
                 System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
 
             } else {
-                // --- 情况 2: 最后一个参数返回单值 (最常见的情况) ---
                 finalArguments = new Object[argCount];
                 System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
                 finalArguments[argCount - 1] = luaMultiValue.values();
             }
         }  else  if (lastResult instanceof Object[] || lastResult == null) {
-            //如果返回数值则报错,然后修改返回数组的方法
-            throw new RuntimeException("不能返回数组祸空");
+            throw new RuntimeException("不能返回数组或空");
         } else {
             finalArguments = new Object[argCount];
             System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);

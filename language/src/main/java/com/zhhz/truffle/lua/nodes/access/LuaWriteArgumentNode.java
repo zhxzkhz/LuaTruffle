@@ -5,10 +5,8 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
-/**
- * 负责将一个函数参数写入一个局部变量槽位。
- */
 @NodeField(name = "argumentIndex", type = int.class)
 @NodeField(name = "slotIndex", type = int.class)
 public abstract class LuaWriteArgumentNode extends LuaStatementNode {
@@ -16,44 +14,71 @@ public abstract class LuaWriteArgumentNode extends LuaStatementNode {
     protected abstract int getArgumentIndex();
     protected abstract int getSlotIndex();
 
-    @Specialization
-    protected void write(VirtualFrame frame) {
+    private Object getArg(VirtualFrame frame) {
         Object[] args = frame.getArguments();
+        int userArgIndex = getArgumentIndex() + 1;
+        return userArgIndex < args.length ? args[userArgIndex] : null;
+    }
 
-        int userArgIndex = this.getArgumentIndex() + 1;
-
-        Object value = (userArgIndex < args.length) ? args[userArgIndex] : null;
-
-        final FrameSlotKind kind = frame.getFrameDescriptor().getSlotKind(this.getSlotIndex());
-
-        if (value instanceof Long) {
-            // 如果传入的是 Long 对象（或原生 long，它会被自动装箱为 Long）
-            if (kind == FrameSlotKind.Long || kind == FrameSlotKind.Illegal) {
-                frame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Long);
-                frame.setLong(this.getSlotIndex(), (Long) value);
-                return;
-            }
+    @Specialization(guards = "isLongOrIllegal(frame)")
+    protected void writeLong(VirtualFrame frame) {
+        Object value = getArg(frame);
+        if (value instanceof Long l) {
+            frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Long);
+            frame.setLong(getSlotIndex(), l);
+        } else {
+            writeObjectSlow(frame, value);
         }
+    }
 
-        if (value instanceof Double) {
-            if (kind == FrameSlotKind.Double || kind == FrameSlotKind.Illegal) {
-                frame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Double);
-                frame.setDouble(this.getSlotIndex(), (Double) value);
-                return;
-            }
+    @Specialization(guards = "isDoubleOrIllegal(frame)")
+    protected void writeDouble(VirtualFrame frame) {
+        Object value = getArg(frame);
+        if (value instanceof Double d) {
+            frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Double);
+            frame.setDouble(getSlotIndex(), d);
+        } else {
+            writeObjectSlow(frame, value);
         }
+    }
 
-        if (value instanceof Boolean) {
-            if (kind == FrameSlotKind.Boolean || kind == FrameSlotKind.Illegal) {
-                frame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Boolean);
-                frame.setBoolean(this.getSlotIndex(), (Boolean) value);
-                return;
-            }
+    @Specialization(guards = "isBooleanOrIllegal(frame)")
+    protected void writeBoolean(VirtualFrame frame) {
+        Object value = getArg(frame);
+        if (value instanceof Boolean b) {
+            frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Boolean);
+            frame.setBoolean(getSlotIndex(), b);
+        } else {
+            writeObjectSlow(frame, value);
         }
+    }
 
-        // 【回退逻辑】如果类型不匹配，或者是一个通用 Object
-        // 我们将槽位“污染”成 Object 类型
-        frame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Object);
-        frame.setObject(this.getSlotIndex(), value);
+    @Specialization
+    protected void writeObject(VirtualFrame frame) {
+        Object value = getArg(frame);
+        if (value == null) value = LuaNil.SINGLETON;
+        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        frame.setObject(getSlotIndex(), value);
+    }
+
+    private void writeObjectSlow(VirtualFrame frame, Object value) {
+        if (value == null) value = LuaNil.SINGLETON;
+        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        frame.setObject(getSlotIndex(), value);
+    }
+
+    protected boolean isLongOrIllegal(VirtualFrame frame) {
+        FrameSlotKind kind = frame.getFrameDescriptor().getSlotKind(getSlotIndex());
+        return kind == FrameSlotKind.Long || kind == FrameSlotKind.Illegal;
+    }
+
+    protected boolean isDoubleOrIllegal(VirtualFrame frame) {
+        FrameSlotKind kind = frame.getFrameDescriptor().getSlotKind(getSlotIndex());
+        return kind == FrameSlotKind.Double || kind == FrameSlotKind.Illegal;
+    }
+
+    protected boolean isBooleanOrIllegal(VirtualFrame frame) {
+        FrameSlotKind kind = frame.getFrameDescriptor().getSlotKind(getSlotIndex());
+        return kind == FrameSlotKind.Boolean || kind == FrameSlotKind.Illegal;
     }
 }

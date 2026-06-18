@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.NodeInfo;
@@ -39,11 +40,22 @@ public class LuaGenericForNode extends LuaStatementNode {
      */
     @Child
     private LoopNode loopNode;
+    private final int iteratorFuncIndex;
+    private final int stateIndex;
+    private final int controlVarIndex;
 
-    public LuaGenericForNode(LuaMultiValueNode expListNode, LuaWriteLocalVariableNode[] writeNodes, LuaStatementNode bodyNode) {
+    public LuaGenericForNode(LuaMultiValueNode expListNode,
+                             int iteratorFuncIndex,
+                             int stateIndex,
+                             int controlVarIndex,
+                             LuaWriteLocalVariableNode[] writeNodes,
+                             LuaStatementNode bodyNode) {
         this.expListNode = expListNode;
+        this.iteratorFuncIndex = iteratorFuncIndex;
+        this.stateIndex = stateIndex;
+        this.controlVarIndex = controlVarIndex;
         // 创建重复执行节点 (RepeatingNode)，并将其包装在 LoopNode 中
-        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaGenericForRepeatingNode(writeNodes, bodyNode));
+        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaGenericForRepeatingNode(iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode));
     }
 
     @Override
@@ -60,17 +72,12 @@ public class LuaGenericForNode extends LuaStatementNode {
         Object state = iterators.length > 1 ? iterators[1] : LuaNil.SINGLETON;
         Object controlVar = iterators.length > 2 ? iterators[2] : LuaNil.SINGLETON;
 
-        // 3. 【注入状态】将运行时获取的迭代器三元组注入到 RepeatingNode 中
-        // ⚠️警告：这种直接修改 Node 字段的做法在多线程共享 AST 场景下是不安全的（Not Thread-Safe）。(待优化)
-        // 注意：RepeatingNode 负责具体的单次迭代逻辑（调用函数 -> 赋值 -> 执行 Body -> 判断结束）
-        if (loopNode.getRepeatingNode() instanceof LuaGenericForRepeatingNode luaGenericForRepeatingNode){
-            // 设置初始控制变量 (第一次迭代前的 seed)
-            luaGenericForRepeatingNode.setControlVar(controlVar);
-            // 设置状态常量
-            luaGenericForRepeatingNode.setState(state);
-            // 设置迭代器函数
-            luaGenericForRepeatingNode.setIteratorFunc(iteratorFunc);
-        }
+        frame.getFrameDescriptor().setSlotKind(iteratorFuncIndex, FrameSlotKind.Object);
+        frame.getFrameDescriptor().setSlotKind(stateIndex, FrameSlotKind.Object);
+        frame.getFrameDescriptor().setSlotKind(controlVarIndex, FrameSlotKind.Object);
+        frame.setObject(iteratorFuncIndex, iteratorFunc);
+        frame.setObject(stateIndex, state);
+        frame.setObject(controlVarIndex, controlVar);
 
         // 4. 【启动循环】执行 LoopNode
         // 这会不断调用 RepeatingNode.executeRepeating(frame) 直到其返回 false
