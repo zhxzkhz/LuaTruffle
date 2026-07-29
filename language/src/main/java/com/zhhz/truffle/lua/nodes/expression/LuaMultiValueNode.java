@@ -44,18 +44,7 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
         final Object[] prefixArgs = new Object[argCount - 1];
 
         for (int i = 0; i < argCount - 1; i++) {
-            // 在这里，我们仍然需要处理参数本身是多返回值的情况
-            Object rawArg = this.expressionNodes[i].executeGeneric(frame);
-            if (rawArg instanceof LuaMultiValue luaMultiValue) {
-                //如果是多值则获取第一个
-                if (luaMultiValue.isMultiValue()){
-                    prefixArgs[i] = ((Object[]) luaMultiValue.values())[0];
-                } else {
-                    prefixArgs[i] = luaMultiValue.values();
-                }
-            } else {
-                throw new RuntimeException("LuaReturnNode 返回值错误");
-            }
+            prefixArgs[i] = normalizeSingleValue(this.expressionNodes[i].executeGeneric(frame));
         }
 
 
@@ -115,11 +104,20 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
         // 注意：这里没有调用 executeMultiValue() 是为了优化。如果上层只需要一个值，
         // 我们就没必要计算 explist 中的所有表达式。
         Object firstResult = expressionNodes[0].executeGeneric(frame);
-        // 如果第一个表达式的结果是多值，我们仍然只返回第一个。
-        if (firstResult instanceof Object[] multiResult) {
-            return multiResult.length > 0 ? multiResult[0] : null;
-        } else {
-            return firstResult;
+        return normalizeSingleValue(firstResult);
+    }
+
+    private static Object normalizeSingleValue(Object value) {
+        if (value instanceof LuaMultiValue luaMultiValue) {
+            if (luaMultiValue.isMultiValue()) {
+                Object[] values = (Object[]) luaMultiValue.values();
+                return values.length > 0 ? values[0] : LuaNil.SINGLETON;
+            }
+            return luaMultiValue.values();
         }
+        if (value instanceof Object[] multiResult) {
+            return multiResult.length > 0 ? multiResult[0] : LuaNil.SINGLETON;
+        }
+        return value;
     }
 }

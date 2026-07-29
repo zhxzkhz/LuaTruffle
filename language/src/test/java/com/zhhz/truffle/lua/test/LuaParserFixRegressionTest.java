@@ -544,6 +544,19 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
         assertEquals(30L, eval(code).asLong());
     }
 
+    @Test
+    public void testGenericForWithPlainExplistValues() {
+        String code = """
+                local t = {a = 1, b = 2}
+                local seen = 0
+                for k, v in next, t, nil do
+                    seen = seen + v
+                end
+                return seen
+                """;
+        assertEquals(3L, eval(code).asLong());
+    }
+
     // ===== P0 #3 补充: 冒号定义带点链 =====
 
     @Test
@@ -682,6 +695,26 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
                 return i
                 """;
         assertEquals(3L, eval(code).asLong());
+    }
+
+    @Test
+    public void testGotoResolvesNearestVisibleLabel() {
+        String code = """
+                local result = 0
+                local first = true
+                ::again::
+                result = result + 100
+                do
+                    ::again::
+                    if first then
+                        first = false
+                        goto again
+                    end
+                    result = result + 1
+                end
+                return result
+                """;
+        assertEquals(101L, eval(code).asLong());
     }
 
     @Test

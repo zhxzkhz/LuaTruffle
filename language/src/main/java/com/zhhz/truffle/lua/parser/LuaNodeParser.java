@@ -140,8 +140,10 @@ public class LuaNodeParser extends LuaBaseParser {
         public LuaStatementNode visitBlock(LuaParser.BlockContext ctx) {
             BlockControlInfo blockInfo = currentBlockInfo();
 
-            List<LuaStatementNode> bodyNodes = new ArrayList<>();
-            for (LuaParser.StatContext child : ctx.stat()) {
+            List<LuaParser.StatContext> stats = ctx.stat();
+            LuaParser.RetstatContext retstat = ctx.retstat();
+            List<LuaStatementNode> bodyNodes = new ArrayList<>(stats.size() + (retstat == null ? 0 : 1));
+            for (LuaParser.StatContext child : stats) {
                 var node = visit(child);
                 //过滤方法定义返回的空值
                 if (Objects.nonNull(node)) {
@@ -149,8 +151,8 @@ public class LuaNodeParser extends LuaBaseParser {
                 }
             }
 
-            if (Objects.nonNull(ctx.retstat())) {
-                bodyNodes.add(visitRetstat(ctx.retstat()));
+            if (Objects.nonNull(retstat)) {
+                bodyNodes.add(visitRetstat(retstat));
             }
 
 
@@ -171,7 +173,7 @@ public class LuaNodeParser extends LuaBaseParser {
         @Override
         public LuaStatementNode visitStatBreak(LuaParser.StatBreakContext ctx) {
             if (loopDepth == 0) {
-                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), ctx.start.getText().length(), "break outside loop");
+                throw parseError(ctx.start, "break outside loop");
             }
             LuaStatementNode luaBreakNode = new LuaBreakNode();
             srcFromToken(luaBreakNode,ctx.start);
@@ -291,14 +293,16 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 1. 确定是否有 else 块
             LuaStatementNode elseBranch = null;
-            int blockCount = ctx.block().size();
-            int expCount = ctx.exp().size();
+            List<LuaParser.BlockContext> blocks = ctx.block();
+            List<LuaParser.ExpContext> conditions = ctx.exp();
+            int blockCount = blocks.size();
+            int expCount = conditions.size();
             if (blockCount > expCount) {
                 // 如果块的数量比条件表达式的数量多，说明最后一个块是 else 块
                 enterBlockScope();
                 enterBlockInfo();
                 try {
-                    elseBranch = visit(ctx.block(blockCount - 1));
+                    elseBranch = visit(blocks.get(blockCount - 1));
                 } finally {
                     exitBlockInfo();
                     exitBlockScope();
@@ -308,13 +312,13 @@ public class LuaNodeParser extends LuaBaseParser {
             // 2. 从后往前处理 elseif 链
             // elseif 的条件表达式在 exp 列表中的索引是从 1 开始的
             for (int i = expCount - 1; i >= 1; i--) {
-                LuaExpressionNode elseifCondition = expressionVisitor.visit(ctx.exp(i));
+                LuaExpressionNode elseifCondition = expressionVisitor.visit(conditions.get(i));
                 // 对应的 block 也在相同的索引 i 处
                 enterBlockScope();
                 enterBlockInfo();
                 LuaStatementNode elseifThen;
                 try {
-                    elseifThen = visit(ctx.block(i));
+                    elseifThen = visit(blocks.get(i));
                 } finally {
                     exitBlockInfo();
                     exitBlockScope();
@@ -324,12 +328,12 @@ public class LuaNodeParser extends LuaBaseParser {
 
 
             // 3. 处理最外层的 if-then
-            LuaExpressionNode mainCondition = expressionVisitor.visit(ctx.exp(0));
+            LuaExpressionNode mainCondition = expressionVisitor.visit(conditions.getFirst());
             enterBlockScope();
             enterBlockInfo();
             LuaStatementNode mainThen;
             try {
-                mainThen = visit(ctx.block(0));
+                mainThen = visit(blocks.getFirst());
             } finally {
                 exitBlockInfo();
                 exitBlockScope();
@@ -341,9 +345,10 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaStatementNode visitStatForNumeric(LuaParser.StatForNumericContext ctx) {
-            LuaExpressionNode startNode = expressionVisitor.visit(ctx.exp(0));
-            LuaExpressionNode limitNode = expressionVisitor.visit(ctx.exp(1));
-            LuaExpressionNode stepNode = ctx.exp().size() > 2 ? expressionVisitor.visit(ctx.exp(2)) : null;
+            List<LuaParser.ExpContext> exps = ctx.exp();
+            LuaExpressionNode startNode = expressionVisitor.visit(exps.get(0));
+            LuaExpressionNode limitNode = expressionVisitor.visit(exps.get(1));
+            LuaExpressionNode stepNode = exps.size() > 2 ? expressionVisitor.visit(exps.get(2)) : null;
 
             enterBlockScope();
 
@@ -461,7 +466,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 LocalAttribute attribute = parseLocalAttribute(attributes.get(i));
                 if (attribute == LocalAttribute.CLOSE) {
                     if (hasClose) {
-                        throw new LuaParseError(source, nameNode.getSymbol().getLine(), nameNode.getSymbol().getCharPositionInLine(), nameNode.getText().length(), "multiple to-be-closed variables in local declaration");
+                        throw parseError(nameNode.getSymbol(), "multiple to-be-closed variables in local declaration");
                     }
                     hasClose = true;
                 }
@@ -564,13 +569,13 @@ public class LuaNodeParser extends LuaBaseParser {
 
         private LuaExpressionNode createBinary(ParserRuleContext ctx, Token opToken, LuaParser.ExpContext leftCtx, LuaParser.ExpContext rightCtx) {
             if (leftCtx == null) {
-                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), ctx.getText().length(), "missing left expression operand");
+                throw parseError(ctx, "missing left expression operand");
             }
             if (opToken == null) {
                 return visit(leftCtx);
             }
             if (rightCtx == null) {
-                throw new LuaParseError(source, opToken.getLine(), opToken.getCharPositionInLine(), opToken.getText().length(), "missing right expression operand");
+                throw parseError(opToken, "missing right expression operand");
             }
             return createBinary(ctx, opToken, visit(leftCtx), visit(rightCtx));
         }
@@ -679,7 +684,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 case LuaParser.POUND -> LuaLengthNodeGen.create(operandNode);
                 case LuaParser.SQUIG -> LuaBitwiseNotNodeGen.create(operandNode);
                 default ->
-                        throw new LuaParseError(source, ctx.op.getLine(), ctx.op.getCharPositionInLine(), ctx.op.getText().length(), "unexpected unary operator: " + ctx.op.getText());
+                        throw parseError(ctx.op, "unexpected unary operator: " + ctx.op.getText());
             };
 
             setSourceSectionFromContext(resultNode, ctx);
@@ -1086,14 +1091,14 @@ public class LuaNodeParser extends LuaBaseParser {
                     source,
                     prefixExpCtx.start.getLine(),
                     prefixExpCtx.start.getCharPositionInLine(),
-                    prefixExpCtx.getText().length(),
+                    contextLength(prefixExpCtx),
                     "syntax error near '='"
             );
             default -> throw new LuaParseError(
                     source,
                     prefixExpCtx.start.getLine(),
                     prefixExpCtx.start.getCharPositionInLine(),
-                    prefixExpCtx.getText().length(),
+                    contextLength(prefixExpCtx),
                     "syntax error: unexpected symbol near '=' (cannot assign to " + prefixExpCtx.getClass().getSimpleName() + ")"
             );
         }
@@ -1306,7 +1311,7 @@ public class LuaNodeParser extends LuaBaseParser {
         FunctionControlInfo info = controlInfoStack.peek();
         LabelInfo labelInfo = new LabelInfo(label, token, currentBlockInfo().path(), visibleLocalIds());
         if (hasVisibleLabel(info, labelInfo)) {
-            throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "label '" + token.getText() + "' already defined");
+            throw parseError(token, "label '" + token.getText() + "' already defined");
         }
         info.labels.computeIfAbsent(label, ignored -> new ArrayList<>()).add(labelInfo);
     }
@@ -1321,7 +1326,7 @@ public class LuaNodeParser extends LuaBaseParser {
             LabelInfo label = findLabel(info, pendingGoto);
             if (label == null) {
                 Token token = pendingGoto.token();
-                throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "no visible label '" + token.getText() + "' for goto");
+                throw parseError(token, "no visible label '" + token.getText() + "' for goto");
             }
             validateGotoTarget(pendingGoto, label);
             pendingGoto.node().setTargetBlockPath(label.blockPath());
@@ -1335,7 +1340,7 @@ public class LuaNodeParser extends LuaBaseParser {
             return false;
         }
         for (LabelInfo existing : sameNameLabels) {
-            if (sharesVisibleScope(existing.blockPath(), candidate.blockPath())) {
+            if (Arrays.equals(existing.blockPath(), candidate.blockPath())) {
                 return true;
             }
         }
@@ -1348,12 +1353,14 @@ public class LuaNodeParser extends LuaBaseParser {
             return null;
         }
         LabelInfo result = null;
+        int bestDepth = -1;
         for (LabelInfo label : sameNameLabels) {
             if (isPrefix(label.blockPath(), pendingGoto.blockPath())) {
-                if (result != null) {
-                    return null;
+                int depth = label.blockPath().length;
+                if (depth > bestDepth) {
+                    result = label;
+                    bestDepth = depth;
                 }
-                result = label;
             }
         }
         if (result != null) {
@@ -1365,12 +1372,12 @@ public class LuaNodeParser extends LuaBaseParser {
     private void validateGotoTarget(PendingGoto pendingGoto, LabelInfo label) {
         Token token = pendingGoto.token();
         if (!isPrefix(label.blockPath(), pendingGoto.blockPath())) {
-            throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "goto '" + token.getText() + "' jumps into a block");
+            throw parseError(token, "goto '" + token.getText() + "' jumps into a block");
         }
         BitSet targetOnlyLocals = (BitSet) label.visibleLocalIds().clone();
         targetOnlyLocals.andNot(pendingGoto.visibleLocalIds());
         if (!targetOnlyLocals.isEmpty()) {
-            throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), "goto '" + token.getText() + "' jumps into the scope of a local variable");
+            throw parseError(token, "goto '" + token.getText() + "' jumps into the scope of a local variable");
         }
     }
 
@@ -1393,10 +1400,6 @@ public class LuaNodeParser extends LuaBaseParser {
             }
         }
         return true;
-    }
-
-    private static boolean sharesVisibleScope(int[] first, int[] second) {
-        return isPrefix(first, second) || isPrefix(second, first);
     }
 
     private static LuaCloseSlotNode[] createCloseNodes(BlockControlInfo blockInfo) {
@@ -1632,6 +1635,22 @@ public class LuaNodeParser extends LuaBaseParser {
         node.setSourceSection(token.getStartIndex(), token.getStopIndex() - token.getStartIndex() + 1);
     }
 
+    private LuaParseError parseError(Token token, String message) {
+        return new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), tokenLength(token), message);
+    }
+
+    private LuaParseError parseError(ParserRuleContext ctx, String message) {
+        return new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), contextLength(ctx), message);
+    }
+
+    private static int tokenLength(Token token) {
+        return token.getStopIndex() - token.getStartIndex() + 1;
+    }
+
+    private static int contextLength(ParserRuleContext ctx) {
+        return ctx.stop.getStopIndex() - ctx.start.getStartIndex() + 1;
+    }
+
     @TruffleBoundary
     private static TruffleString parseLuaLongString(String rawString) {
         int equalsCount = 0;
@@ -1754,7 +1773,7 @@ public class LuaNodeParser extends LuaBaseParser {
     }
 
     private void throwInvalidEscape(Token token, String message) {
-        throw new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), token.getText().length(), message);
+        throw parseError(token, message);
     }
 
     private static boolean isLuaWhitespace(char c) {
