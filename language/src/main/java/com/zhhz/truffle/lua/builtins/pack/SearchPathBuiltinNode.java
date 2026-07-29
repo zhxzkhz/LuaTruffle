@@ -8,6 +8,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
@@ -63,7 +64,7 @@ public abstract class SearchPathBuiltinNode extends LuaBuiltinNode {
         }
 
         // 【失败】返回 nil 和错误消息
-        return new Object[]{ LuaNil.SINGLETON, toTruffleString(errorMsg.toString()) };
+        return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, toTruffleString(errorMsg.toString())});
     }
 
     // 辅助：确保参数是字符串

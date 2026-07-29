@@ -36,10 +36,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
 
     // unpack 辅助方法
     private Object unpackResult(Object result) {
-        if (result instanceof Object[] multi) { // 【修改】
-            return multi.length > 0 ? multi[0] : null;
-        }
-        return result;
+        return LuaMultiValue.firstValue(result);
     }
 
     @Override
@@ -76,52 +73,19 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         // 甚至直接在寄存器中传递，不会产生真实的堆分配。
         final Object[] prefixArgs = new Object[argCount - 1];
         for (int i = 0; i < argCount - 1; i++) {
-            // 在这里，我们仍然需要处理参数本身是多返回值的情况
             Object rawArg = this.argumentNodes[i].executeGeneric(frame);
-            if (rawArg instanceof LuaMultiValue luaMultiValue) {
-                //如果是多值则获取第一个
-                if (luaMultiValue.isMultiValue()){
-                    prefixArgs[i] = ((Object[]) luaMultiValue.values())[0];
-                } else {
-                    prefixArgs[i] = luaMultiValue.values();
-                }
-            } else  if (rawArg instanceof Object[] || rawArg == null) {
+            if (rawArg == null) {
                 throw new RuntimeException("unexpected array or null return value");
-            } else {
-                prefixArgs[i] = rawArg;
             }
+            prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
         }
         // 步骤 B: 计算最后一个参数 (可能返回多值)
         Object lastResult = this.argumentNodes[argCount - 1].executeGeneric(frame);
 
-        // 步骤 C: 根据最后一个参数的结果，创建最终数组
-        Object[] finalArguments;
-
-        if (lastResult instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()){
-                Object[] values = (Object[]) luaMultiValue.values();
-                // --- 情况 1: 最后一个参数返回了多值 ---
-                // 计算总长度
-                int totalLength = (argCount - 1) + values.length;
-                finalArguments = new Object[totalLength];
-
-                // 只有这里发生了真正的数组复制
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
-
-            } else {
-                // --- 情况 2: 最后一个参数返回单值 (最常见的情况) ---
-                finalArguments = new Object[argCount];
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                finalArguments[argCount - 1] = luaMultiValue.values();
-            }
-        } else  if (lastResult instanceof Object[] || lastResult == null) {
+        if (lastResult == null) {
             throw new RuntimeException("unexpected array or null return value");
-        }  else {
-            finalArguments = new Object[argCount];
-            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-            finalArguments[argCount - 1] = lastResult;
         }
+        Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
 
         // --- 4. 【关键修正】直接将【纯净的用户参数数组】传递给 execute 消息 ---
         //    不再手动创建 frameArguments 或添加 parentFrame。
@@ -143,13 +107,6 @@ public final class LuaInvokeNode extends LuaExpressionNode {
             result = library.execute(functionValue, finalArguments);
         }
 
-        if (result instanceof LuaMultiValue luaMultiValue){
-            if (luaMultiValue.isMultiValue()){
-                return luaMultiValue;
-            } else {
-                return luaMultiValue.values();
-            }
-        }
         return result;
     }
 

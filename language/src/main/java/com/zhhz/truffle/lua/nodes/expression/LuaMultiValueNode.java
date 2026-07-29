@@ -38,50 +38,20 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
 
         // 优化：无参调用直接处理
         if (argCount == 0) {
-            return LuaNil.SINGLETON;
+            return new Object[0];
         }
 
         final Object[] prefixArgs = new Object[argCount - 1];
 
         for (int i = 0; i < argCount - 1; i++) {
-            prefixArgs[i] = normalizeSingleValue(this.expressionNodes[i].executeGeneric(frame));
+            prefixArgs[i] = LuaMultiValue.firstValue(this.expressionNodes[i].executeGeneric(frame));
         }
 
 
         // 步骤 B: 计算最后一个参数 (可能返回多值)
         Object lastResult = this.expressionNodes[argCount - 1].executeGeneric(frame);
 
-        // 步骤 C: 根据最后一个参数的结果，创建最终数组
-        Object[] finalArguments;
-
-        if (lastResult instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()){
-                Object[] values = (Object[]) luaMultiValue.values();
-                // --- 情况 1: 最后一个参数返回了多值 ---
-                // 计算总长度
-                int totalLength = (argCount - 1) + values.length;
-                finalArguments = new Object[totalLength];
-
-                // 只有这里发生了真正的数组复制
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
-
-            } else {
-                // --- 情况 2: 最后一个参数返回单值 (最常见的情况) ---
-                finalArguments = new Object[argCount];
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                finalArguments[argCount - 1] = luaMultiValue.values();
-            }
-
-        } else {
-            finalArguments = new Object[argCount];
-            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-            finalArguments[argCount - 1] = lastResult;
-            //throw new RuntimeException("LuaReturnNode 返回值错误");
-        }
-
-
-        return finalArguments;
+        return LuaMultiValue.collect(prefixArgs, lastResult);
 
     }
 
@@ -104,20 +74,6 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
         // 注意：这里没有调用 executeMultiValue() 是为了优化。如果上层只需要一个值，
         // 我们就没必要计算 explist 中的所有表达式。
         Object firstResult = expressionNodes[0].executeGeneric(frame);
-        return normalizeSingleValue(firstResult);
-    }
-
-    private static Object normalizeSingleValue(Object value) {
-        if (value instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()) {
-                Object[] values = (Object[]) luaMultiValue.values();
-                return values.length > 0 ? values[0] : LuaNil.SINGLETON;
-            }
-            return luaMultiValue.values();
-        }
-        if (value instanceof Object[] multiResult) {
-            return multiResult.length > 0 ? multiResult[0] : LuaNil.SINGLETON;
-        }
-        return value;
+        return LuaMultiValue.firstValue(firstResult);
     }
 }

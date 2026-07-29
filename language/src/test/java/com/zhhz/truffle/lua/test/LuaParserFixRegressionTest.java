@@ -557,6 +557,141 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
         assertEquals(3L, eval(code).asLong());
     }
 
+    @Test
+    public void testJavaObjectArrayRemainsSingleValue() {
+        context.eval("lua", "return _G").putMember("javaArray", new Object[]{"a", "b"});
+
+        Value result = eval("return javaArray");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals("a", result.getArrayElement(0).asString());
+        assertEquals("b", result.getArrayElement(1).asString());
+    }
+
+    @Test
+    public void testJavaObjectArrayCanBeNonTrailingArgument() {
+        context.eval("lua", "return _G").putMember("javaArray", new Object[]{"a", "b"});
+
+        Value result = eval("return (function(value, suffix) return value end)(javaArray, 1)");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals("a", result.getArrayElement(0).asString());
+        assertEquals("b", result.getArrayElement(1).asString());
+    }
+
+    @Test
+    public void testJavaObjectArrayCanBeTrailingArgument() {
+        context.eval("lua", "return _G").putMember("javaArray", new Object[]{"a", "b"});
+
+        Value result = eval("return (function(prefix, value) return value end)(1, javaArray)");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals("a", result.getArrayElement(0).asString());
+        assertEquals("b", result.getArrayElement(1).asString());
+    }
+
+    @Test
+    public void testJavaObjectArraySurvivesMultiAssignment() {
+        context.eval("lua", "return _G").putMember("javaArray", new Object[]{"a", "b"});
+
+        Value result = eval("local value, other = javaArray, 1; return value");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals("a", result.getArrayElement(0).asString());
+        assertEquals("b", result.getArrayElement(1).asString());
+    }
+
+    @Test
+    public void testJavaPrimitiveArrayRemainsSingleValue() {
+        context.eval("lua", "return _G").putMember("javaArray", new int[]{1, 2});
+
+        Value result = eval("return javaArray");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals(1, result.getArrayElement(0).asInt());
+        assertEquals(2, result.getArrayElement(1).asInt());
+    }
+
+    @Test
+    public void testStringFindStillExposesLuaMultiValue() {
+        Value result = eval("return string.find('abc', 'b')");
+
+        assertTrue(result.hasArrayElements());
+        assertEquals(2, result.getArraySize());
+        assertEquals(2L, result.getArrayElement(0).asLong());
+        assertEquals(2L, result.getArrayElement(1).asLong());
+    }
+
+    @Test
+    public void testMultiReturnExpandsOnlyAtTrailingExpression() {
+        String code = """
+                function f()
+                    return 1, 2, 3
+                end
+                local a, b, c = f()
+                local x, y, z = 0, f()
+                local first, last = f(), 9
+                return a + b + c + x + y + z + first + last
+                """;
+        assertEquals(19L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMultiReturnThroughPcallAndXpcall() {
+        String code = """
+                function f()
+                    return 2, 3
+                end
+                local ok1, a, b = pcall(f)
+                local ok2, c, d = xpcall(f, function(message) return message end)
+                return (ok1 and ok2) and a + b + c + d
+                """;
+        assertEquals(10L, eval(code).asLong());
+    }
+
+    @Test
+    public void testMultiReturnMethodCall() {
+        String code = """
+                local object = {}
+                function object:values()
+                    return 4, 5
+                end
+                local a, b = object:values()
+                return a + b
+                """;
+        assertEquals(9L, eval(code).asLong());
+    }
+
+    @Test
+    public void testEmptyReturnFillsMissingAssignmentValues() {
+        String code = """
+                function f()
+                    return
+                end
+                local a, b = f()
+                return a == nil and b == nil
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    @Test
+    public void testVarargMultiReturnExpandsAtTrailingExpression() {
+        String code = """
+                function f(...)
+                    return ...
+                end
+                local a, b, c = f(6, 7, 8)
+                local x, y = 0, f(9, 10)
+                return a + b + c + x + y
+                """;
+        assertEquals(30L, eval(code).asLong());
+    }
+
     // ===== P0 #3 补充: 冒号定义带点链 =====
 
     @Test

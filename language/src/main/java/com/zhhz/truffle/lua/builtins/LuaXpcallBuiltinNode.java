@@ -38,14 +38,9 @@ public abstract class LuaXpcallBuiltinNode extends LuaBuiltinNode {
 
             Object[] newObjects;
             if (result instanceof LuaMultiValue luaMultiValue) {
-                if (luaMultiValue.isMultiValue()){
-                    var v = (Object[])luaMultiValue.values();
-                    newObjects = new Object[v.length + 1];
-                    System.arraycopy(v, 0, newObjects, 1, v.length);
-                } else {
-                    //目前不可能走到这步
-                    throw new RuntimeException();
-                }
+                Object[] values = luaMultiValue.values();
+                newObjects = new Object[values.length + 1];
+                System.arraycopy(values, 0, newObjects, 1, values.length);
             } else if (result == null || result == LuaNil.SINGLETON){
                 return true;
             } else {

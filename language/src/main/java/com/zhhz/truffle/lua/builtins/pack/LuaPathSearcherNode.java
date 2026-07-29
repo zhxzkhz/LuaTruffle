@@ -14,6 +14,7 @@ import com.zhhz.truffle.lua.builtins.LoadBuiltinNodeGen;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import java.io.IOException;
@@ -55,9 +56,9 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
             // 4. 加载并编译文件
             return loadFile(filePath, nameObj.toString());
 
-        } else if (searchResult instanceof Object[]) {
+        } else if (searchResult instanceof LuaMultiValue multiValue) {
             // --- 情况 B: 没找到，searchpath 返回了 [nil, errorMsg] ---
-            Object[] results = (Object[]) searchResult;
+            Object[] results = multiValue.values();
             if (results.length > 1 && results[1] != null) {
                 return results[1]; // 返回错误信息字符串
             }
@@ -108,7 +109,7 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
 
             // 4. 成功！返回 (loader, filePath)
             //    Lua 标准规定 searcher 返回两个值：加载器函数和数据(通常是文件名)
-            return new Object[]{ loader, toTruffleString(filePath) };
+            return new LuaMultiValue(new Object[]{loader, toTruffleString(filePath)});
 
         } catch (SecurityException e) {
             return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\tpermission denied");

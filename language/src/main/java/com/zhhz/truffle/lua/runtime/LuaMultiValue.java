@@ -10,42 +10,26 @@ import java.util.Objects;
 
 @ExportLibrary(InteropLibrary.class)
 public final class LuaMultiValue implements TruffleObject {
-    private final Object values;
-
-    private final boolean multiValue;
+    private final Object[] values;
 
     public LuaMultiValue(Object[] values) {
         this.values = values;
-        multiValue = true;
-    }
-
-    public LuaMultiValue(Object value) {
-        this.values = new Object[]{value};
-        multiValue = false;
-        throw new RuntimeException("不该使用这方法");
-    }
-
-    public boolean isMultiValue() {
-        return multiValue;
     }
 
     // --- Interop 实现，让这个对象表现得像一个数组 ---
     @ExportMessage
     boolean hasArrayElements() {
-        return multiValue;
+        return true;
     }
 
     @ExportMessage
     long getArraySize() {
-        if (multiValue){
-            return ((Object[])values).length;
-        }
-        return 0;
+        return values.length;
     }
 
     @ExportMessage
     boolean isArrayElementReadable(long index) {
-        return index >= 0 && multiValue && index < ((Object[])values).length;
+        return index >= 0 && index < values.length;
     }
 
     @ExportMessage
@@ -53,14 +37,34 @@ public final class LuaMultiValue implements TruffleObject {
         if (!isArrayElementReadable(index)) {
             throw InvalidArrayIndexException.create(index);
         }
-        if (multiValue){
-            return ((Object[])values)[Math.toIntExact(index)];
-        }
-        return null;
+        return values[Math.toIntExact(index)];
     }
 
-    public Object values() {
+    public Object[] values() {
         return values;
+    }
+
+    public Object firstValue() {
+        return values.length == 0 ? LuaNil.SINGLETON : values[0];
+    }
+
+    public static Object firstValue(Object value) {
+        return value instanceof LuaMultiValue multiValue ? multiValue.firstValue() : value;
+    }
+
+    public static Object[] collect(Object[] prefixValues, Object lastValue) {
+        if (lastValue instanceof LuaMultiValue multiValue) {
+            Object[] trailingValues = multiValue.values;
+            Object[] result = new Object[prefixValues.length + trailingValues.length];
+            System.arraycopy(prefixValues, 0, result, 0, prefixValues.length);
+            System.arraycopy(trailingValues, 0, result, prefixValues.length, trailingValues.length);
+            return result;
+        }
+
+        Object[] result = new Object[prefixValues.length + 1];
+        System.arraycopy(prefixValues, 0, result, 0, prefixValues.length);
+        result[prefixValues.length] = lastValue;
+        return result;
     }
 
     @Override

@@ -3,6 +3,7 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
@@ -211,7 +212,7 @@ public final class StringLibrary {
 
         if (foundStart != -1) {
             // 返回起始索引和结束索引 (Lua 1-based)
-            return new Object[]{ (long)(foundStart + 1), (long)foundEnd };
+            return new LuaMultiValue(new Object[]{(long) (foundStart + 1), (long) foundEnd});
         } else {
             return LuaNil.SINGLETON;
         }

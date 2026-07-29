@@ -33,10 +33,7 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
     }
 
     private Object unpackResult(Object result) {
-        if (result instanceof Object[] multi) {
-            return multi.length > 0 ? multi[0] : null;
-        }
-        return result;
+        return LuaMultiValue.firstValue(result);
     }
 
     @Override
@@ -67,41 +64,17 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
         prefixArgs[0] = receiverValue;
         for (int i = 0; i < explicitArgCount - 1; i++) {
             Object rawArg = this.argumentNodes[i].executeGeneric(frame);
-            if (rawArg instanceof LuaMultiValue luaMultiValue) {
-                if (luaMultiValue.isMultiValue()) {
-                    prefixArgs[i + 1] = ((Object[]) luaMultiValue.values())[0];
-                } else {
-                    prefixArgs[i + 1] = luaMultiValue.values();
-                }
-            } else if (rawArg instanceof Object[] || rawArg == null) {
+            if (rawArg == null) {
                 throw LuaException.create("unexpected multi-return or nil in method call argument", this);
-            } else {
-                prefixArgs[i + 1] = rawArg;
             }
+            prefixArgs[i + 1] = LuaMultiValue.firstValue(rawArg);
         }
 
         Object lastResult = this.argumentNodes[explicitArgCount - 1].executeGeneric(frame);
-        Object[] finalArguments;
-
-        if (lastResult instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()) {
-                Object[] values = (Object[]) luaMultiValue.values();
-                int totalLength = prefixArgs.length + values.length;
-                finalArguments = new Object[totalLength];
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
-            } else {
-                finalArguments = new Object[prefixArgs.length + 1];
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                finalArguments[prefixArgs.length] = luaMultiValue.values();
-            }
-        } else if (lastResult instanceof Object[] || lastResult == null) {
+        if (lastResult == null) {
             throw LuaException.create("unexpected multi-return or nil in method call argument", this);
-        } else {
-            finalArguments = new Object[prefixArgs.length + 1];
-            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-            finalArguments[prefixArgs.length] = lastResult;
         }
+        Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
 
         try {
             return execReturn(functionValue, finalArguments);
@@ -111,15 +84,7 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
     }
 
     private Object execReturn(Object functionValue, Object[] finalArguments) throws UnsupportedMessageException, UnsupportedTypeException, ArityException {
-        Object result = library.execute(functionValue, finalArguments);
-        if (result instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()) {
-                return luaMultiValue;
-            } else {
-                return luaMultiValue.values();
-            }
-        }
-        return result;
+        return library.execute(functionValue, finalArguments);
     }
 
     @TruffleBoundary

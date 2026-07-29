@@ -3,6 +3,7 @@ package com.zhhz.truffle.lua.builtins.pack;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
@@ -16,10 +17,10 @@ public abstract class LoadLibBuiltinNode extends LuaBuiltinNode {
         // 除非你集成了 Sulong (GraalVM 的 LLVM 运行时)
 
         // 标准行为：加载失败返回 nil, 错误信息, "absent"
-        return new Object[] {
+        return new LuaMultiValue(new Object[]{
                 LuaNil.SINGLETON,
                 toTruffleString("dynamic libraries not enabled in Truffle/Java mode"),
                 toTruffleString("absent")
-        };
+        });
     }
 }

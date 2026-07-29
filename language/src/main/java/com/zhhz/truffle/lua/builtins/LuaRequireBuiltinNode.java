@@ -8,6 +8,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
@@ -113,8 +114,8 @@ public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
                 // - 成功: 返回 loader函数 (以及可选的 loaderData)
                 // - 失败: 返回 错误字符串 或 nil
 
-                // 处理多返回值 (Object[])
-                if (searchResult instanceof Object[] results) {
+                if (searchResult instanceof LuaMultiValue multiValue) {
+                    Object[] results = multiValue.values();
                     if (results.length > 0) {
                         Object first = results[0];
                         if (interop.isExecutable(first)) {
@@ -151,14 +152,7 @@ public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
 
             Object result = interop.execute(loader, loaderArgs);
 
-            // 处理 loader 的返回值
-            // 如果 loader 返回了 Object[]，取第一个；否则取本身
-            Object moduleValue;
-            if (result instanceof Object[] && ((Object[]) result).length > 0) {
-                moduleValue = ((Object[]) result)[0];
-            } else {
-                moduleValue = result;
-            }
+            Object moduleValue = LuaMultiValue.firstValue(result);
 
             // 6. 缓存结果到 package.loaded
             LuaTable loaded = (LuaTable) pkg.rawget("loaded");

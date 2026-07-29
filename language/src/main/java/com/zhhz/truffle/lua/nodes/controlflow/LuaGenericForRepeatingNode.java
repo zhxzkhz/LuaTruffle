@@ -85,7 +85,7 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
 
             // 处理返回值：兼容返回单个值或多值数组的情况
             if (result instanceof LuaMultiValue luaMultiValue) {
-                loopVarValues = (Object[]) luaMultiValue.values();
+                loopVarValues = luaMultiValue.values();
             } else {
                 loopVarValues = new Object[]{result};
             }

@@ -85,12 +85,7 @@ public final class LuaAstRootNode extends LuaRootNode {
         try {
             bodyNode.executeVoid(frame);
         } catch (LuaReturnException e) {
-            var objects = e.getResult();
-            if (e.getResult() instanceof Object[] values){
-                if (values.length == 0) return LuaNil.SINGLETON; // nil
-                if (values.length == 1) return values; // 【关键】返回单个值本身
-            }
-            return objects; // 【关键】返回 Object[]
+            return e.getResult();
         }
         // --- 3. 默认返回值 ---
         return LuaNil.SINGLETON;

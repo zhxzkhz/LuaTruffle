@@ -51,52 +51,21 @@ public final class LuaMultiAssignmentNode extends LuaStatementNode {
 
             final Object[] prefixArgs = new Object[srcLen - 1];
             for (int i = 0; i < srcLen - 1; i++) {
-                // 在这里，我们仍然需要处理参数本身是多返回值的情况
                 Object rawArg = this.sourceNodes[i].executeGeneric(frame);
-                if (rawArg instanceof LuaMultiValue luaMultiValue) {
-                    //如果是多值则获取第一个
-                    if (luaMultiValue.isMultiValue()){
-                        prefixArgs[i] = ((Object[]) luaMultiValue.values())[0];
-                    } else {
-                        prefixArgs[i] = luaMultiValue.values();
-                    }
-                } else  if (rawArg instanceof Object[] || rawArg == null) {
+                if (rawArg == null) {
                     throw new RuntimeException("unexpected array or null return value");
-                } else {
-                    prefixArgs[i] = rawArg;
                 }
+                prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
             }
 
 
             // 步骤 B: 计算最后一个参数 (可能返回多值)
             Object lastResult = this.sourceNodes[srcLen - 1].executeGeneric(frame);
 
-            // 步骤 C: 根据最后一个参数的结果，创建最终数组
-            if (lastResult instanceof LuaMultiValue luaMultiValue) {
-                if (luaMultiValue.isMultiValue()){
-                    Object[] values = (Object[]) luaMultiValue.values();
-
-                    // --- 情况 1: 最后一个参数返回了多值 ---
-                    // 计算总长度
-                    int totalLength = (srcLen - 1) + values.length;
-                    sourceValues = new Object[totalLength];
-                    // 只有这里发生了真正的数组复制
-                    System.arraycopy(prefixArgs, 0, sourceValues, 0, prefixArgs.length);
-                    System.arraycopy(values, 0, sourceValues, prefixArgs.length, values.length);
-
-                } else {
-                    // --- 情况 2: 最后一个参数返回单值 (最常见的情况) ---
-                    sourceValues = new Object[srcLen];
-                    System.arraycopy(prefixArgs, 0, sourceValues, 0, prefixArgs.length);
-                    sourceValues[srcLen - 1] = luaMultiValue.values();
-                }
-            } else  if (lastResult instanceof Object[] || lastResult == null) {
+            if (lastResult == null) {
                 throw new IllegalStateException("unexpected array or null in multi-assignment");
-            }  else {
-                sourceValues = new Object[srcLen];
-                System.arraycopy(prefixArgs, 0, sourceValues, 0, prefixArgs.length);
-                sourceValues[srcLen - 1] = lastResult;
             }
+            sourceValues = LuaMultiValue.collect(prefixArgs, lastResult);
 
         }
 

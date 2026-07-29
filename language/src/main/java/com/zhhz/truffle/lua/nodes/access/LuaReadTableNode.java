@@ -17,6 +17,7 @@ import com.zhhz.truffle.lua.nodes.util.LuaToMemberNode;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
@@ -160,10 +161,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
                 // 使用非缓存的 InteropLibrary 来执行调用
                 Object result = InteropLibrary.getUncached().execute(indexValue, table, key);
                 // 【重要】Lua 的元方法可以返回多值，我们需要处理这种情况
-                if (result instanceof Object[] objects) {
-                    return objects[0]; // 只取第一个值
-                }
-                return result;
+                return LuaMultiValue.firstValue(result);
             } catch (Exception e) {
                 // 包装在 __index 方法中发生的错误
                 throw LuaException.create("error in __index metamethod\n" +  e.getMessage(), node);

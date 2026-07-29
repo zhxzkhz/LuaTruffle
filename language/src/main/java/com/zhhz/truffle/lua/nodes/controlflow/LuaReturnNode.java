@@ -102,52 +102,21 @@ public final class LuaReturnNode extends LuaStatementNode {
         final Object[] prefixArgs = new Object[argCount - 1];
 
         for (int i = 0; i < argCount - 1; i++) {
-            // 在这里，我们仍然需要处理参数本身是多返回值的情况
             Object rawArg = this.returnExpressions[i].executeGeneric(frame);
-            // 返回值可能是luaMultiValue，也可能是一个基础对象
-            if (rawArg instanceof LuaMultiValue luaMultiValue) {
-                //如果是多值则获取第一个
-                if (luaMultiValue.isMultiValue()){
-                    prefixArgs[i] = ((Object[]) luaMultiValue.values())[0];
-                } else {
-                    prefixArgs[i] = luaMultiValue.values();
-                }
-            } else  if (rawArg instanceof Object[] || rawArg == null) {
-                //如果返回数值则报错,然后修改返回数组的方法
+            if (rawArg == null) {
                 throw new RuntimeException("不能返回数组或空");
-            } else {
-                prefixArgs[i] = rawArg;
             }
+            prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
         }
 
 
         // 步骤 B: 计算最后一个参数 (可能返回多值)
         Object lastResult = this.returnExpressions[argCount - 1].executeGeneric(frame);
 
-        // 步骤 C: 根据最后一个参数的结果，创建最终数组
-        Object[] finalArguments;
-
-        if (lastResult instanceof LuaMultiValue luaMultiValue) {
-            if (luaMultiValue.isMultiValue()){
-                Object[] values = (Object[]) luaMultiValue.values();
-                int totalLength = (argCount - 1) + values.length;
-                finalArguments = new Object[totalLength];
-
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                System.arraycopy(values, 0, finalArguments, prefixArgs.length, values.length);
-
-            } else {
-                finalArguments = new Object[argCount];
-                System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-                finalArguments[argCount - 1] = luaMultiValue.values();
-            }
-        }  else  if (lastResult instanceof Object[] || lastResult == null) {
+        if (lastResult == null) {
             throw new RuntimeException("不能返回数组或空");
-        } else {
-            finalArguments = new Object[argCount];
-            System.arraycopy(prefixArgs, 0, finalArguments, 0, prefixArgs.length);
-            finalArguments[argCount - 1] = lastResult;
         }
+        Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
 
         if (finalArguments.length == 1) {
             throw LuaReturnException.withResult(finalArguments[0]);

@@ -76,12 +76,7 @@ public class LuaParenExpressionNode extends LuaExpressionNode {
      */
     @Override
     public Object executeGeneric(VirtualFrame frame) {
-        Object value = expression.executeGeneric(frame);
-        if (value instanceof LuaMultiValue multiValue && multiValue.isMultiValue()) {
-            Object[] values = (Object[]) multiValue.values();
-            return values.length == 0 ? LuaNil.SINGLETON : values[0];
-        }
-        return value;
+        return LuaMultiValue.firstValue(expression.executeGeneric(frame));
     }
 
     /**
