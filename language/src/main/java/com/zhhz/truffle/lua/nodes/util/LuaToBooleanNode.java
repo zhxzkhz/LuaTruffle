@@ -63,6 +63,16 @@ public abstract class LuaToBooleanNode extends LuaExpressionNode {
     }
 
     @Specialization
+    public static boolean doLong(long value) {
+        return true;
+    }
+
+    @Specialization
+    public static boolean doDouble(double value) {
+        return true;
+    }
+
+    @Specialization
     public static boolean doLuaBoolean(LuaBoolean value) {
         return value.getValue();
     }
@@ -72,9 +82,9 @@ public abstract class LuaToBooleanNode extends LuaExpressionNode {
         return false;
     }
 
-    @Specialization()
-    public static boolean doInterop(Object value) {
-        return value != null;
+    @Specialization
+    public static boolean doObject(Object value) {
+        return LuaTypesUtil.isTruthy(value);
     }
 
 

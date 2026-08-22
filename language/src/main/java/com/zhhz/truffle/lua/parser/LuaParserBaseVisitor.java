@@ -1,4 +1,4 @@
-// Generated from language/src/main/java/com/zhhz/truffle/lua/parser/LuaParser.g4 by ANTLR 4.13.2
+// Generated from LuaParser.g4 by ANTLR 4.13.2
 package com.zhhz.truffle.lua.parser;
 import org.antlr.v4.runtime.tree.AbstractParseTreeVisitor;
 
@@ -68,6 +68,13 @@ public class LuaParserBaseVisitor<T> extends AbstractParseTreeVisitor<T> impleme
 	 * {@link #visitChildren} on {@code ctx}.</p>
 	 */
 	@Override public T visitStatBreak(LuaParser.StatBreakContext ctx) { return visitChildren(ctx); }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation returns the result of calling
+	 * {@link #visitChildren} on {@code ctx}.</p>
+	 */
+	@Override public T visitStatContinue(LuaParser.StatContinueContext ctx) { return visitChildren(ctx); }
 	/**
 	 * {@inheritDoc}
 	 *

@@ -10,10 +10,14 @@ import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.access.LuaReadTableNode;
+import com.zhhz.truffle.lua.nodes.util.LuaMetatableNode;
+import com.zhhz.truffle.lua.nodes.util.LuaMetatableNodeGen;
+import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaValue;
 
@@ -24,6 +28,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
     @Child private LuaExpressionNode functionNode;
     @Children private final LuaExpressionNode[] argumentNodes;
     @Child private InteropLibrary library;
+    @Child private LuaMetatableNode metatableNode;
 
     public LuaInvokeNode(LuaExpressionNode functionNode, LuaExpressionNode[] argumentNodes) {
         this.functionNode = functionNode;
@@ -32,26 +37,39 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         }
         this.argumentNodes = argumentNodes;
         this.library = InteropLibrary.getFactory().createDispatched(3);
-    }
-
-    // unpack 辅助方法
-    private Object unpackResult(Object result) {
-        return LuaMultiValue.firstValue(result);
+        this.metatableNode = LuaMetatableNodeGen.create();
     }
 
     @Override
     @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
+        return LuaMultiValue.firstValue(executeMultiValue(frame));
+    }
 
-        // --- 1. 获取并解包要被调用的函数值 ---
-        Object rawFunctionValue = functionNode.executeGeneric(frame);
+    @Override
+    public long executeLong(VirtualFrame frame) throws UnexpectedResultException {
+        Object result = executeGeneric(frame);
+        if (result instanceof Long l) {
+            return l;
+        }
+        throw new UnexpectedResultException(result);
+    }
 
-        Object functionValue = unpackResult(rawFunctionValue);
+    @Override
+    @ExplodeLoop
+    public Object executeMultiValue(VirtualFrame frame) {
 
-        // --- 2. 检查可调用性 ---
-        if (!library.isExecutable(functionValue)) { // 简化了 if 语句
-            String message = getMessage(functionValue);
-            throw LuaException.create(message, this);
+        Object functionValue = LuaMultiValue.firstValue(functionNode.executeGeneric(frame));
+        Object callableReceiver = null;
+
+        if (!library.isExecutable(functionValue)) {
+            Object metamethod = metatableNode.lookup(functionValue, LuaMetatables.__CALL);
+            if (metamethod == null || !library.isExecutable(metamethod)) {
+                String message = getMessage(functionValue);
+                throw LuaException.create(message, this);
+            }
+            callableReceiver = functionValue;
+            functionValue = metamethod;
         }
 
 
@@ -62,7 +80,9 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         // 优化：无参调用直接处理
         if (argCount == 0) {
             try {
-                return execReturn(functionValue,null);
+                return callableReceiver == null
+                        ? execReturn(functionValue, null)
+                        : execReturn(functionValue, new Object[]{callableReceiver});
             } catch (UnsupportedTypeException | ArityException | UnsupportedMessageException e) {
                 throw LuaException.undefinedFunction(this, e);
             }
@@ -71,16 +91,20 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         // 步骤 A: 计算前 N-1 个参数 (这些参数长度固定为 1)
         // 我们先用一个临时数组存起来。JIT 编译器通常能将这个小数组虚拟化(scalarize)，
         // 甚至直接在寄存器中传递，不会产生真实的堆分配。
-        final Object[] prefixArgs = new Object[argCount - 1];
+        int implicitArgCount = callableReceiver == null ? 0 : 1;
+        final Object[] prefixArgs = new Object[argCount - 1 + implicitArgCount];
+        if (callableReceiver != null) {
+            prefixArgs[0] = callableReceiver;
+        }
         for (int i = 0; i < argCount - 1; i++) {
             Object rawArg = this.argumentNodes[i].executeGeneric(frame);
             if (rawArg == null) {
                 throw new RuntimeException("unexpected array or null return value");
             }
-            prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
+            prefixArgs[i + implicitArgCount] = LuaMultiValue.firstValue(rawArg);
         }
         // 步骤 B: 计算最后一个参数 (可能返回多值)
-        Object lastResult = this.argumentNodes[argCount - 1].executeGeneric(frame);
+        Object lastResult = this.argumentNodes[argCount - 1].executeMultiValue(frame);
 
         if (lastResult == null) {
             throw new RuntimeException("unexpected array or null return value");

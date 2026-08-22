@@ -37,6 +37,9 @@ public class LuaNumericForRepeatingNode extends Node implements RepeatingNode {
      */
     @Override
     public boolean executeRepeating(VirtualFrame frame) {
+        if (frame.isDouble(loopVarIndex)) {
+            return executeDouble(frame);
+        }
         // 1. 【读取当前值】
         // 直接读取 Long 类型，因为父节点已经强制设置了 FrameSlotKind.Long，
         // 这里不会有装箱/拆箱（Boxing）开销。
@@ -58,6 +61,8 @@ public class LuaNumericForRepeatingNode extends Node implements RepeatingNode {
         // 3. 【执行循环体】
         try {
             bodyNode.executeVoid(frame);
+        } catch (LuaContinueException e) {
+            // Continue still performs the numeric loop update below.
         } catch (LuaBreakException e) {
             // 捕获 break 语句抛出的控制流异常。
             // 返回 false 通知 LoopNode 停止循环。
@@ -71,9 +76,31 @@ public class LuaNumericForRepeatingNode extends Node implements RepeatingNode {
         // 这一步必须在 body 执行完后进行。
         // 注意溢出风险：在严谨的 Lua 实现中，这里可能需要处理 long 溢出成为 double 的情况，
         // 但 SimpleLanguage 通常假设在 long 范围内。
+        if (step > 0 && currentValue > Long.MAX_VALUE - step
+                || step < 0 && currentValue < Long.MIN_VALUE - step) {
+            return false;
+        }
         frame.setLong(loopVarIndex, currentValue + step);
 
         // 5. 【继续循环】
+        return true;
+    }
+
+    private boolean executeDouble(VirtualFrame frame) {
+        double currentValue = frame.getDouble(loopVarIndex);
+        double limit = frame.getDouble(limitIndex);
+        double step = frame.getDouble(stepIndex);
+        if (Double.isNaN(step) || !(step > 0 ? currentValue <= limit : currentValue >= limit)) {
+            return false;
+        }
+        try {
+            bodyNode.executeVoid(frame);
+        } catch (LuaContinueException e) {
+            // Continue still performs the update below.
+        } catch (LuaBreakException e) {
+            return false;
+        }
+        frame.setDouble(loopVarIndex, currentValue + step);
         return true;
     }
 }

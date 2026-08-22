@@ -25,15 +25,22 @@ public abstract class GenericBuiltinNode extends LuaBuiltinNode {
     public Object doExecute(Object[] arguments){
 
         try {
-            // 通过反射调用静态方法
-            // 我们需要处理有参和无参的情况
             if (getTargetMethod().getParameterCount() == 0) {
                 return getTargetMethod().invoke(null);
             } else {
                 return getTargetMethod().invoke(null, new Object[]{arguments});
             }
-        } catch (IllegalAccessException | InvocationTargetException e) {
-            // 包装反射异常
+        } catch (IllegalAccessException e) {
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            throw invalidZeroArgument(e);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
             CompilerDirectives.transferToInterpreterAndInvalidate();
             throw invalidZeroArgument(e);
         }

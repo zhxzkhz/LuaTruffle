@@ -30,6 +30,7 @@ stat
     | functioncall                                                          # StatFunctionCall
     | label                                                                 # StatLabel
     | 'break'                                                               # StatBreak
+    | 'continue'                                                            # StatContinue
     | 'goto' NAME                                                           # StatGoto
     | 'do' block 'end'                                                      # StatDo
     | 'while' exp 'do' block 'end'                                          # StatWhile

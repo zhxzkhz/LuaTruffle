@@ -17,6 +17,8 @@ import com.zhhz.truffle.lua.nodes.util.WriteHelperNodeGen;
 @NodeChild(value = "keyNode", type = LuaExpressionNode.class)
 public abstract class LuaWriteTableNode extends LuaWriteVariableNode {
 
+    private record PreparedTarget(Object table, Object key) {}
+
     abstract LuaExpressionNode getTableNode();
     abstract LuaExpressionNode getKeyNode();
 
@@ -29,23 +31,29 @@ public abstract class LuaWriteTableNode extends LuaWriteVariableNode {
         this.writeHelperNode = WriteHelperNodeGen.create();
     }
 
-    //无用方法，为了统一生成Gen文件保留
+    // Keeps the Truffle DSL factory generation without participating in table writes.
     @Specialization
-    public static void empty(VirtualFrame frame, Object value, Object value1){
-
+    static void generateFactory(VirtualFrame frame, Object ignored) {
     }
 
-    //无用方法，为了统一生成Gen文件保留
-    public abstract void executeEmpty(VirtualFrame frame, Object value);
+    abstract void executeFactory(VirtualFrame frame, Object ignored);
 
     @Override
     public final void execute(VirtualFrame frame, Object value) {
-        // 1. 手动执行子节点，计算出 table 和 key
         Object table = getTableNode().executeGeneric(frame);
         Object key = getKeyNode().executeGeneric(frame);
-
-        // 2. 将【所有】需要的值（table, key, value）传递给辅助节点
         writeHelperNode.executeWrite(table, key, value);
+    }
+
+    @Override
+    public Object prepareTarget(VirtualFrame frame) {
+        return new PreparedTarget(getTableNode().executeGeneric(frame), getKeyNode().executeGeneric(frame));
+    }
+
+    @Override
+    public void writePrepared(VirtualFrame frame, Object preparedTarget, Object value) {
+        PreparedTarget target = (PreparedTarget) preparedTarget;
+        writeHelperNode.executeWrite(target.table(), target.key(), value);
     }
 
 

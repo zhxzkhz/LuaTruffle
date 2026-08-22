@@ -20,7 +20,6 @@ import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
 public abstract class LuaBitwiseXorNode extends LuaBinaryNode {
 
     // --- 特化 1: 快速路径，两个操作数都已经是数字 ---
-    // --- 特化 1: 快速路径，两个操作数都已经是数字 ---
     @Specialization
     protected long doLong(long left, long right) {
         return left ^ right;

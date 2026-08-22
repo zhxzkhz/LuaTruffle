@@ -183,9 +183,23 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
     protected CallTarget parse(ParsingRequest request) {
         Source source = request.getSource();
         LuaContext context = LuaContext.get(null);
-        if (!context.isPackagePathInitialized()) {
+        // package.path 与相对路径基准只在第一个【文件型】Source 上初始化。
+        // 启动器在 eval 主脚本前会先执行内部代码片段（无路径的 Source），
+        // 不能让这些片段把基准消费在进程工作目录上，
+        // 否则绝对路径运行脚本时 scriptDirectory 会错误地锚定到工作目录。
+        if (source.getPath() != null && !context.isPackagePathInitialized()) {
             context.initPackagePath(source);
             context.setPackagePathInitialized(true);
+        } else if (!context.isPackagePathInitialized()) {
+            // 片段（如启动器 -l 触发的 require）在主脚本之前执行时，
+            // 也要应用 LUA_PATH/LUA_CPATH 环境变量覆盖（幂等），
+            // 但脚本目录锚定仍留待第一个文件型 Source
+            context.applyPathEnvironmentOverrides();
+        }
+        // LUA_INIT 需在第一段用户代码之前执行（无论该 Source 是否带路径）
+        if (!context.isLuaInitExecuted()) {
+            context.setLuaInitExecuted(true);
+            context.runLuaInit();
         }
 
         return LuaNodeParser.parseRootLua(this, source);

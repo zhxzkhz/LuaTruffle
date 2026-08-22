@@ -23,11 +23,7 @@ public abstract class LuaFloorDivNode extends LuaBinaryNode {
      * 使用 Math.floorDiv 保证向负无穷取整 (例如 -5 // 2 = -3，而不是 Java 默认的 -2)
      */
     @Specialization(guards = "right != 0")
-    protected double doLong(long left, long right) {
-        // 注意：Long.MIN_VALUE / -1 会溢出，Math.floorDiv 会自动处理或抛错，
-        // 但在 Lua 中这通常应该返回 Long.MIN_VALUE (因为溢出了)。
-        // Java 的 Math.floorDiv 在溢出时不会抛错而是返回正确值，除了 Integer.MIN_VALUE/-1。
-        // 对于 long，Math.floorDiv 内部处理了溢出。
+    protected long doLong(long left, long right) {
         return Math.floorDiv(left, right);
     }
 
@@ -72,8 +68,8 @@ public abstract class LuaFloorDivNode extends LuaBinaryNode {
                                      @Cached("create()") LuaCoerceToNumberNode coerceRight,
                                      @Cached("create()") LuaMetatableNode metatableNode) {
 
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
 
         // 只有当两个操作数【都】成功转换为数字时，才进行算术运算

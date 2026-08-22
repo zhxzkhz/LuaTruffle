@@ -1,4 +1,4 @@
-// Generated from language/src/main/java/com/zhhz/truffle/lua/parser/LuaParser.g4 by ANTLR 4.13.2
+// Generated from LuaParser.g4 by ANTLR 4.13.2
 package com.zhhz.truffle.lua.parser;
 import org.antlr.v4.runtime.tree.ParseTreeVisitor;
 
@@ -63,6 +63,13 @@ public interface LuaParserVisitor<T> extends ParseTreeVisitor<T> {
 	 * @return the visitor result
 	 */
 	T visitStatBreak(LuaParser.StatBreakContext ctx);
+	/**
+	 * Visit a parse tree produced by the {@code StatContinue}
+	 * labeled alternative in {@link LuaParser#stat}.
+	 * @param ctx the parse tree
+	 * @return the visitor result
+	 */
+	T visitStatContinue(LuaParser.StatContinueContext ctx);
 	/**
 	 * Visit a parse tree produced by the {@code StatGoto}
 	 * labeled alternative in {@link LuaParser#stat}.

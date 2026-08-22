@@ -33,6 +33,31 @@ public abstract class LuaMetatableNode extends Node {
      */
     public abstract Object execute(Object left, Object right, TruffleString eventName);
 
+    public Object executeFrom(Object receiver, Object left, Object right, TruffleString eventName) {
+        DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
+        Object metamethod = getMetamethod(receiver, eventName, objLib);
+        if (metamethod == null) {
+            return null;
+        }
+        InteropLibrary interop = InteropLibrary.getUncached();
+        if (!interop.isExecutable(metamethod)) {
+            return null;
+        }
+        try {
+            return right == null
+                    ? interop.execute(metamethod, left)
+                    : interop.execute(metamethod, left, right);
+        } catch (LuaException e) {
+            throw e;
+        } catch (Exception e) {
+            throw LuaException.create("error in metamethod '" + eventName + "'\n" + e.getMessage(), this);
+        }
+    }
+
+    public Object lookup(Object receiver, TruffleString eventName) {
+        return getMetamethod(receiver, eventName, DynamicObjectLibrary.getUncached());
+    }
+
     /**
      * 这个节点只有一个特化，因为它总是处理通用 Object。
      * 整个方法都在 @TruffleBoundary 保护的慢路径中执行。
@@ -53,7 +78,9 @@ public abstract class LuaMetatableNode extends Node {
             try {
                 // 如果找到了一个可执行的元方法，就调用它
                 // 参数是 (left, right)
-                return interop.execute(metamethod, left, right);
+                return right == null
+                        ? interop.execute(metamethod, left)
+                        : interop.execute(metamethod, left, right);
             } catch (LuaException e){
                 throw e;
             } catch (Exception e) {

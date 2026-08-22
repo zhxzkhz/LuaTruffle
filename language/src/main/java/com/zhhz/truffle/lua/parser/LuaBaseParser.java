@@ -23,7 +23,11 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
      * Base implementation of parsing, which handles lexer and parser setup, and error reporting.
      */
     protected static void parseLuaImpl(Source source, LuaBaseParser visitor) {
-        LuaLexer lexer = new LuaLexer(CharStreams.fromString(source.getCharacters().toString()));
+        String characters = source.getCharacters().toString();
+        if (!characters.isEmpty() && characters.charAt(0) == '\uFEFF') {
+            characters = ' ' + characters.substring(1);
+        }
+        LuaLexer lexer = new LuaLexer(CharStreams.fromString(characters));
         LuaParser parser = new LuaParser(new CommonTokenStream(lexer));
         lexer.removeErrorListeners();
         parser.removeErrorListeners();

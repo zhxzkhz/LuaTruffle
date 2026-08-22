@@ -53,8 +53,6 @@ import com.zhhz.truffle.lua.nodes.LuaBinaryNode;
 import com.zhhz.truffle.lua.nodes.util.LuaMetatableNode;
 import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
-import com.zhhz.truffle.lua.runtime.LuaNumber;
-import com.zhhz.truffle.lua.runtime.LuaString;
 
 /**
  * This class is similar to the extensively documented {@link LuaAddNode}. The only difference: the
@@ -63,13 +61,6 @@ import com.zhhz.truffle.lua.runtime.LuaString;
 @NodeInfo(shortName = "<")
 @OperationProxy.Proxyable(allowUncached = true)
 public abstract class LuaLessThanNode extends LuaBinaryNode {
-
-    // --- 您已有的、用于处理数字的特化 ---
-    @Specialization
-    public static boolean lessThanNumbers(LuaNumber left, LuaNumber right) {
-        return left.getValue() < right.getValue();
-    }
-
 
     // --- 快速路径：只处理数字和数字的比较 ---
     @Specialization
@@ -93,17 +84,12 @@ public abstract class LuaLessThanNode extends LuaBinaryNode {
     }
 
     @Specialization
-    public static boolean lessThanStrings(LuaString left, LuaString right,@Cached TruffleString.CompareCharsUTF16Node compareNode) {
-        return compareNode.execute(left.getValue(), right.getValue()) < 0;
-    }
-
-    @Specialization
     public static boolean lessThanStrings(TruffleString left, TruffleString right,@Cached TruffleString.CompareCharsUTF16Node compareNode) {
         return compareNode.execute(left,right) < 0;
     }
 
     @Fallback
-    public static Object typeError(Object left, Object right,
+    public static boolean typeError(Object left, Object right,
                                    @Cached("create()") LuaMetatableNode metatableNode,
                                    @Bind Node node) {
 
@@ -112,7 +98,6 @@ public abstract class LuaLessThanNode extends LuaBinaryNode {
         if (result != null) {
             return LuaTypesUtil.isTruthy(result);
         }
-        // 抛出类似于 "attempt to compare string with number" 的错误
         throw LuaException.typeError(node, "<", left, right);
     }
 

@@ -72,28 +72,40 @@ public class LuaNumericForNode extends LuaStatementNode {
         // 1. 【参数求值阶段】
         // Lua 语义规定：start, limit, step 只在循环开始前计算一次。
         // 这里我们获取结果并尝试转换为 long 类型。
-        long startValue = expectLong("for loop 'initial' value", startNode.executeGeneric(frame), coerceNode);
-        long limitValue = expectLong("for loop 'limit' value", limitNode.executeGeneric(frame), coerceNode);
+        Object startValue = expectNumber("for loop 'initial' value", startNode.executeGeneric(frame), coerceNode);
+        Object limitValue = expectNumber("for loop 'limit' value", limitNode.executeGeneric(frame), coerceNode);
+        Object stepValue = stepNode == null
+                ? 1L
+                : expectNumber("for loop 'step' value", stepNode.executeGeneric(frame), coerceNode);
 
-        long stepValue = 1; // Lua 默认步长为 1
-        if (stepNode != null) {
-            stepValue = expectLong("for loop 'step' value", stepNode.executeGeneric(frame), coerceNode);
+        if (startValue instanceof Long startLong && stepValue instanceof Long stepLong) {
+            if (stepLong == 0) {
+                throw LuaException.create("for loop step is zero", this);
+            }
+            Long limitLong = integerLimit(limitValue, stepLong);
+            if (limitLong == null) {
+                return;
+            }
+            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Long);
+            frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Long);
+            frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Long);
+            frame.setLong(loopVariableIndex, startLong);
+            frame.setLong(limitIndex, limitLong);
+            frame.setLong(stepIndex, stepLong);
+        } else {
+            double startDouble = asDouble(startValue);
+            double limitDouble = asDouble(limitValue);
+            double stepDouble = asDouble(stepValue);
+            if (stepDouble == 0.0) {
+                throw LuaException.create("for loop step is zero", this);
+            }
+            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Double);
+            frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Double);
+            frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Double);
+            frame.setDouble(loopVariableIndex, startDouble);
+            frame.setDouble(limitIndex, limitDouble);
+            frame.setDouble(stepIndex, stepDouble);
         }
-
-        // 防御性检查：步长不能为 0，否则会造成死循环
-        if (stepValue == 0) {
-            throw LuaException.create("for loop step is zero", this);
-        }
-
-        // 2. 【初始化循环变量】
-        // 显式设置 Slot 类型为 Long。
-        // 这对 Graal 编译器非常重要，它能避免后续读取时的装箱/拆箱开销。
-        frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Long);
-        frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Long);
-        frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Long);
-        frame.setLong(loopVariableIndex, startValue);
-        frame.setLong(limitIndex, limitValue);
-        frame.setLong(stepIndex, stepValue);
 
         // 4. 【启动循环】
         // LoopNode 会接管控制权，不断调用 RepeatingNode.executeRepeating
@@ -101,12 +113,10 @@ public class LuaNumericForNode extends LuaStatementNode {
     }
 
     // 辅助方法：类型转换与检查
-    private long expectLong(String context, Object value, LuaCoerceToNumberNode coerce) {
-        // 尝试转换值
+    private Object expectNumber(String context, Object value, LuaCoerceToNumberNode coerce) {
         Object coercedValue = coerce.execute(value);
-
-        if (coercedValue instanceof Long) {
-            return (long) coercedValue;
+        if (coercedValue instanceof Long || coercedValue instanceof Double) {
+            return coercedValue;
         }
 
         // 【慢速路径 / 错误处理】
@@ -116,7 +126,39 @@ public class LuaNumericForNode extends LuaStatementNode {
         throw createException(context, value);
     }
 
+    private static double asDouble(Object value) {
+        return value instanceof Double number ? number : ((Long) value).doubleValue();
+    }
+
+    private static Long integerLimit(Object value, long step) {
+        if (value instanceof Long integer) {
+            return integer;
+        }
+
+        double limit = (Double) value;
+        if (Double.isNaN(limit)) {
+            return null;
+        }
+        if (step > 0) {
+            if (limit < Long.MIN_VALUE) {
+                return null;
+            }
+            if (limit >= Long.MAX_VALUE) {
+                return Long.MAX_VALUE;
+            }
+            return (long) Math.floor(limit);
+        }
+        if (limit > Long.MAX_VALUE) {
+            return null;
+        }
+        if (limit <= Long.MIN_VALUE) {
+            return Long.MIN_VALUE;
+        }
+        return (long) Math.ceil(limit);
+    }
+
     RuntimeException createException(String context, Object value){
-        return LuaException.create("bad " + context + " (number expected, got " + value.getClass().getSimpleName() + ")", this);
+        String type = value == null ? "null" : value.getClass().getSimpleName();
+        return LuaException.create("bad " + context + " (number expected, got " + type + ")", this);
     }
 }

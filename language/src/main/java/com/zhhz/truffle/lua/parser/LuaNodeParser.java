@@ -181,6 +181,16 @@ public class LuaNodeParser extends LuaBaseParser {
         }
 
         @Override
+        public LuaStatementNode visitStatContinue(LuaParser.StatContinueContext ctx) {
+            if (loopDepth == 0) {
+                throw parseError(ctx.start, "continue outside loop");
+            }
+            LuaStatementNode node = new LuaContinueNode();
+            srcFromToken(node, ctx.start);
+            return node;
+        }
+
+        @Override
         public LuaStatementNode visitStatLabel(LuaParser.StatLabelContext ctx) {
             TruffleString label = asTruffleString(ctx.label().NAME().getSymbol(), false);
             addLabel(label, ctx.label().NAME().getSymbol());
@@ -868,7 +878,8 @@ public class LuaNodeParser extends LuaBaseParser {
             // 【关键】我们需要一个计数器来追踪列表式字段的索引
             int nextArrayIndex = 1; // Lua 数组索引从 1 开始
 
-            for (LuaParser.FieldContext fieldCtx : fields) {
+            for (int fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+                LuaParser.FieldContext fieldCtx = fields.get(fieldIndex);
                 if (fieldCtx instanceof LuaParser.FieldKeyExprContext keyExprCtx) {
                     // --- 情况 A: [exp1] = exp2 ---
                     LuaExpressionNode keyNode = expressionVisitor.visit(keyExprCtx.exp(0));
@@ -887,7 +898,9 @@ public class LuaNodeParser extends LuaBaseParser {
                     // --- 情况 C: exp (列表式) ---
                     LuaExpressionNode valueNode = expressionVisitor.visit(valueCtx.exp());
 
-                    LuaTableFieldWithValueNode valueFieldNode = LuaTableFieldWithValueNodeGen.create(valueNode,nextArrayIndex);
+                    boolean expandMultiValue = fieldIndex == fields.size() - 1;
+                    LuaTableFieldWithValueNode valueFieldNode = LuaTableFieldWithValueNodeGen.create(
+                            valueNode, nextArrayIndex, expandMultiValue);
 
                     initializers.add(valueFieldNode);
 
@@ -1625,9 +1638,16 @@ public class LuaNodeParser extends LuaBaseParser {
 
     // 辅助方法，用于从 ANTLR Context 设置 SourceSection
     private static void setSourceSectionFromContext(LuaStatementNode node, ParserRuleContext ctx) {
-            int start = ctx.getStart().getStartIndex();
-            int length = ctx.getStop().getStopIndex() - start + 1;
-            node.setSourceSection(start, length);
+        Token startToken = ctx.getStart();
+        Token stopToken = ctx.getStop();
+        if (startToken == null || startToken.getStartIndex() < 0) {
+            node.setSourceSection(0, 0);
+            return;
+        }
+        int start = startToken.getStartIndex();
+        int length = stopToken == null || stopToken.getStopIndex() < start
+                ? 0 : stopToken.getStopIndex() - start + 1;
+        node.setSourceSection(start, length);
     }
 
 
@@ -1648,7 +1668,7 @@ public class LuaNodeParser extends LuaBaseParser {
     }
 
     private static int contextLength(ParserRuleContext ctx) {
-        return ctx.stop.getStopIndex() - ctx.start.getStartIndex() + 1;
+        return ctx.stop == null ? 0 : ctx.stop.getStopIndex() - ctx.start.getStartIndex() + 1;
     }
 
     @TruffleBoundary

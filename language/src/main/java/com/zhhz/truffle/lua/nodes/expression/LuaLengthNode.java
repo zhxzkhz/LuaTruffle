@@ -8,7 +8,6 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
-import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 import com.zhhz.truffle.lua.runtime.LuaValue;
 
@@ -19,22 +18,14 @@ import com.zhhz.truffle.lua.runtime.LuaValue;
 @NodeChild("operandNode")
 public abstract class LuaLengthNode extends LuaExpressionNode {
 
-    // --- 特化 1: 快速路径，操作数是字符串 ---
     @Specialization
-    protected int lengthOfString(LuaString operand,
-                                 @Cached TruffleString.CodePointLengthNode codePointLengthNode) {
-        return codePointLengthNode.execute(operand.getValue(), LuaLanguage.STRING_ENCODING);
-    }
-
-    @Specialization
-    protected int lengthOfString(TruffleString operand,
-                                 @Cached TruffleString.CodePointLengthNode codePointLengthNode) {
-        return codePointLengthNode.execute(operand, LuaLanguage.STRING_ENCODING);
+    protected long lengthOfString(TruffleString operand) {
+        return operand.byteLength(LuaLanguage.STRING_ENCODING);
     }
 
     // --- 特化 2: 快速路径，操作数是Table ---
     @Specialization
-    protected int lengthOfTable(LuaTable operand) {
+    protected long lengthOfTable(LuaTable operand) {
         // 返回我们为 table 维护的数组部分的长度
         // (需要为 LuaTable 添加 public getter: getArraySize())
         return operand.getArraySize();

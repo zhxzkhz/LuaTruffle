@@ -72,15 +72,9 @@ public abstract class LuaSubNode extends LuaBinaryNode {
         return left - right;
     }
 
-    // 【关键】确保这个特化存在！
     @Specialization
-    protected Object doLong(long left, long right) {
-        try {
-            return Math.subtractExact(left, right); // 使用 addExact 可以处理溢出
-        } catch (ArithmeticException e) {
-            // 溢出后，转为 double 计算
-            return (double)left - (double)right;
-        }
+    protected long doLong(long left, long right) {
+        return left - right;
     }
 
     @Specialization
@@ -105,8 +99,8 @@ public abstract class LuaSubNode extends LuaBinaryNode {
         assertNotNull(left,right,this);
 
         // 1. 尝试将操作数转换为数字
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
         // 如果两个值都能被成功转换为数字
         if (numLeft != null && numRight != null) {
@@ -120,12 +114,7 @@ public abstract class LuaSubNode extends LuaBinaryNode {
             } else { // 两个都是 Long
                 long lLeft = (Long) numLeft;
                 long lRight = (Long) numRight;
-                try {
-                    return Math.subtractExact(lLeft,lRight);
-                } catch (ArithmeticException e) {
-                    // 溢出后，转为 double 计算
-                    return ((double)lLeft - (double)lRight);
-                }
+                return lLeft - lRight;
             }
         }
 

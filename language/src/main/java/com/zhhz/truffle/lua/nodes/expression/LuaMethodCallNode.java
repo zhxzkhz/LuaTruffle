@@ -37,8 +37,13 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
     }
 
     @Override
-    @ExplodeLoop
     public Object executeGeneric(VirtualFrame frame) {
+        return LuaMultiValue.firstValue(executeMultiValue(frame));
+    }
+
+    @Override
+    @ExplodeLoop
+    public Object executeMultiValue(VirtualFrame frame) {
         Object receiverValue = receiverNode.executeGeneric(frame);
 
         Object methodKey = methodKeyNode.executeGeneric(frame);
@@ -50,7 +55,6 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
         }
 
         int explicitArgCount = this.argumentNodes.length;
-        int totalArgCount = explicitArgCount + 1;
 
         if (explicitArgCount == 0) {
             try {
@@ -70,7 +74,7 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
             prefixArgs[i + 1] = LuaMultiValue.firstValue(rawArg);
         }
 
-        Object lastResult = this.argumentNodes[explicitArgCount - 1].executeGeneric(frame);
+        Object lastResult = this.argumentNodes[explicitArgCount - 1].executeMultiValue(frame);
         if (lastResult == null) {
             throw LuaException.create("unexpected multi-return or nil in method call argument", this);
         }

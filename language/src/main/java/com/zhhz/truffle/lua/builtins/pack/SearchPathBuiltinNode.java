@@ -51,7 +51,14 @@ public abstract class SearchPathBuiltinNode extends LuaBuiltinNode {
             String actualPath = template.replace("?", fileName);
 
             // 使用 TruffleFile 检查文件
-            TruffleFile file = env.getPublicTruffleFile(actualPath);
+            TruffleFile file;
+            try {
+                file = env.getPublicTruffleFile(actualPath);
+            } catch (RuntimeException invalidPath) {
+                // 拼出的路径在当前文件系统上非法（如 Windows 下 "./C:/..."）。
+                // 真实 Lua 中 fopen 打不开只是跳过该候选路径，这里保持同样语义
+                continue;
+            }
 
             if (file.exists() && file.isRegularFile()) {
                 // 【成功】返回绝对路径

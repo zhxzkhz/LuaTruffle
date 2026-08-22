@@ -70,6 +70,9 @@ public abstract class AbstractLuaTest {
         var b = Context.newBuilder(languages);
         b.allowExperimentalOptions(true);
         b.allowAllAccess(true);
+        // 空的、立即 EOF 的 stdin：避免 debug.debug()/io.read 等交互式内建
+        // 在测试环境中阻塞读取继承的 System.in
+        b.in(new java.io.ByteArrayInputStream(new byte[0]));
         return b;
     }
 

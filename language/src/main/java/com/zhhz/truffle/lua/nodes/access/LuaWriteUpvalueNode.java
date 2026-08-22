@@ -19,39 +19,38 @@ public abstract class LuaWriteUpvalueNode extends LuaWriteVariableNode {
     protected abstract int getSlotIndex();
 
     @Specialization
-    public void doWrite(VirtualFrame frame, Object value) {
-        // 1. 获取当前函数的父 Frame
-        Frame parentFrame = (Frame) frame.getArguments()[0];
+    public void writeLong(VirtualFrame frame, long value) {
+        Frame parentFrame = getParentFrame(frame, getDepth());
+        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Long);
+        parentFrame.setLong(getSlotIndex(), value);
+    }
 
-        // 2. 根据深度，向上追溯 Frame 链
-        for (int i = 1; i < getDepth(); i++) {
+    @Specialization
+    public void writeDouble(VirtualFrame frame, double value) {
+        Frame parentFrame = getParentFrame(frame, getDepth());
+        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Double);
+        parentFrame.setDouble(getSlotIndex(), value);
+    }
+
+    @Specialization
+    public void writeBoolean(VirtualFrame frame, boolean value) {
+        Frame parentFrame = getParentFrame(frame, getDepth());
+        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Boolean);
+        parentFrame.setBoolean(getSlotIndex(), value);
+    }
+
+    @Specialization
+    public void writeObject(VirtualFrame frame, Object value) {
+        Frame parentFrame = getParentFrame(frame, getDepth());
+        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        parentFrame.setObject(getSlotIndex(), value);
+    }
+
+    private static Frame getParentFrame(VirtualFrame frame, int depth) {
+        Frame parentFrame = (Frame) frame.getArguments()[0];
+        for (int i = 1; i < depth; i++) {
             parentFrame = (Frame) parentFrame.getArguments()[0];
         }
-
-        // 3. 在找到的目标 Frame 中，使用 slotIndex 写入值
-        //    这里需要一个健壮的方式来写入，因为它可能是任何类型。
-        //    直接使用 setObject 是最简单的方式。
-
-        if (value instanceof Long) {
-            // 如果传入的是 Long 对象（或原生 long，它会被自动装箱为 Long）
-            parentFrame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Long);
-            parentFrame.setLong(this.getSlotIndex(), (Long) value);
-            return;
-        }
-
-        if (value instanceof Double) {
-            parentFrame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Double);
-            parentFrame.setDouble(this.getSlotIndex(), (Double) value);
-            return;
-        }
-
-        if (value instanceof Boolean) {
-            parentFrame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Boolean);
-            parentFrame.setBoolean(this.getSlotIndex(), (Boolean) value);
-            return;
-        }
-
-        parentFrame.getFrameDescriptor().setSlotKind(this.getSlotIndex(), FrameSlotKind.Object);
-        parentFrame.setObject(getSlotIndex(), value);
+        return parentFrame;
     }
 }

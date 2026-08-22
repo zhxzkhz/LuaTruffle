@@ -628,6 +628,63 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
     }
 
     @Test
+    public void testFunctionMultiReturnCollapsesInScalarExpression() {
+        String code = """
+                function values()
+                    return 2, 99
+                end
+                return values() + 3
+                """;
+        assertEquals(5L, eval(code).asLong());
+        assertTrue(eval("return string.find('abc', 'a') == 1").asBoolean());
+    }
+
+    @Test
+    public void testMethodMultiReturnCollapsesInScalarExpression() {
+        String code = """
+                local object = {}
+                function object:values()
+                    return 4, 99
+                end
+                return object:values() * 2
+                """;
+        assertEquals(8L, eval(code).asLong());
+    }
+
+    @Test
+    public void testVarargCollapsesInScalarExpression() {
+        String code = """
+                function firstPlusOne(...)
+                    return ... + 1
+                end
+                return firstPlusOne(5, 99)
+                """;
+        assertEquals(6L, eval(code).asLong());
+    }
+
+    @Test
+    public void testTableConstructorExpandsOnlyFinalListField() {
+        String code = """
+                function values()
+                    return 1, 2, 3
+                end
+                local expanded = {0, values()}
+                local collapsed = {values(), 9}
+                local followedByKey = {values(), name = 'x'}
+                return expanded[1] == 0
+                    and expanded[2] == 1
+                    and expanded[3] == 2
+                    and expanded[4] == 3
+                    and collapsed[1] == 1
+                    and collapsed[2] == 9
+                    and collapsed[3] == nil
+                    and followedByKey[1] == 1
+                    and followedByKey[2] == nil
+                """;
+        assertTrue(eval(code).asBoolean());
+    }
+
+    @Test
     public void testMultiReturnExpandsOnlyAtTrailingExpression() {
         String code = """
                 function f()
@@ -1005,5 +1062,223 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
     public void testInvalidStringEscapeReportsParseError() {
         PolyglotException ex = assertThrows(PolyglotException.class, () -> run("'\\256'"));
         assertTrue(ex.getMessage().contains("decimal escape too large"));
+    }
+
+    @Test
+    public void testUtf8BomAtSourceStart() {
+        assertEquals(42L, eval("\uFEFFreturn 42").asLong());
+    }
+
+    @Test
+    public void testIntegerArithmeticWraps() {
+        assertTrue(eval("""
+                local max = 0x7fffffffffffffff
+                local min = -0x7fffffffffffffff - 1
+                return max + 1 == min
+                    and min - 1 == max
+                    and max * 2 == -2
+                    and -min == min
+                """).asBoolean());
+    }
+
+    @Test
+    public void testNumericForSupportsFloatingPointValues() {
+        assertEquals(5L, eval("""
+                local count = 0
+                for i = 0.5, 2.5, 0.5 do
+                    count = count + 1
+                end
+                return count
+                """).asLong());
+    }
+
+    @Test
+    public void testMultipleAssignmentEvaluatesTableTargetBeforeWrites() {
+        assertTrue(eval("""
+                local i = 1
+                local values = {}
+                i, values[i] = 2, 10
+                return i == 2 and values[1] == 10 and values[2] == nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testCallMetamethod() {
+        assertEquals(5L, eval("""
+                local value = setmetatable({}, {
+                    __call = function(self, argument)
+                        return argument + 1
+                    end
+                })
+                return value(4)
+                """).asLong());
+    }
+
+    @Test
+    public void testRelationalMetamethodOperandOrderAndFallback() {
+        assertTrue(eval("""
+                local mt = {
+                    __lt = function(a, b) return a.value < b.value end
+                }
+                local a = setmetatable({value = 1}, mt)
+                local b = setmetatable({value = 2}, mt)
+                return not (a > b) and b > a and a <= b and b >= a
+                """).asBoolean());
+    }
+
+    @Test
+    public void testEqualityRequiresSharedMetamethod() {
+        assertFalse(eval("""
+                local a = setmetatable({}, {__eq = function() return true end})
+                local b = setmetatable({}, {__eq = function() return false end})
+                return a == b
+                """).asBoolean());
+    }
+
+    @Test
+    public void testStringLengthCountsUtf8Bytes() {
+        assertEquals(2L, eval("return #'é'").asLong());
+    }
+
+    @Test
+    public void testExplicitIntegerTableFieldsUseArrayPart() {
+        assertTrue(eval("""
+                local values = {[1] = 'a', [2] = 'b'}
+                local count = 0
+                for i, value in ipairs(values) do
+                    count = count + 1
+                end
+                return #values == 2 and count == 2
+                """).asBoolean());
+    }
+
+    @Test
+    public void testContinueInNumericAndGenericFor() {
+        assertTrue(eval("""
+                local numeric = 0
+                for i = 1, 3 do
+                    if i == 2 then continue end
+                    numeric = numeric + i
+                end
+
+                local generic = 0
+                for i, value in ipairs({1, 2, 3}) do
+                    if i == 2 then continue end
+                    generic = generic + value
+                end
+                return numeric == 4 and generic == 4
+                """).asBoolean());
+    }
+
+    @Test
+    public void testUnaryMetamethodReceivesOneArgument() {
+        assertEquals(1L, eval("""
+                local value = setmetatable({}, {
+                    __unm = function(...)
+                        return select('#', ...)
+                    end
+                })
+                return -value
+                """).asLong());
+    }
+
+    @Test
+    public void testIpairsRejectsNonTable() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval("return ipairs(42)"));
+        assertTrue(ex.getMessage().contains("table expected"));
+    }
+
+    @Test
+    public void testDirectTableFunctionAssignmentStillWrites() {
+        assertTrue(eval("""
+                local t = {}
+                local f = function() return 1 end
+                t.value = f
+                return t.value == f
+                """).asBoolean());
+    }
+
+    @Test
+    public void testToNumberUsesLuaNumberSyntax() {
+        assertTrue(eval("""
+                return tonumber('-0x10') == -16
+                    and tonumber('+0x10') == 16
+                    and tonumber('0x1.8') == 1.5
+                    and tonumber('0x10000000000000000') == 0
+                    and tonumber('  \t123\n') == 123
+                """).asBoolean());
+    }
+
+    @Test
+    public void testToNumberRejectsJavaOnlyNumberSyntax() {
+        assertTrue(eval("""
+                return tonumber('NaN') == nil
+                    and tonumber('Infinity') == nil
+                    and tonumber('-Infinity') == nil
+                    and tonumber('1d') == nil
+                    and tonumber('1f') == nil
+                    and tonumber('١') == nil
+                    and tonumber(string.char(1) .. '123') == nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testArithmeticStringCoercionProducesFloat() {
+        assertEquals("3.0", eval("return tostring('1' + 2)").asString());
+        assertEquals("-2.0", eval("return tostring(-'2')").asString());
+        assertEquals("1", eval("return tostring(tonumber('1'))").asString());
+    }
+
+    @Test
+    public void testNumericForWithFloatLimitKeepsIntegerControlVariable() {
+        assertTrue(eval("""
+                local count = 0
+                local last
+                for i = 1, 3.5, 1 do
+                    count = count + 1
+                    last = tostring(i)
+                end
+                return count == 3 and last == '3'
+                """).asBoolean());
+    }
+
+    @Test
+    public void testNumericForStopsBeforeIntegerOverflow() {
+        assertEquals(1L, eval("""
+                local count = 0
+                for i = 0x7fffffffffffffff, 0x1p63, 1 do
+                    count = count + 1
+                end
+                return count
+                """).asLong());
+    }
+
+    @Test
+    public void testNumericForWithNaNControlValueDoesNotIterate() {
+        assertEquals(0L, eval("""
+                local count = 0
+                for i = 0 / 0, 1, 1 do
+                    count = count + 1
+                end
+                for i = 1, 3, 0 / 0 do
+                    count = count + 1
+                end
+                return count
+                """).asLong());
+    }
+
+    @Test
+    public void testLengthProducesLuaIntegerForNumericFor() {
+        assertEquals(10L, eval("""
+                local function varargSum(...)
+                    local args = {...}
+                    local sum = 0
+                    for i = 1, #args do
+                        sum = sum + args[i]
+                    end
+                    return sum
+                end
+                return varargSum(1, 2, 3, 4)
+                """).asLong());
     }
 }

@@ -1,4 +1,4 @@
-// Generated from language/src/main/java/com/zhhz/truffle/lua/parser/LuaParser.g4 by ANTLR 4.13.2
+// Generated from LuaParser.g4 by ANTLR 4.13.2
 package com.zhhz.truffle.lua.parser;
 
 import org.antlr.v4.runtime.ParserRuleContext;
@@ -108,6 +108,18 @@ public class LuaParserBaseListener implements LuaParserListener {
 	 * <p>The default implementation does nothing.</p>
 	 */
 	@Override public void exitStatBreak(LuaParser.StatBreakContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void enterStatContinue(LuaParser.StatContinueContext ctx) { }
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>The default implementation does nothing.</p>
+	 */
+	@Override public void exitStatContinue(LuaParser.StatContinueContext ctx) { }
 	/**
 	 * {@inheritDoc}
 	 *

@@ -47,7 +47,7 @@ public abstract class LuaTypeBuiltinNode extends LuaBuiltinNode {
             return T_NUMBER;
         }
 
-        if (value instanceof TruffleString || value instanceof LuaString || value instanceof String) {
+        if (value instanceof TruffleString || value instanceof String) {
             return T_STRING;
         }
 

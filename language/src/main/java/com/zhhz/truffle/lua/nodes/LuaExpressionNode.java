@@ -68,6 +68,10 @@ public abstract class LuaExpressionNode extends LuaStatementNode {
      */
     public abstract Object executeGeneric(VirtualFrame frame);
 
+    public Object executeMultiValue(VirtualFrame frame) {
+        return executeGeneric(frame);
+    }
+
     /**
      * 当我们在一个只需要 {@link LuaStatementNode 语句} 就足够的位置上使用表达式时，
      * 其返回值会被直接丢弃。
@@ -112,7 +116,7 @@ public abstract class LuaExpressionNode extends LuaStatementNode {
     }
 
     public Object executeObject(VirtualFrame frame) throws UnexpectedResultException {
-        return LuaTypesGen.expectBoolean(executeGeneric(frame));
+        return executeGeneric(frame);
     }
 
 

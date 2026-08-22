@@ -77,9 +77,7 @@ public abstract class LuaTableFieldWithKeyNode extends LuaTableFieldInitializerN
     @Specialization(limit = "CACHE_LIMIT")
     protected void writeObjectProperty(LuaTable table, Object key, Object value,
                                        @CachedLibrary(value = "table.getProperties()") DynamicObjectLibrary objLib) {
-        // table.getProperties() 返回的是 DynamicObject 存储后端
-        // objLib.put 会尝试根据缓存的 Shape 快速写入
-        objLib.put(table.getProperties(), key, value);
+        table.rawset(key, value, objLib);
     }
 
 

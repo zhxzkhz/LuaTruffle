@@ -120,6 +120,8 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
         // 5. 【执行循环体】
         try {
             bodyNode.executeVoid(frame);
+        } catch (LuaContinueException e) {
+            return true;
         } catch (LuaBreakException e) {
             // 6. 【处理 Break】
             // 捕获 break 异常，意味着用户想要跳出循环。

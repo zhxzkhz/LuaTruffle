@@ -53,7 +53,6 @@ import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.isTruthy;
  * 手动实现 `executeGeneric` 方法，并在其中有条件地执行子节点。
  */
 @NodeInfo(shortName = "and")
-// 【修正1】不再继承自 LuaShortCircuitNode，直接继承 LuaExpressionNode
 public class LuaLogicalAndNode extends LuaShortCircuitNode {
 
     public LuaLogicalAndNode(LuaExpressionNode left, LuaExpressionNode right) {

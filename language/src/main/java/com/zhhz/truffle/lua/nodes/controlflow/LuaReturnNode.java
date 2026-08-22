@@ -90,8 +90,6 @@ public final class LuaReturnNode extends LuaStatementNode {
     @ExplodeLoop
     public void executeVoid(VirtualFrame frame) {
 
-
-        // 如果表达式列表为空，返回一个空数组。
         int argCount = this.returnExpressions.length;
 
         // 优化：无参调用直接处理
@@ -99,6 +97,24 @@ public final class LuaReturnNode extends LuaStatementNode {
             throw LuaReturnException.withResult(LuaNil.SINGLETON);
         }
 
+        // 快速路径：单返回值 (最常见情况，如 return fib(n-1) + fib(n-2))
+        // 避免数组分配和 LuaMultiValue.collect 调用
+        if (argCount == 1) {
+            Object result = this.returnExpressions[0].executeMultiValue(frame);
+            if (result == null) {
+                throw new RuntimeException("不能返回数组或空");
+            }
+            if (result instanceof LuaMultiValue multiValue) {
+                Object[] values = multiValue.values();
+                if (values.length <= 1) {
+                    throw LuaReturnException.withResult(values.length == 0 ? LuaNil.SINGLETON : values[0]);
+                }
+                throw LuaReturnException.withResult(multiValue);
+            }
+            throw LuaReturnException.withResult(result);
+        }
+
+        // 多返回值路径
         final Object[] prefixArgs = new Object[argCount - 1];
 
         for (int i = 0; i < argCount - 1; i++) {
@@ -109,9 +125,7 @@ public final class LuaReturnNode extends LuaStatementNode {
             prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
         }
 
-
-        // 步骤 B: 计算最后一个参数 (可能返回多值)
-        Object lastResult = this.returnExpressions[argCount - 1].executeGeneric(frame);
+        Object lastResult = this.returnExpressions[argCount - 1].executeMultiValue(frame);
 
         if (lastResult == null) {
             throw new RuntimeException("不能返回数组或空");
@@ -122,8 +136,6 @@ public final class LuaReturnNode extends LuaStatementNode {
             throw LuaReturnException.withResult(finalArguments[0]);
         }
 
-        // 4. 【多返回值情况】
-        // 将结果数组封装在异常中抛出。
         throw LuaReturnException.withResult(new LuaMultiValue(finalArguments));
 
     }

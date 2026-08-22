@@ -47,6 +47,7 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.controlflow.LuaReturnException;
 import com.zhhz.truffle.lua.runtime.LuaNil;
+import com.zhhz.truffle.lua.runtime.LuaContext;
 
 public final class LuaAstRootNode extends LuaRootNode {
 
@@ -80,7 +81,6 @@ public final class LuaAstRootNode extends LuaRootNode {
 
     @Override
     public Object execute(VirtualFrame frame) {
-
         // --- 2. 执行函数体 ---
         try {
             bodyNode.executeVoid(frame);

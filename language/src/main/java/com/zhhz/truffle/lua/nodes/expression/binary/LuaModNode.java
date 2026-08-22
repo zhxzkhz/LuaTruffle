@@ -95,8 +95,8 @@ public abstract class LuaModNode extends LuaBinaryNode {
 
         // --- 第一阶段：尝试转换为数字进行计算 ---
 
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
         if (numLeft != null && numRight != null) {
             // 只要有一个是 Double，结果就是 Double

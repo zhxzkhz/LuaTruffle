@@ -64,13 +64,12 @@ public final class LuaString extends LuaValue {
         }
         LuaString other = (LuaString) obj;
         // 比较内部的 TruffleString
-        return TruffleString.EqualNode.getUncached().execute(this.value, other.value, TruffleString.Encoding.UTF_16);
+        return TruffleString.EqualNode.getUncached().execute(this.value, other.value, LuaLanguage.STRING_ENCODING);
     }
 
     @Override
     public int hashCode() {
-        // 使用内部 TruffleString 的哈希码
-        return TruffleString.HashCodeNode.getUncached().execute(this.value, TruffleString.Encoding.UTF_16);
+        return TruffleString.HashCodeNode.getUncached().execute(this.value, LuaLanguage.STRING_ENCODING);
     }
 
     /**
@@ -98,7 +97,7 @@ public final class LuaString extends LuaValue {
         if (other instanceof LuaString otherString) {
             // 检查内部的TruffleString是否相等
             boolean isEqual = TruffleString.EqualNode.getUncached().execute(
-                    this.value, otherString.value, TruffleString.Encoding.UTF_16
+                    this.value, otherString.value, LuaLanguage.STRING_ENCODING
             );
             return isEqual ? TriState.TRUE : TriState.FALSE; // 0 表示 DISJOINT (不相同)
         }

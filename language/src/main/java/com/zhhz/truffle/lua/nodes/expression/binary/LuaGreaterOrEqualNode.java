@@ -43,10 +43,14 @@ public abstract class LuaGreaterOrEqualNode extends LuaBinaryNode {
     }
 
     @Fallback
-    public static Object typeError(Object left, Object right,
+    public static boolean typeError(Object left, Object right,
                                    @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode,
                                    @Bind Node node) {
-        Object result = metatableNode.execute(left, right, LuaMetatables.__LE);
+        Object result = metatableNode.execute(right, left, LuaMetatables.__LE);
+        if (result != null) {
+            return LuaTypesUtil.isTruthy(result);
+        }
+        result = metatableNode.execute(left, right, LuaMetatables.__LT);
         if (result != null) {
             return !LuaTypesUtil.isTruthy(result);
         }

@@ -20,6 +20,7 @@ import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
+import com.zhhz.truffle.lua.runtime.LuaValue;
 
 /**
  * 读取 table 成员的节点，例如 `t[k]`。
@@ -49,10 +50,10 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
 
     // 特化1: 整数键
     @Specialization(guards = "isArrayIndex(key)")
-    protected Object readArray(LuaTable table, long key) { // 使用 long 更精确
-        Object result = table.arrayRawGet((int) key);
+    protected Object readArray(LuaTable table, long key,
+                                @CachedLibrary(limit = "CACHE_LIMIT") DynamicObjectLibrary objLib) {
+        Object result = table.rawget(key, objLib);
 
-        // 【修改】如果直接没找到，就进入慢路径
         if (result == LuaNil.SINGLETON) {
             return readWithMetatable(table, key);
         }
@@ -63,7 +64,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     @Specialization(replaces = "readArray", limit = "CACHE_LIMIT")
     protected Object readStringProperty(LuaTable table, String key,
                                         @CachedLibrary("table") DynamicObjectLibrary objLib) {
-        Object result = objLib.getOrDefault(table, key, LuaNil.SINGLETON);
+        Object result = table.rawget(key, objLib);
 
         // 【修改】如果直接没找到，就进入慢路径
         if (result == LuaNil.SINGLETON) {
@@ -76,7 +77,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     @Specialization(replaces = "readStringProperty", limit = "CACHE_LIMIT")
     protected Object readObjectProperty(LuaTable table, Object key,
                                         @CachedLibrary("table") DynamicObjectLibrary objLib) {
-        Object result = objLib.getOrDefault(table, key, LuaNil.SINGLETON);
+        Object result = table.rawget(key, objLib);
 
         // 【修改】如果直接没找到，就进入慢路径
         if (result == LuaNil.SINGLETON) {
@@ -86,7 +87,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     }
 
     // userdata 对象处理方法
-    @Specialization(replaces = "readObjectProperty", limit = "CACHE_LIMIT")
+    @Specialization(replaces = "readObjectProperty", guards = "isForeignObject(object)", limit = "CACHE_LIMIT")
     protected static Object doHostObject(TruffleObject object, Object key,
                                          @Bind Node node,
                                           @CachedLibrary("object") InteropLibrary objects,
@@ -108,12 +109,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     @TruffleBoundary
     public static Object readUncached(Node node, Object table, Object key) {
         if (table instanceof LuaTable luaTable) {
-            Object result;
-            if (key instanceof Long longKey && isArrayIndex(longKey)) {
-                result = luaTable.arrayRawGet(Math.toIntExact(longKey));
-            } else {
-                result = DynamicObjectLibrary.getUncached().getOrDefault(luaTable, key, LuaNil.SINGLETON);
-            }
+            Object result = luaTable.rawget(key, DynamicObjectLibrary.getUncached());
             if (result != LuaNil.SINGLETON) {
                 return result;
             }
@@ -182,7 +178,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
         // 设置一个最大深度以防止无限循环 (e.g., t.meta.__index = t.meta)
         for (int i = 0; i < 100; i++) {
             // 检查当前 table 是否有这个 key
-            Object result = DynamicObjectLibrary.getUncached().getOrDefault(currentTable, key, LuaNil.SINGLETON);
+            Object result = currentTable.rawget(key, DynamicObjectLibrary.getUncached());
             if (result != LuaNil.SINGLETON) {
                 return result; // 找到了！
             }
@@ -210,11 +206,15 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
 
     protected static boolean isArrayIndex(long l) {
         // Lua 数组索引从 1 开始
-        return l >= 1;
+        return l >= 1 && l <= Integer.MAX_VALUE;
     }
     // 你的旧卫语句是 double，最好特化 long 和 double
     protected static boolean isArrayIndex(double d) {
-        return d >= 1 && d == (long) d;
+        return d >= 1 && d <= Integer.MAX_VALUE && d == (long) d;
+    }
+
+    protected static boolean isForeignObject(Object value) {
+        return !(value instanceof LuaValue);
     }
 
 

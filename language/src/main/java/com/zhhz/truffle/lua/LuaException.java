@@ -59,14 +59,29 @@ import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 public final class LuaException extends AbstractTruffleException {
 
     private static final InteropLibrary UNCACHED_LIB = InteropLibrary.getFactory().getUncached();
+    private final Object errorObject;
 
     LuaException(String message, Node location) {
+        this(message, message, location);
+    }
+
+    LuaException(String message, Object errorObject, Node location) {
         super(message, location);
+        this.errorObject = errorObject;
     }
 
     @TruffleBoundary
     public static AbstractTruffleException create(String message, Node location) {
         return new LuaException(message, location);
+    }
+
+    @TruffleBoundary
+    public static AbstractTruffleException create(Object errorObject, Node location) {
+        return new LuaException(String.valueOf(errorObject), errorObject, location);
+    }
+
+    public Object getErrorObject() {
+        return errorObject;
     }
 
     @TruffleBoundary

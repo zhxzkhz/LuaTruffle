@@ -1,61 +1,49 @@
 package com.zhhz.truffle.lua.builtins;
 
-import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
 @NodeInfo(shortName = "pcall")
 public abstract class LuaPcallBuiltinNode extends LuaBuiltinNode {
 
     @Specialization(limit = "3")
-    @CompilerDirectives.TruffleBoundary
-    public Object doPcall(Object[] arguments,
-                          @CachedLibrary(limit = "3") InteropLibrary interop) {
-        // 1. 检查参数
-        if (arguments.length < 1) {
+    @TruffleBoundary
+    protected Object pcall(Object[] arguments,
+                           @CachedLibrary(limit = "3") InteropLibrary interop) {
+        if (arguments.length == 0) {
             throw LuaException.create("bad argument #1 to 'pcall' (value expected)", this);
         }
-
-        Object function = arguments[0];
-
-
-        // 2. 准备参数 (去掉第一个 func 参数)
-        Object[] callArgs = new Object[arguments.length - 1];
-        System.arraycopy(arguments, 1, callArgs, 0, callArgs.length);
-
+        Object[] callArguments = new Object[arguments.length - 1];
+        System.arraycopy(arguments, 1, callArguments, 0, callArguments.length);
         try {
-
-            // 3. 【核心】尝试执行函数
-            Object result = interop.execute(function, callArgs);
-
-            // 4. 【成功路径】返回 [true, result...]
-            Object[] newObjects;
-            if (result instanceof LuaMultiValue luaMultiValue) {
-                Object[] values = luaMultiValue.values();
-                newObjects = new Object[values.length + 1];
-                System.arraycopy(values, 0, newObjects, 1, values.length);
-            } else if (result == null){
-                return true;
-            } else {
-                newObjects = new Object[2];
-                newObjects[1] = result;
-            }
-            newObjects[0] = true;
-            return new LuaMultiValue(newObjects);
-
-        } catch (Exception e) {
-            // 处理其他可能的 Interop 异常 (如 ArityException, UnsupportedTypeException)
-            // 也可以视为运行时错误
-
-            var ovj = new Object[] { false, e.getMessage() };
-
-            return new LuaMultiValue(ovj);
+            return success(interop.execute(arguments[0], callArguments));
+        } catch (Exception exception) {
+            return new LuaMultiValue(new Object[]{false, errorObject(exception)});
         }
     }
 
+    static Object success(Object result) {
+        if (result instanceof LuaMultiValue values) {
+            Object[] returned = values.values();
+            Object[] protectedValues = new Object[returned.length + 1];
+            protectedValues[0] = true;
+            System.arraycopy(returned, 0, protectedValues, 1, returned.length);
+            return new LuaMultiValue(protectedValues);
+        }
+        return new LuaMultiValue(new Object[]{true, result == null ? LuaNil.SINGLETON : result});
+    }
 
+    static Object errorObject(Exception exception) {
+        if (exception instanceof LuaException luaException) {
+            return luaException.getErrorObject();
+        }
+        String message = exception.getMessage();
+        return message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
+    }
 }

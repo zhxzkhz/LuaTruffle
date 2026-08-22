@@ -3,11 +3,16 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
+import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
+import com.zhhz.truffle.lua.runtime.LuaString;
 
 /**
  * 实现了Lua的 'error' 内置函数。
@@ -26,62 +31,99 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
             message = arguments[0];
         }
         if (arguments.length >= 2) {
-            if (arguments[1] instanceof LuaNumber) {
-                level = (long) ((LuaNumber) arguments[1]).getValue();
-            }
-            // 如果 level 不是 number，Lua 会报错，我们这里简化为忽略
+            level = parseLevel(arguments[1]);
         }
 
-        // 2. 根据 level 查找错误位置
+        // 2. 根据 'level' 参数查找错误位置
         Node errorLocation = findErrorLocation(level);
 
-        // 3. 抛出我们统一的运行时异常
-        //    我们将 message 对象直接传递给异常
-        throw LuaException.create(message.toString(), errorLocation);
+        // 3. 标准 Lua 行为：level >= 1 时为字符串消息添加 "source:line: " 位置前缀；
+        //    level 0 与非字符串消息不加前缀
+        Object errorObject = message;
+        if (level > 0) {
+            TruffleString messageString = asString(message);
+            if (messageString != null && errorLocation != null) {
+                SourceSection section = errorLocation.getEncapsulatingSourceSection();
+                if (section != null && section.isAvailable()) {
+                    errorObject = LuaContext.toTruffleString(
+                            section.getSource().getName() + ":" + section.getStartLine() + ": "
+                                    + messageString.toJavaStringUncached());
+                }
+            }
+        }
+
+        // 4. 抛出统一的运行时异常，errorObject 直接传递给 pcall
+        throw LuaException.create(errorObject, errorLocation);
     }
 
     /**
-     * 辅助方法，用于根据 'level' 参数在Truffle调用栈中查找错误报告的源节点。
-     * 这是一个慢速路径操作。
+     * 解析 level 参数。
+     * <p>
+     * 注意：Lua 数字在运行时以原生 {@link Long}/{@link Double} 表示（{@link LuaNumber}
+     * 是遗留包装类，不会被构造），两者都必须接受，否则 level 会被静默忽略。
+     */
+    private static long parseLevel(Object value) {
+        if (value instanceof LuaNumber number) {
+            return (long) number.getValue();
+        }
+        if (value instanceof Long number) {
+            return number;
+        }
+        if (value instanceof Double number && number == Math.rint(number)
+                && !number.isInfinite() && !number.isNaN()) {
+            return number.longValue();
+        }
+        throw LuaException.create("bad argument #2 to 'error' (number expected)", null);
+    }
+
+    private static TruffleString asString(Object value) {
+        if (value instanceof TruffleString ts) {
+            return ts;
+        }
+        if (value instanceof LuaString luaString) {
+            return luaString.getValue();
+        }
+        return null;
+    }
+
+    /**
+     * 根据 'level' 在 Truffle 调用栈中查找错误报告位置的节点。
+     * <p>
+     * 帧遍历顺序（内层优先）：第 1 帧是 error 内建自身（callNode 为 null），
+     * 第 2 帧是调用 error 的函数，以此类推。帧的 callNode 是该帧内
+     * 「调用其被调者」的节点，即该函数的当前执行位置。
+     * 因此 Lua 语义 level N（第 N 层函数中 error 的位置 / 调用第 N 层函数的位置）
+     * 对应第 N+1 帧的 callNode。
      *
      * @param level The stack level to report the error at.
-     * @return The AST Node at the specified stack level.
+     * @return 对应调用节点；level 0 返回 null；找不到时返回 this（无位置信息）
      */
     private Node findErrorLocation(long level) {
         if (level == 0) {
             return null; // level 0 表示不报告位置
         }
-        if (level == 1) {
-            // level 1 (默认) 表示错误位置就是当前节点 (error函数自身)
-            // 但在Truffle中，我们更关心调用它的地方，所以向上找一层更有用
-            // 不过为了简单，我们先返回 this
-            return this;
-        }
+        Node callNode = frameCallNode(level + 1);
+        return callNode != null ? callNode : this;
+    }
 
-        // 对于 level > 1，我们需要遍历调用栈
-        // Truffle.getRuntime().iterateFrames() 是一个强大的API
-        final int[] frameLevel = {0};
-        Node[] location = {this}; // 默认位置是当前节点
-
+    /**
+     * 返回调用栈中第 index 帧（1-based，内层优先）的 callNode。
+     * <p>
+     * 【关键】{@link com.oracle.truffle.api.frame.FrameInstanceVisitor} 的契约是
+     * 返回 null 继续遍历、返回非 null 终止遍历并作为结果——不是 boolean 语义。
+     * 返回 {@code true} 会在第一帧后就静默终止遍历。
+     */
+    private static Node frameCallNode(long index) {
+        Node[] found = {null};
+        long[] current = {0};
         Truffle.getRuntime().iterateFrames(frameInstance -> {
-            frameLevel[0]++;
-            // frameLevel 1 是 error 函数自身
-            // frameLevel 2 是调用 error 的函数
-            // frameLevel 3 是调用了调用error的函数的函数...
-            // 所以，我们要找的栈深度是 level + 1
-            if (frameLevel[0] == level + 1) {
-                // frameInstance.getCallNode() 返回导致这次调用的AST节点
-                Node callNode = frameInstance.getCallNode();
-                if (callNode != null) {
-                    location[0] = callNode;
-                }
-                // 找到后可以提前终止遍历
-                return false;
+            current[0]++;
+            if (current[0] == index) {
+                found[0] = frameInstance.getCallNode();
+                return Boolean.TRUE; // 已找到，终止遍历
             }
-            // 继续遍历
-            return true;
+            return null; // 返回 null 才会继续遍历后续帧
         });
-
-        return location[0];
+        return found[0];
     }
 }

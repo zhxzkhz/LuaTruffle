@@ -30,7 +30,8 @@ public abstract class LuaPrintBuiltinNode extends LuaBuiltinNode {
     @Specialization(guards = "arguments.length == 0")
     @TruffleBoundary
     public Object printWithoutArgs(Object[] arguments) {
-        getContext().getOutput().println(); // 打印一个换行符
+        getContext().getOutput().print('\n');
+        getContext().getOutput().flush();
         return LuaNil.SINGLETON;
     }
 
@@ -42,7 +43,9 @@ public abstract class LuaPrintBuiltinNode extends LuaBuiltinNode {
     @Specialization(replaces = "printWithoutArgs")
     @TruffleBoundary
     public Object printWithArgs(Object[] arguments,@Cached("create()") LuaCoerceToStringNode toStringNode) {
-        getContext().getOutput().println(formatArguments(arguments,toStringNode));
+        getContext().getOutput().print(formatArguments(arguments,toStringNode));
+        getContext().getOutput().print('\n');
+        getContext().getOutput().flush();
         return LuaNil.SINGLETON;
     }
 

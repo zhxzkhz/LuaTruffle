@@ -23,9 +23,9 @@ public abstract class LuaPowerNode extends LuaBinaryNode {
         return Math.pow(left,right);
     }
 
-    @Specialization(rewriteOn = ArithmeticException.class)
-    public static double doLong(long left, long right) throws ArithmeticException {
-        return Math.pow(left,right);
+    @Specialization
+    public static double doLong(long left, long right) {
+        return Math.pow(left, right);
     }
 
 
@@ -40,8 +40,8 @@ public abstract class LuaPowerNode extends LuaBinaryNode {
 
         assertNotNull(left,right,this);
 
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
         if (numLeft != null && numRight != null) {
             double dLeft = (numLeft instanceof Double) ? (Double) numLeft : ((Long) numLeft).doubleValue();

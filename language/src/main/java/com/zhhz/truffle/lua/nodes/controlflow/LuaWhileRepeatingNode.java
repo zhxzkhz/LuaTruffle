@@ -49,7 +49,6 @@ import com.oracle.truffle.api.profiles.BranchProfile;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.nodes.util.LuaToBooleanNodeGen;
-import com.zhhz.truffle.lua.nodes.util.LuaUnboxNodeGen;
 
 /**
  * While 循环的单次迭代逻辑实现。
@@ -89,12 +88,8 @@ public final class LuaWhileRepeatingNode extends Node implements RepeatingNode {
     private final BranchProfile breakTaken = BranchProfile.create();
 
     public LuaWhileRepeatingNode(LuaExpressionNode conditionNode, LuaStatementNode bodyNode) {
-        // 1. 构造转换链：原始节点 -> 解包(Unbox) -> 转布尔(ToBoolean)
-        // 这样 evaluateCondition 方法就能安全地调用 executeBoolean 了。
-        this.conditionNode = LuaToBooleanNodeGen.create(LuaUnboxNodeGen.create(conditionNode));
-        // 迁移源码位置信息用于调试
+        this.conditionNode = LuaToBooleanNodeGen.create(conditionNode);
         this.conditionNode.setSourceSection(conditionNode.getSourceCharIndex(), conditionNode.getSourceLength());
-
         this.bodyNode = bodyNode;
     }
 

@@ -146,8 +146,12 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
             return false;
         }
 
-        // 2. 尝试查找 __eq 元方法
-        Object result = metatableNode.execute(left, right, LuaMetatables.__EQ);
+        Object leftEq = metatableNode.lookup(left, LuaMetatables.__EQ);
+        Object rightEq = metatableNode.lookup(right, LuaMetatables.__EQ);
+        if (leftEq == null || leftEq != rightEq) {
+            return false;
+        }
+        Object result = metatableNode.executeFrom(left, left, right, LuaMetatables.__EQ);
         if (result != null) {
             return isTruthy(result);
         }

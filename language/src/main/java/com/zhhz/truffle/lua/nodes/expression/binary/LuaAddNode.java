@@ -70,18 +70,9 @@ public abstract class LuaAddNode extends LuaBinaryNode {
         return left + right;
     }
 
-    // 1. 乐观路径：假设是 long，如果不溢出就一直用这个
-    @Specialization(rewriteOn = ArithmeticException.class)
-    protected Object doLong(long left, long right) {
-        return Math.addExact(left, right); // 使用 addExact 可以处理溢出
-    }
-
-    // 2. 溢出后的路径：一旦上面抛出异常，节点重写为使用这个方法
-    // 或者依靠 DSL 的类型匹配，只要能处理 (long, long) 返回 double 即可
     @Specialization
-    protected double doLongOverflow(long left, long right) {
-        // 这里执行浮点加法
-        return (double) left + (double) right;
+    protected long doLong(long left, long right) {
+        return left + right;
     }
 
     @Specialization
@@ -103,8 +94,8 @@ public abstract class LuaAddNode extends LuaBinaryNode {
         assertNotNull(left,right,this);
 
         // 1. 尝试将操作数转换为数字
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
         // 如果两个值都能被成功转换为数字
         if (numLeft != null && numRight != null) {
@@ -117,12 +108,7 @@ public abstract class LuaAddNode extends LuaBinaryNode {
             } else { // 两个都是 Long
                 long lLeft = (Long) numLeft;
                 long lRight = (Long) numRight;
-                try {
-                    return Math.addExact(lLeft,lRight); // 使用 addExact 可以处理溢出
-                } catch (ArithmeticException e) {
-                    // 溢出后，转为 double 计算
-                    return ((double) lLeft + (double) lRight);
-                }
+                return lLeft + lRight;
             }
         }
 

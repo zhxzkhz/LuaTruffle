@@ -23,7 +23,7 @@ public abstract class LuaIpairsBuiltinNode extends LuaBuiltinNode {
 
     @Specialization
     public Object doIPairs(Object[] arguments) {
-        if (arguments.length == 0) {
+        if (arguments.length == 0 || !(arguments[0] instanceof LuaTable)) {
             throw LuaException.create("bad argument #1 to 'ipairs' (table expected)",this);
         }
 

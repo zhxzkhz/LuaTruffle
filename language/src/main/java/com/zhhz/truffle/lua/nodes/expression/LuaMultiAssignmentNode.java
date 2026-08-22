@@ -6,6 +6,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.nodes.access.LuaWriteVariableNode;
+import com.zhhz.truffle.lua.nodes.access.LuaWriteTableNode;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
@@ -60,7 +61,7 @@ public final class LuaMultiAssignmentNode extends LuaStatementNode {
 
 
             // 步骤 B: 计算最后一个参数 (可能返回多值)
-            Object lastResult = this.sourceNodes[srcLen - 1].executeGeneric(frame);
+            Object lastResult = this.sourceNodes[srcLen - 1].executeMultiValue(frame);
 
             if (lastResult == null) {
                 throw new IllegalStateException("unexpected array or null in multi-assignment");
@@ -69,7 +70,14 @@ public final class LuaMultiAssignmentNode extends LuaStatementNode {
 
         }
 
-        // --- 2. 执行赋值 (保持不变) ---
+        Object[] preparedTargets = new Object[destinationNodes.length];
+        for (int i = 0; i < destinationNodes.length; i++) {
+            if (destinationNodes[i] instanceof LuaWriteTableNode tableWrite) {
+                preparedTargets[i] = tableWrite.prepareTarget(frame);
+            }
+        }
+
+        // --- 2. 执行赋值 ---
 
         // 注意：这里不需要检查 destinationNodes.length，因为赋值应该尽可能填满左边
         for (int i = 0; i < destinationNodes.length; i++) {
@@ -81,7 +89,11 @@ public final class LuaMultiAssignmentNode extends LuaStatementNode {
                 valueToAssign = LuaNil.SINGLETON; // 补 nil
             }
 
-            destinationNodes[i].execute(frame, valueToAssign);
+            if (destinationNodes[i] instanceof LuaWriteTableNode tableWrite) {
+                tableWrite.writePrepared(frame, preparedTargets[i], valueToAssign);
+            } else {
+                destinationNodes[i].execute(frame, valueToAssign);
+            }
         }
     }
 }

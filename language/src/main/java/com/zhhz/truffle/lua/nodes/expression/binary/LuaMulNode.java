@@ -80,14 +80,9 @@ public abstract class LuaMulNode extends LuaBinaryNode {
      * 在极度追求性能的场景下，通常会拆分为两个特化：一个用 rewriteOn=ArithmeticException 返回 long，
      * 另一个作为 replaces 的特化返回 double。
      */
-    @Specialization()
-    public static Object doLong(long left, long right) {
-        try {
-            return Math.multiplyExact(left, right); // 尝试精确乘法
-        } catch (ArithmeticException e) {
-            // 溢出处理：转为浮点数
-            return (double)left * (double)right;
-        }
+    @Specialization
+    protected static long doLong(long left, long right) {
+        return left * right;
     }
 
     /**
@@ -128,8 +123,8 @@ public abstract class LuaMulNode extends LuaBinaryNode {
 
         // --- 1. 尝试类型转换 (Coercion) ---
         // Lua 允许字符串参与算术运算，例如 "10" * 2
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
 
         // 如果两个操作数都能成功转换为数字
@@ -147,13 +142,7 @@ public abstract class LuaMulNode extends LuaBinaryNode {
                 // 两个都是 Long (例如两个整数字符串 "10" * "20")
                 long lLeft = (Long) numLeft;
                 long lRight = (Long) numRight;
-                try {
-                    // 同样需要处理溢出
-                    return Math.multiplyExact(lLeft, lRight);
-                } catch (ArithmeticException e) {
-                    // 溢出后转为 double
-                    return ((double)lLeft * (double)lRight);
-                }
+                return lLeft * lRight;
             }
         }
 

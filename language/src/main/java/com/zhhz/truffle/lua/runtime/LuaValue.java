@@ -37,7 +37,7 @@ public abstract class LuaValue extends DynamicObject {
         return toString();
     }
 
-    @ExportMessage boolean isString() { return false; }
+    @ExportMessage public boolean isString() { return false; }
 
     /**
      * 强制所有子类实现，以返回它们在Lua中的类型名称字符串。

@@ -66,7 +66,7 @@ public abstract class LuaDivNode extends LuaBinaryNode {
         return left / right;
     }
 
-    @Specialization(rewriteOn = ArithmeticException.class)
+    @Specialization
     public static double doLong(long left, long right){
         return (double) left / (double) right;
     }
@@ -95,8 +95,8 @@ public abstract class LuaDivNode extends LuaBinaryNode {
         assertNotNull(left,right,this);
 
         // 1. 尝试将操作数转换为数字
-        Object numLeft = coerceLeft.execute(left);
-        Object numRight = coerceRight.execute(right);
+        Object numLeft = coerceLeft.executeArithmetic(left);
+        Object numRight = coerceRight.executeArithmetic(right);
 
         // 如果两个值都能被成功转换为数字
         if (numLeft != null && numRight != null) {

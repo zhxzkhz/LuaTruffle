@@ -132,7 +132,7 @@ public abstract class LuaLessOrEqualNode extends LuaBinaryNode {
      * &#064;Bind  Node node: 获取当前 AST 节点的位置信息，用于抛出带有行号的异常。
      */
     @Fallback
-    public static Object typeError(Object left, Object right,
+    public static boolean typeError(Object left, Object right,
                                    @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode,
                                    @Bind Node node) {
 
@@ -141,7 +141,10 @@ public abstract class LuaLessOrEqualNode extends LuaBinaryNode {
         if (result != null) {
             return LuaTypesUtil.isTruthy(result);
         }
-        // 抛出类似于 "attempt to compare string with number" 的错误
+        result = metatableNode.execute(right, left, LuaMetatables.__LT);
+        if (result != null) {
+            return !LuaTypesUtil.isTruthy(result);
+        }
         throw LuaException.typeError(node, "<=", left, right);
     }
 }

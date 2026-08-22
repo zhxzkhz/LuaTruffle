@@ -24,6 +24,14 @@ public abstract class LuaWriteVariableNode extends LuaStatementNode {
      */
     public abstract void execute(VirtualFrame frame,Object value);
 
+    public Object prepareTarget(VirtualFrame frame) {
+        return null;
+    }
+
+    public void writePrepared(VirtualFrame frame, Object preparedTarget, Object value) {
+        execute(frame, value);
+    }
+
 
     /**
      * 我们必须实现从 LuaStatementNode 继承的 executeVoid 方法。

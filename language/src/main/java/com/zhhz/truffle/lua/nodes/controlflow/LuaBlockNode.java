@@ -42,6 +42,7 @@ package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ControlFlowException;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
@@ -69,6 +70,7 @@ public final class LuaBlockNode extends LuaStatementNode {
     @Children private final LuaCloseSlotNode[] closeNodes;
     private final Map<TruffleString, Integer> labelTargets;
     private final int[] blockPath;
+    private final boolean hasCloseOrLabels;
 
     public LuaBlockNode(LuaStatementNode[] bodyNodes) {
         this(bodyNodes, new LuaCloseSlotNode[0], new int[0]);
@@ -79,11 +81,23 @@ public final class LuaBlockNode extends LuaStatementNode {
         this.closeNodes = closeNodes;
         this.blockPath = blockPath;
         this.labelTargets = buildLabelTargets(bodyNodes);
+        this.hasCloseOrLabels = closeNodes.length > 0 || !labelTargets.isEmpty();
     }
 
 
     @Override
+    @ExplodeLoop
     public void executeVoid(VirtualFrame frame) {
+        if (!hasCloseOrLabels) {
+            for (int i = 0; i < statements.length; i++) {
+                statements[i].executeVoid(frame);
+            }
+            return;
+        }
+        executeVoidSlowPath(frame);
+    }
+
+    private void executeVoidSlowPath(VirtualFrame frame) {
         try {
             int index = 0;
             while (index < statements.length) {

@@ -73,7 +73,7 @@ public abstract class WriteHelperNode extends Node {
         // 这个方法包含了与 writeTable 中完全相同的逻辑
         Object oldValue = table.rawget(key, objLib);
         if (oldValue != LuaNil.SINGLETON || notHandleNewIndex(table, key, value, objLib, interop)) {
-            table.rawset(key, value);
+            table.rawset(key, value, objLib);
         }
     }
 }

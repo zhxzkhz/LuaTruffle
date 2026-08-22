@@ -71,22 +71,17 @@ public final class LuaTable extends LuaValue {
      */
     public Object rawget(Object key, DynamicObjectLibrary objLib) {
         // --- 1. 快速路径：尝试作为数组索引读取 ---
-        // 我们检查 key 是否是一个可以被无损转换为整数的 Double
-        if (key instanceof Integer) {
-            int dKey = (Integer) key;
-            if (isArrayIndex(dKey)) {
-                // 将 1-based Lua 索引转换为 0-based Java 数组索引
-                int index = dKey - 1;
-
-                // 检查索引是否在当前数组的有效范围内
-                if (index < this.arraySize) {
-                    Object value = this.arrayPart[index];
-                    // 在数组中，我们用 Java null 来代表 Lua nil
-                    return value == null ? LuaNil.SINGLETON : value;
+        // 整数键优先读取数组部分；稀疏整数键仍可能存储在哈希部分。
+        int arrayIndex = toArrayIndex(key);
+        if (arrayIndex > 0) {
+            int index = arrayIndex - 1;
+            if (index < this.arraySize) {
+                Object value = this.arrayPart[index];
+                if (value != null) {
+                    return value;
                 }
-                // 如果索引超出了当前数组大小，它仍然可能被存储在哈希部分
-                // (例如 t[1000] = 5)，所以我们不能在这里提前返回 nil。
             }
+            key = (long) arrayIndex;
         }
 
         // --- 2. 回退路径：作为哈希/属性读取 ---
@@ -107,34 +102,31 @@ public final class LuaTable extends LuaValue {
         return rawget(key,DynamicObjectLibrary.getUncached());
     }
 
+    public Object rawget(long key) {
+        return rawget(Long.valueOf(key), DynamicObjectLibrary.getUncached());
+    }
+
     public void rawset(Object key, Object value) {
-        if (key instanceof Double && isArrayIndex((Double) key)) {
-            arrayRawSet(((Double) key).intValue(), value);
-            return;
-        }
-        Object ts;
-        if (key instanceof String string){
-            ts = toTruffleString(string);
-        } else {
-            ts = key;
-        }
-        if (value == LuaNil.SINGLETON) {
-            DynamicObjectLibrary.getUncached().removeKey(this, ts);
-        } else {
-            DynamicObjectLibrary.getUncached().put(this, ts, value);
-        }
+        rawset(key, value, DynamicObjectLibrary.getUncached());
     }
 
     public void rawset(Object key, Object value, DynamicObjectLibrary objLib) {
-        if (key instanceof Double && isArrayIndex((Double) key)) {
-            arrayRawSet(((Double) key).intValue(), value);
+        int arrayIndex = toArrayIndex(key);
+        Object normalizedKey = normalizePropertyKey(key, arrayIndex);
+        if (arrayIndex > 0 && shouldUseArrayPart(arrayIndex)) {
+            arrayRawSet(arrayIndex, value);
+            objLib.removeKey(this, normalizedKey);
             return;
         }
         if (value == LuaNil.SINGLETON) {
-            objLib.removeKey(this, key);
+            objLib.removeKey(this, normalizedKey);
         } else {
-            objLib.put(this, key, value);
+            objLib.put(this, normalizedKey, value);
         }
+    }
+
+    public void rawset(long key, Object value) {
+        rawset(Long.valueOf(key), value, DynamicObjectLibrary.getUncached());
     }
 
     // --- 数组部分的具体实现 ---
@@ -282,11 +274,7 @@ public final class LuaTable extends LuaValue {
 
     @ExportMessage
     Object readHashValue(Object key, @CachedLibrary("this") DynamicObjectLibrary objLib){
-        Object value = rawget(key, objLib);
-        if (value == LuaNil.SINGLETON) {
-            //throw UnknownIdentifierException.create(key.toString());
-        }
-        return value;
+        return rawget(key, objLib);
     }
 
     @ExportMessage
@@ -305,6 +293,37 @@ public final class LuaTable extends LuaValue {
     // === 辅助方法 ===
     private static boolean isArrayIndex(double d) {
         return d > 0 && d <= Integer.MAX_VALUE && d == (int) d;
+    }
+
+    private static boolean isArrayIndex(long value) {
+        return value > 0 && value <= Integer.MAX_VALUE;
+    }
+
+    private static int toArrayIndex(Object key) {
+        if (key instanceof Integer integer && integer > 0) {
+            return integer;
+        }
+        if (key instanceof Long longValue && isArrayIndex(longValue)) {
+            return longValue.intValue();
+        }
+        if (key instanceof Double doubleValue && isArrayIndex(doubleValue)) {
+            return doubleValue.intValue();
+        }
+        return -1;
+    }
+
+    private boolean shouldUseArrayPart(int arrayIndex) {
+        return arrayIndex <= (long) arraySize + 1 || arrayIndex <= arrayPart.length;
+    }
+
+    private static Object normalizePropertyKey(Object key, int arrayIndex) {
+        if (arrayIndex > 0) {
+            return (long) arrayIndex;
+        }
+        if (key instanceof String string) {
+            return toTruffleString(string);
+        }
+        return key;
     }
 
     private void ensureArrayCapacity(int index) {
@@ -372,8 +391,9 @@ public final class LuaTable extends LuaValue {
         }
 
         // --- 状态 2: 当前 key 是一个数组索引 ---
-        if (key instanceof Integer) {
-            int longKey = (int) key;
+        int arrayKey = toArrayIndex(key);
+        if (arrayKey > 0 && arrayRawGet(arrayKey) != LuaNil.SINGLETON) {
+            int longKey = arrayKey;
             // 检查是否是一个有效的、我们正在处理的数组索引
             if (longKey >= 1 && longKey <= this.arrayPart.length) {
                 int javaIndex = longKey - 1;

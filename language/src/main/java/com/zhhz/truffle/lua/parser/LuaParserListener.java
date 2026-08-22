@@ -1,4 +1,4 @@
-// Generated from language/src/main/java/com/zhhz/truffle/lua/parser/LuaParser.g4 by ANTLR 4.13.2
+// Generated from LuaParser.g4 by ANTLR 4.13.2
 package com.zhhz.truffle.lua.parser;
 import org.antlr.v4.runtime.tree.ParseTreeListener;
 
@@ -97,6 +97,18 @@ public interface LuaParserListener extends ParseTreeListener {
 	 * @param ctx the parse tree
 	 */
 	void exitStatBreak(LuaParser.StatBreakContext ctx);
+	/**
+	 * Enter a parse tree produced by the {@code StatContinue}
+	 * labeled alternative in {@link LuaParser#stat}.
+	 * @param ctx the parse tree
+	 */
+	void enterStatContinue(LuaParser.StatContinueContext ctx);
+	/**
+	 * Exit a parse tree produced by the {@code StatContinue}
+	 * labeled alternative in {@link LuaParser#stat}.
+	 * @param ctx the parse tree
+	 */
+	void exitStatContinue(LuaParser.StatContinueContext ctx);
 	/**
 	 * Enter a parse tree produced by the {@code StatGoto}
 	 * labeled alternative in {@link LuaParser#stat}.

@@ -48,7 +48,6 @@ import com.oracle.truffle.api.profiles.CountingConditionProfile;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.nodes.util.LuaToBooleanNodeGen;
-import com.zhhz.truffle.lua.nodes.util.LuaUnboxNodeGen;
 
 /**
  * Lua 语言中 "if-then-else" 语句的 AST 节点实现。
@@ -97,17 +96,8 @@ public final class LuaIfNode extends LuaStatementNode {
     private final CountingConditionProfile condition = CountingConditionProfile.create();
 
     public LuaIfNode(LuaExpressionNode conditionNode, LuaStatementNode thenPartNode, LuaStatementNode elsePartNode) {
-        // 1. 类型强转链构造：
-        // LuaUnboxNode: 负责处理可能的对象包装。
-        // LuaToBooleanNode: 负责将任意 Lua 值转为 boolean (在 Lua 中只有 false 和 nil 是假，其他均为真)。
-        // 这样做的目的是确保 this.conditionNode.executeBoolean() 永远可用且高效。
-        this.conditionNode = LuaToBooleanNodeGen.create(LuaUnboxNodeGen.create(conditionNode));
-
-        // 2. 调试信息迁移：
-        // 因为我们用 Wrapper 节点包裹了原始节点，需要把原始源码位置信息复制到新节点上，
-        // 否则调试器单步调试时可能无法正确定位。
+        this.conditionNode = LuaToBooleanNodeGen.create(conditionNode);
         this.conditionNode.setSourceSection(conditionNode.getSourceCharIndex(), conditionNode.getSourceLength());
-
         this.thenPartNode = thenPartNode;
         this.elsePartNode = elsePartNode;
     }

@@ -55,6 +55,7 @@ import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.builtins.*;
 import com.zhhz.truffle.lua.builtins.pack.LoadLibBuiltinNodeGen;
@@ -63,6 +64,7 @@ import com.zhhz.truffle.lua.builtins.pack.PreloadSearcherNodeGen;
 import com.zhhz.truffle.lua.builtins.pack.SearchPathBuiltinNodeGen;
 import org.graalvm.polyglot.Context;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
@@ -86,12 +88,16 @@ public final class LuaContext {
     @CompilationFinal private Env env;
 
     private final PrintWriter output;
+    private final PrintWriter error;
 
     // 【核心】全局变量表
     private final LuaTable globals;
     private final Shape tableShape;
     private final Shape functionShape;
     private final Shape booleanShape;
+    private final Shape fileShape;
+    private LuaFileHandle defaultInput;
+    private LuaFileHandle defaultOutput;
 
     private LuaFunction ipairsIterator;
 
@@ -101,13 +107,18 @@ public final class LuaContext {
     // 默认的搜索路径，模拟标准 Lua
     // ? 代表模块名。分号 ; 分隔不同的路径。
     private static final String DEFAULT_PATH = "./?.lua;./?/init.lua";
+    private static final String DEFAULT_CPATH = "./?.so;./?.dll;./loadall.so;./lua/?.so;./lua/?.dll";
 
     private boolean packagePathInitialized = false;
+    private boolean luaInitExecuted = false;
+    private TruffleFile scriptDirectory;
+    private Object[] scriptVarargs = new Object[0];
 
     public LuaContext(LuaLanguage language, Env env) {
         this.env = env;
 
         this.output = new PrintWriter(env.out(), true);
+        this.error = new PrintWriter(env.err(), true);
         this.language = language;
 
         // 1. 【关键】在上下文创建时，实例化全局表
@@ -115,11 +126,66 @@ public final class LuaContext {
         this.tableShape = Shape.newBuilder().layout(LuaTable.class, MethodHandles.lookup()).build();
         this.functionShape = Shape.newBuilder().layout(LuaFunction.class, MethodHandles.lookup()).build();
         this.booleanShape = Shape.newBuilder().layout(LuaBoolean.class, MethodHandles.lookup()).build();
+        this.fileShape = Shape.newBuilder().layout(LuaFileHandle.class, MethodHandles.lookup()).build();
 
         this.globals = new LuaTable(tableShape);
         // 2. 将全局表自身放入全局表中，键为 "_G"
         //    这是标准的 Lua 行为
         this.globals.rawset(toTruffleString("_G"), this.globals, DynamicObjectLibrary.getUncached());
+        // Lua's standard version marker is observable by startup scripts and libraries.
+        this.globals.rawset(toTruffleString("_VERSION"), toTruffleString("Lua 5.3"),
+                DynamicObjectLibrary.getUncached());
+        LuaTable arguments = new LuaTable(tableShape);
+        String[] applicationArguments = env.getApplicationArguments();
+        // applicationArguments layout: [launcher, options..., scriptPath, scriptArgs...]
+        // Options: -E, -l <mod>, -e <stmt>, -i (each takes 1 or 2 slots)
+        // Standard Lua arg table: arg[-1]=launcher, arg[-2..-n]=options, arg[0]=scriptPath, arg[1..n]=scriptArgs
+        
+        // Find where the script path starts (first non-option after launcher)
+        int scriptStart = 1;
+        while (scriptStart < applicationArguments.length) {
+            String opt = applicationArguments[scriptStart];
+            if (opt.equals("--")) {
+                scriptStart++; // end of options marker, skip it
+                break;
+            }
+            if (!opt.startsWith("-") || opt.equals("-")) {
+                break; // found script path
+            }
+            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")) {
+                scriptStart++;
+            } else if (opt.equals("-l") || opt.equals("-e")) {
+                scriptStart += 2; // option + argument
+            } else if (opt.startsWith("-l") || opt.startsWith("-e")) {
+                scriptStart++; // combined like -lmod
+            } else {
+                break; // unknown option, treat as script path
+            }
+        }
+        
+        // arg[0] = script path, arg[1..n] = script args
+        if (scriptStart < applicationArguments.length) {
+            arguments.rawset(0L, toTruffleString(applicationArguments[scriptStart]));
+        }
+        // Store script arguments as varargs for the main chunk
+        int numScriptArgs = applicationArguments.length - scriptStart - 1;
+        if (numScriptArgs > 0) {
+            Object[] varargs = new Object[numScriptArgs];
+            for (int i = 0; i < numScriptArgs; i++) {
+                varargs[i] = toTruffleString(applicationArguments[scriptStart + 1 + i]);
+            }
+            this.scriptVarargs = varargs;
+        }
+        for (int i = scriptStart + 1; i < applicationArguments.length; i++) {
+            arguments.rawset((long) i - scriptStart, toTruffleString(applicationArguments[i]));
+        }
+        // arg[-1] = launcher, arg[-2..-n] = options (in reverse order)
+        int negIdx = -1;
+        for (int i = Math.min(scriptStart - 1, applicationArguments.length - 1); i >= 0; i--) {
+            arguments.rawset((long) negIdx, toTruffleString(applicationArguments[i]));
+            negIdx--;
+        }
+        this.globals.rawset(toTruffleString("arg"), arguments, DynamicObjectLibrary.getUncached());
         //初始化LuaBoolean
         LuaBoolean.get(this,true);
         LuaBoolean.get(this,false);
@@ -135,6 +201,13 @@ public final class LuaContext {
     public Shape getTableShape() { return tableShape; }
     public Shape getFunctionShape() { return functionShape; }
     public Shape getBooleanShape() { return booleanShape; }
+    public Shape getFileShape() { return fileShape; }
+    public LuaLanguage getLanguage() { return language; }
+
+    public LuaFileHandle getDefaultInput() { return defaultInput; }
+    public void setDefaultInput(LuaFileHandle input) { this.defaultInput = input; }
+    public LuaFileHandle getDefaultOutput() { return defaultOutput; }
+    public void setDefaultOutput(LuaFileHandle output) { this.defaultOutput = output; }
 
 
     /**
@@ -161,6 +234,10 @@ public final class LuaContext {
         return output;
     }
 
+    public PrintWriter getError() {
+        return error;
+    }
+
     @TruffleBoundary
     public static TruffleString toTruffleString(String s){
         return TruffleString.fromJavaStringUncached(s,LuaLanguage.STRING_ENCODING);
@@ -174,6 +251,56 @@ public final class LuaContext {
         this.packagePathInitialized = initialized;
     }
 
+    public boolean isLuaInitExecuted() {
+        return luaInitExecuted;
+    }
+
+    public void setLuaInitExecuted(boolean executed) {
+        this.luaInitExecuted = executed;
+    }
+
+    /**
+     * 统一的用户文件名解析：绝对路径原样返回；相对路径在已知入口脚本目录时
+     * 优先相对脚本目录解析，否则相对进程工作目录。
+     * <p>
+     * loadfile/dofile、io.open、os.remove/rename 等都必须经过同一个基准，
+     * 否则「先写入再按名读取」的程序（如官方测试套件）会因两套基准而失败。
+     */
+    @TruffleBoundary
+    public TruffleFile resolveScriptFile(String path) {
+        TruffleFile file = getEnv().getPublicTruffleFile(path);
+        if (!file.isAbsolute() && scriptDirectory != null) {
+            return scriptDirectory.resolve(path);
+        }
+        return file;
+    }
+
+    /** {@link #resolveScriptFile(String)} 的 java.nio.Path 版本。 */
+    @TruffleBoundary
+    public java.nio.file.Path resolveScriptPath(String path) {
+        try {
+            String resolved = resolveScriptFile(path).getPath();
+            if (resolved != null) {
+                return java.nio.file.Path.of(resolved);
+            }
+        } catch (Exception ignored) {
+            // 文件系统受限时退回原始名称，由调用方按工作目录处理
+        }
+        return java.nio.file.Path.of(path);
+    }
+
+    public TruffleFile getScriptDirectory() {
+        return scriptDirectory;
+    }
+
+    public Object[] getScriptVarargs() {
+        return scriptVarargs;
+    }
+
+    public void setScriptVarargs(Object[] varargs) {
+        this.scriptVarargs = varargs;
+    }
+
     private void installBuiltins() {
 
 
@@ -182,6 +309,8 @@ public final class LuaContext {
         // 将它同时注册为 load 和 loadstring
         installBuiltin("load", loadFactory);
         installBuiltin("loadstring", loadFactory);
+        installBuiltin(LuaLoadFileBuiltinNodeGen.create());
+        installBuiltin(LuaDoFileBuiltinNodeGen.create());
 
         installBuiltin("print",LuaPrintBuiltinNodeGen::create);
         installBuiltin("require", LuaRequireBuiltinNodeGen::create);
@@ -213,10 +342,47 @@ public final class LuaContext {
         //System.out.println("OsLibrary.clock() = " + OsLibrary.clock());
 
         installBuiltinLibrary(toTruffleString("os"),OsLibrary.class);
+        LuaTable mathTable = installBuiltinLibrary(toTruffleString("math"), MathLibrary.class);
+        mathTable.rawset("pi", Math.PI);
+        mathTable.rawset("huge", Double.POSITIVE_INFINITY);
+        mathTable.rawset("maxinteger", Long.MAX_VALUE);
+        mathTable.rawset("mininteger", Long.MIN_VALUE);
         var stringTable = installBuiltinLibrary(toTruffleString("string"),StringLibrary.class);
+        installFunctionIntoTable(stringTable, "gmatch", LuaStringGmatchBuiltinNodeGen::create);
         LuaTable stringMetatable = new LuaTable(tableShape);
         stringMetatable.rawset(LuaMetatables.__INDEX, stringTable);
         this.typeMetatables.put(TruffleString.class, stringMetatable);
+
+        LuaTable tableLibrary = installBuiltinLibrary(toTruffleString("table"), TableLibrary.class);
+        installFunctionIntoTable(tableLibrary, "pack", LuaTablePackBuiltinNodeGen::create);
+        installFunctionIntoTable(tableLibrary, "sort", LuaTableSortBuiltinNodeGen::create);
+
+        installBuiltinLibrary(toTruffleString("debug"), DebugLibrary.class);
+
+        LuaTable ioLibrary = installBuiltinLibrary(toTruffleString("io"), IoLibrary.class);
+        LuaFileHandle stdin = LuaFileHandle.stream(fileShape, env.in(), null, true);
+        LuaFileHandle stdout = LuaFileHandle.stream(fileShape, null, env.out(), true);
+        LuaFileHandle stderr = LuaFileHandle.stream(fileShape, null, env.err(), true);
+        this.defaultInput = stdin;
+        this.defaultOutput = stdout;
+
+        LuaTable fileMethods = new LuaTable(tableShape);
+        String[] methods = {"close", "flush", "read", "write", "seek", "setvbuf", "lines"};
+        for (String method : methods) {
+            Object function = ioLibrary.rawget("file_" + method);
+            fileMethods.rawset(method, function);
+            ioLibrary.rawset("file_" + method, LuaNil.SINGLETON);
+        }
+        LuaTable fileMetatable = new LuaTable(tableShape);
+        fileMetatable.rawset(LuaMetatables.__INDEX, fileMethods);
+        stdin.setMetatable(fileMetatable);
+        stdout.setMetatable(fileMetatable);
+        stderr.setMetatable(fileMetatable);
+        this.typeMetatables.put(LuaFileHandle.class, fileMetatable);
+
+        ioLibrary.rawset("stdin", stdin);
+        ioLibrary.rawset("stdout", stdout);
+        ioLibrary.rawset("stderr", stderr);
     }
 
     private void setupPackageSystem() {
@@ -225,9 +391,20 @@ public final class LuaContext {
 
 
         // 1. 基础字段
-        packageTable.rawset("loaded", new LuaTable(tableShape));
+        LuaTable loaded = new LuaTable(tableShape);
+        packageTable.rawset("loaded", loaded);
         packageTable.rawset("preload", new LuaTable(tableShape));
         packageTable.rawset("path", toTruffleString(DEFAULT_PATH)); // "./?.lua;..."
+        packageTable.rawset("cpath", toTruffleString(DEFAULT_CPATH)); // "./?.so;..."
+
+        // Register standard libraries in package.loaded so require('string'), require('io'), etc. work
+        String[] stdLibs = {"string", "io", "math", "os", "table", "coroutine", "package", "debug"};
+        for (String lib : stdLibs) {
+            Object libTable = globals.rawget(toTruffleString(lib));
+            if (libTable instanceof LuaTable) {
+                loaded.rawset(toTruffleString(lib), libTable);
+            }
+        }
 
         // Windows 用 \，其他用 /
         String dirSep = FileSystems.getDefault().getSeparator();
@@ -256,8 +433,8 @@ public final class LuaContext {
     }
 
     /**
-     * 根据入口脚本的 Source 初始化 package.path
-     * 只有在第一次解析主脚本时调用。
+     * 根据入口脚本的 Source 初始化 package.path。
+     * 只有在第一次解析【文件型】脚本时调用。
      */
     public void initPackagePath(Source source) {
         // 1. 获取 package 表
@@ -266,44 +443,167 @@ public final class LuaContext {
             return; // 防御性编程
         }
 
-        // 2. 计算基准目录
+        // 2. 检查是否有 -E 选项（禁用环境变量）
+        boolean ignoreEnv = hasIgnoreEnvFlag();
+
+        // 3. 环境变量优先：LUA_PATH_5_3 > LUA_PATH > 默认路径
+        String luaPath = null;
+        if (!ignoreEnv) {
+            luaPath = System.getenv("LUA_PATH_5_3");
+            if (luaPath == null) {
+                luaPath = System.getenv("LUA_PATH");
+            }
+        }
+
+        if (luaPath != null) {
+            // 处理 ;; 替换为默认路径（与 -E 时的默认值一致，即脚本目录锚定版本，
+            // 这样官方测试套件 convert 测试中两处默认路径才能对上）
+            String computedDefault = computeDefaultPath(source);
+            luaPath = luaPath.replace(";;", ";" + computedDefault + ";");
+            packageTable.rawset("path", toTruffleString(luaPath));
+        } else {
+            // 4. 使用默认路径（锚定到入口脚本目录）
+            packageTable.rawset("path", toTruffleString(computeDefaultPath(source)));
+        }
+
+        applyCPathEnvironmentOverride(ignoreEnv);
+    }
+
+    /**
+     * 仅应用 LUA_PATH/LUA_CPATH 环境变量覆盖（不锚定脚本目录）。
+     * <p>
+     * 启动器可能在解析主脚本之前执行内部代码片段（如 -l 触发的 require），
+     * 这些片段也需要看到正确的 package.path；此操作是幂等的，
+     * 之后的文件型 Source 仍可完成脚本目录锚定。
+     */
+    public void applyPathEnvironmentOverrides() {
+        if (hasIgnoreEnvFlag()) {
+            return;
+        }
+        String luaPath = System.getenv("LUA_PATH_5_3");
+        if (luaPath == null) {
+            luaPath = System.getenv("LUA_PATH");
+        }
+        if (luaPath == null) {
+            return;
+        }
+        Object pkgObj = globals.rawget("package");
+        if (!(pkgObj instanceof LuaTable packageTable)) {
+            return;
+        }
+        luaPath = luaPath.replace(";;", ";" + DEFAULT_PATH + ";");
+        packageTable.rawset("path", toTruffleString(luaPath));
+        applyCPathEnvironmentOverride(false);
+    }
+
+    private void applyCPathEnvironmentOverride(boolean ignoreEnv) {
+        String luaCpath = null;
+        if (!ignoreEnv) {
+            luaCpath = System.getenv("LUA_CPATH_5_3");
+            if (luaCpath == null) {
+                luaCpath = System.getenv("LUA_CPATH");
+            }
+        }
+        if (luaCpath != null) {
+            Object pkgObj = globals.rawget("package");
+            if (pkgObj instanceof LuaTable packageTable) {
+                packageTable.rawset("cpath", toTruffleString(luaCpath));
+            }
+        }
+    }
+
+    /**
+     * 计算默认的 package.path（包含脚本目录）。
+     */
+    private String computeDefaultPath(Source source) {
         TruffleFile rootDir;
         if (source.getPath() != null) {
-            // 如果是文件（例如 java -jar ... script.lua）
-            // 获取该文件所在的目录
             TruffleFile scriptFile = env.getPublicTruffleFile(source.getPath());
             rootDir = scriptFile.getParent();
         } else {
-            // 如果是 REPL 或 字符串代码 (eval "...")
-            // 使用当前工作目录
             rootDir = env.getCurrentWorkingDirectory();
         }
-
         if (rootDir == null) {
             rootDir = env.getCurrentWorkingDirectory();
         }
+        scriptDirectory = rootDir.getAbsoluteFile();
 
-        // 3. 构建新的 path 字符串
-        // 目标格式: /script/dir/?.lua;/script/dir/?/init.lua;./?.lua...
-
-        String rootPath = rootDir.getAbsoluteFile().getPath();
-
-        // 确保路径以分隔符结尾，方便拼接
+        String rootPath = scriptDirectory.getPath();
         String separator = env.getFileNameSeparator();
         if (!rootPath.endsWith(separator)) {
             rootPath += separator;
         }
 
-        // 拼接模板
-        String newPath =
-                rootPath + "?" + ".lua;" +
-                        rootPath + "?" + separator + "init.lua;" +
-                        DEFAULT_PATH.replace("/", separator);
-        // 4. 更新 package.path
-        packageTable.rawset("path", toTruffleString(newPath));
+        return rootPath + "?" + ".lua;" +
+                rootPath + "?" + separator + "init.lua;" +
+                DEFAULT_PATH.replace("/", separator);
+    }
 
-        // 日志 (可选)
-        // System.out.println("Lua package.path set to: " + newPath);
+    /**
+     * 检查命令行参数中是否包含 -E 标志（禁用环境变量）。
+     * 扫描解释器选项区域（从索引1开始，直到遇到脚本路径）。
+     */
+    private boolean hasIgnoreEnvFlag() {
+        String[] applicationArguments = env.getApplicationArguments();
+        int i = 1;
+        while (i < applicationArguments.length) {
+            String opt = applicationArguments[i];
+            if (opt.equals("--")) {
+                break; // end of options
+            }
+            if (!opt.startsWith("-") || opt.equals("-")) {
+                break; // reached script path
+            }
+            if (opt.equals("-E")) {
+                return true;
+            }
+            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")) {
+                i++;
+            } else if (opt.equals("-l") || opt.equals("-e")) {
+                i += 2; // option + argument
+            } else if (opt.startsWith("-l") || opt.startsWith("-e")) {
+                i++; // combined like -lmod
+            } else {
+                i++; // unknown option
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 处理 LUA_INIT 环境变量。
+     * LUA_INIT_5_3 优先于 LUA_INIT。
+     * 如果值以 @ 开头，则加载并执行该文件。
+     * 否则，将其作为 Lua 代码块执行。
+     */
+    public void runLuaInit() {
+        if (hasIgnoreEnvFlag()) {
+            return;
+        }
+        String luaInit = System.getenv("LUA_INIT_5_3");
+        if (luaInit == null) {
+            luaInit = System.getenv("LUA_INIT");
+        }
+        if (luaInit == null || luaInit.isEmpty()) {
+            return;
+        }
+        try {
+            Source initSource;
+            if (luaInit.startsWith("@")) {
+                String filename = luaInit.substring(1);
+                TruffleFile file = env.getPublicTruffleFile(filename);
+                initSource = Source.newBuilder(LuaLanguage.ID, file)
+                        .name("@" + file.getPath())
+                        .build();
+            } else {
+                initSource = Source.newBuilder(LuaLanguage.ID, luaInit, "LUA_INIT")
+                        .build();
+            }
+            CallTarget callTarget = env.parseInternal(initSource);
+            callTarget.call();
+        } catch (IOException e) {
+            throw LuaException.create("LUA_INIT: " + e.getMessage(), null);
+        }
     }
 
     /**

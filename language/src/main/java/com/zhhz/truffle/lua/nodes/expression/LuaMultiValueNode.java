@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.nodes.expression;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
@@ -32,6 +33,7 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
      * @param frame 当前的执行帧 (VirtualFrame)
      * @return 一个包含所有表达式结果的 Object 数组。
      */
+    @ExplodeLoop
     public Object executeMultiValue(VirtualFrame frame) {
         // 如果表达式列表为空，返回一个空数组。
         int argCount = this.expressionNodes.length;
@@ -49,7 +51,7 @@ public final class LuaMultiValueNode extends LuaExpressionNode {
 
 
         // 步骤 B: 计算最后一个参数 (可能返回多值)
-        Object lastResult = this.expressionNodes[argCount - 1].executeGeneric(frame);
+        Object lastResult = this.expressionNodes[argCount - 1].executeMultiValue(frame);
 
         return LuaMultiValue.collect(prefixArgs, lastResult);
 

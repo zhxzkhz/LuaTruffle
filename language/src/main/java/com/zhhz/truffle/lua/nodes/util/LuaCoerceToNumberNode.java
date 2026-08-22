@@ -1,11 +1,14 @@
 package com.zhhz.truffle.lua.nodes.util;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.runtime.LuaString;
+
+import java.math.BigInteger;
 
 /**
  * 一个辅助节点，负责将任何 Lua 值强制转换为一个数字 (long 或 double)。
@@ -28,6 +31,19 @@ public abstract class LuaCoerceToNumberNode extends Node {
      * @return A Long, a Double, or null if coercion fails.
      */
     public abstract Object execute(Object value);
+
+    /**
+     * Lua 5.3 arithmetic converts string operands to floats, even when the
+     * string denotes an integer. Other conversion contexts preserve the
+     * integer subtype returned by {@link #execute(Object)}.
+     */
+    public final Object executeArithmetic(Object value) {
+        Object number = execute(value);
+        if (number instanceof Long && (value instanceof TruffleString || value instanceof LuaString)) {
+            return ((Long) number).doubleValue();
+        }
+        return number;
+    }
 
 
     // --- 特化 (Specializations) ---
@@ -57,54 +73,10 @@ public abstract class LuaCoerceToNumberNode extends Node {
     @Specialization
     @TruffleBoundary // 标记为边界，允许使用 Java String 操作
     public Object doString(TruffleString value) {
-
-        // 1. 将 TruffleString 转换为 Java String
-        String javaString = value.toJavaStringUncached();
-
-        // 2. 使用 Java 的 trim()
-        //    Java 的 trim() 会去除所有 ASCII 码 <= 32 的字符
-        //    这完美覆盖了 Lua 定义的空格、换行、制表符等
-        String trimmed = javaString.trim();
-
-        // 3. 判空
-        if (trimmed.isEmpty()) {
-            return null;
-        }
-        // --- 1. 处理十六进制 (0x) ---
-        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-            try {
-                // 去掉 "0x"，指定基数为 16
-                String hexBody = trimmed.substring(2);
-                // 使用 parseUnsignedLong 以支持 full 64-bit range (如 0xFFFFFFFFFFFFFFFF)
-                // 也就是 Lua 中的 -1
-                return Long.parseUnsignedLong(hexBody, 16);
-            } catch (NumberFormatException e) {
-                // 如果整数解析失败，可能是十六进制浮点数 (Lua 5.2+ 支持)
-                // Java 的 Double.parseDouble 支持 "0x1.8p1" 这种格式
-                try {
-                    return Double.parseDouble(trimmed);
-                } catch (NumberFormatException e2) {
-                    return null; // 彻底失败
-                }
-            }
-        }
-
-        // --- 2. 处理十进制 ---
-        try {
-            // 优先解析为 long
-            return Long.parseLong(trimmed);
-        } catch (NumberFormatException e1) {
-            try {
-                // 失败则解析为 double (处理小数或科学记数法)
-                return Double.parseDouble(trimmed);
-            } catch (NumberFormatException e2) {
-                return null;
-            }
-        }
+        return parseLuaNumber(value.toJavaStringUncached());
     }
 
     @Specialization
-    @TruffleBoundary
     public Object doString(LuaString value) {
         return doString(value.getValue());
     }
@@ -113,9 +85,174 @@ public abstract class LuaCoerceToNumberNode extends Node {
      * 慢速路径: 处理所有其他无法转换的类型 (table, function, boolean, nil)。
      * 我们简单地返回 null。
      */
-    @Specialization(guards = {"!isNumber(value)", "!isTruffleString(value)"})
+    @Fallback
     public Object doOther(Object value) {
         return null; // 表示转换失败
+    }
+
+    private static Object parseLuaNumber(String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && isLuaWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isLuaWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        if (start == end) {
+            return null;
+        }
+
+        String number = value.substring(start, end);
+        int signIndex = number.charAt(0) == '+' || number.charAt(0) == '-' ? 1 : 0;
+        boolean negative = number.charAt(0) == '-';
+        boolean hex = number.length() > signIndex + 2
+                && number.charAt(signIndex) == '0'
+                && (number.charAt(signIndex + 1) == 'x' || number.charAt(signIndex + 1) == 'X');
+
+        if (hex) {
+            return parseHexNumber(number, signIndex, negative);
+        }
+        if (!isDecimalNumber(number, signIndex)) {
+            return null;
+        }
+
+        boolean integer = number.indexOf('.', signIndex) < 0
+                && number.indexOf('e', signIndex) < 0
+                && number.indexOf('E', signIndex) < 0;
+        try {
+            if (integer) {
+                return Long.parseLong(number);
+            }
+            return Double.parseDouble(number);
+        } catch (NumberFormatException exception) {
+            try {
+                return Double.parseDouble(number);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+    }
+
+    private static Object parseHexNumber(String number, int signIndex, boolean negative) {
+        int bodyStart = signIndex + 2;
+        int exponentIndex = indexOfEither(number, 'p', 'P', bodyStart);
+        int fractionIndex = number.indexOf('.', bodyStart);
+        boolean floatingPoint = fractionIndex >= 0 || exponentIndex >= 0;
+
+        if (!isHexNumber(number, bodyStart, fractionIndex, exponentIndex)) {
+            return null;
+        }
+        if (floatingPoint) {
+            String javaNumber = exponentIndex < 0 ? number + "p0" : number;
+            try {
+                return Double.parseDouble(javaNumber);
+            } catch (NumberFormatException exception) {
+                return null;
+            }
+        }
+
+        BigInteger integer = new BigInteger(number.substring(bodyStart), 16);
+        if (negative) {
+            integer = integer.negate();
+        }
+        return integer.longValue();
+    }
+
+    private static boolean isDecimalNumber(String number, int start) {
+        int index = start;
+        int integerDigits = consumeDigits(number, index, 10);
+        index += integerDigits;
+        int fractionDigits = 0;
+        if (index < number.length() && number.charAt(index) == '.') {
+            index++;
+            fractionDigits = consumeDigits(number, index, 10);
+            index += fractionDigits;
+        }
+        if (integerDigits + fractionDigits == 0) {
+            return false;
+        }
+        if (index < number.length() && (number.charAt(index) == 'e' || number.charAt(index) == 'E')) {
+            index++;
+            if (index < number.length() && (number.charAt(index) == '+' || number.charAt(index) == '-')) {
+                index++;
+            }
+            int exponentDigits = consumeDigits(number, index, 10);
+            if (exponentDigits == 0) {
+                return false;
+            }
+            index += exponentDigits;
+        }
+        return index == number.length();
+    }
+
+    private static boolean isHexNumber(String number, int start, int fractionIndex, int exponentIndex) {
+        int significandEnd = exponentIndex < 0 ? number.length() : exponentIndex;
+        if (fractionIndex >= significandEnd) {
+            return false;
+        }
+        int digits = 0;
+        for (int i = start; i < significandEnd; i++) {
+            char character = number.charAt(i);
+            if (character == '.') {
+                if (i != fractionIndex) {
+                    return false;
+                }
+            } else if (digitValue(character, 16) >= 0) {
+                digits++;
+            } else {
+                return false;
+            }
+        }
+        if (digits == 0) {
+            return false;
+        }
+        if (exponentIndex >= 0) {
+            int index = exponentIndex + 1;
+            if (index < number.length() && (number.charAt(index) == '+' || number.charAt(index) == '-')) {
+                index++;
+            }
+            int exponentDigits = consumeDigits(number, index, 10);
+            return exponentDigits > 0 && index + exponentDigits == number.length();
+        }
+        return true;
+    }
+
+    private static int consumeDigits(String value, int start, int radix) {
+        int index = start;
+        while (index < value.length() && digitValue(value.charAt(index), radix) >= 0) {
+            index++;
+        }
+        return index - start;
+    }
+
+    private static int digitValue(char character, int radix) {
+        int digit;
+        if (character >= '0' && character <= '9') {
+            digit = character - '0';
+        } else if (character >= 'a' && character <= 'f') {
+            digit = character - 'a' + 10;
+        } else if (character >= 'A' && character <= 'F') {
+            digit = character - 'A' + 10;
+        } else {
+            return -1;
+        }
+        return digit < radix ? digit : -1;
+    }
+
+    private static int indexOfEither(String value, char first, char second, int start) {
+        for (int i = start; i < value.length(); i++) {
+            char character = value.charAt(i);
+            if (character == first || character == second) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isLuaWhitespace(char character) {
+        return character == ' ' || character == '\f' || character == '\n'
+                || character == '\r' || character == '\t' || character == 0x0b;
     }
 
 
@@ -126,11 +263,5 @@ public abstract class LuaCoerceToNumberNode extends Node {
     }
     protected static boolean isDouble(Object value) {
         return value instanceof Double;
-    }
-    protected static boolean isNumber(Object value) {
-        return isLong(value) || isDouble(value);
-    }
-    protected static boolean isTruffleString(Object value) {
-        return value instanceof TruffleString;
     }
 }

@@ -5,7 +5,6 @@ import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -25,67 +24,101 @@ import com.zhhz.truffle.lua.runtime.LuaMetatables;
 public abstract class LuaConcatNode extends LuaBinaryNode {
 
     @Specialization
-    protected static Object doConcat(TruffleString left,
-                                          TruffleString right,
-                                          @Bind Node node,
-                                          @Cached LuaToTruffleStringNode toTruffleStringNodeLeft,
-                                          @Cached LuaToTruffleStringNode toTruffleStringNodeRight,
-                                          @Cached("create()") LuaMetatableNode metatableNode,
-                                          @Cached TruffleString.ConcatNode concatNode) {
-        Object result = metatableNode.execute(left, right, LuaMetatables.__CONCAT);
-        if (result != null) {
-            return result;
-        }
-        return concatNode.execute(toTruffleStringNodeLeft.execute(node, left), toTruffleStringNodeRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    protected static TruffleString doStrings(TruffleString left, TruffleString right,
+                                              @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(left, right, LuaLanguage.STRING_ENCODING, true);
     }
 
-    // --- 慢速路径：处理元方法和错误 ---
+    @Specialization
+    protected static TruffleString doStringLong(TruffleString left, long right,
+                                                  @Bind Node node,
+                                                  @Cached LuaToTruffleStringNode toStr,
+                                                  @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(left, toStr.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
 
-    /**
-     * 回退 (Fallback) 特化: 处理所有其他类型组合。
-     */
+    @Specialization
+    protected static TruffleString doLongString(long left, TruffleString right,
+                                                 @Bind Node node,
+                                                 @Cached LuaToTruffleStringNode toStr,
+                                                 @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStr.execute(node, left), right, LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doStringDouble(TruffleString left, double right,
+                                                    @Bind Node node,
+                                                    @Cached LuaToTruffleStringNode toStr,
+                                                    @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(left, toStr.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doDoubleString(double left, TruffleString right,
+                                                   @Bind Node node,
+                                                   @Cached LuaToTruffleStringNode toStr,
+                                                   @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStr.execute(node, left), right, LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doLongLong(long left, long right,
+                                               @Bind Node node,
+                                               @Cached LuaToTruffleStringNode toStrLeft,
+                                               @Cached LuaToTruffleStringNode toStrRight,
+                                               @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStrLeft.execute(node, left), toStrRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doDoubleLong(double left, long right,
+                                                 @Bind Node node,
+                                                 @Cached LuaToTruffleStringNode toStrLeft,
+                                                 @Cached LuaToTruffleStringNode toStrRight,
+                                                 @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStrLeft.execute(node, left), toStrRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doLongDouble(long left, double right,
+                                                 @Bind Node node,
+                                                 @Cached LuaToTruffleStringNode toStrLeft,
+                                                 @Cached LuaToTruffleStringNode toStrRight,
+                                                 @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStrLeft.execute(node, left), toStrRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @Specialization
+    protected static TruffleString doDoubleDouble(double left, double right,
+                                                   @Bind Node node,
+                                                   @Cached LuaToTruffleStringNode toStrLeft,
+                                                   @Cached LuaToTruffleStringNode toStrRight,
+                                                   @Cached TruffleString.ConcatNode concatNode) {
+        return concatNode.execute(toStrLeft.execute(node, left), toStrRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+    }
+
     @Fallback
     @TruffleBoundary
     protected static Object doGeneric(Object left, Object right,
                                       @Bind Node node,
-                                      @Cached LuaToTruffleStringNode toTruffleStringNodeLeft,
-                                      @Cached LuaToTruffleStringNode toTruffleStringNodeRight,
+                                      @Cached LuaToTruffleStringNode toStrLeft,
+                                      @Cached LuaToTruffleStringNode toStrRight,
                                       @Cached("create()") LuaMetatableNode metatableNode,
                                       @Cached TruffleString.ConcatNode concatNode) {
-
-        if (isStringOrNumber(left)) {
-            throw typeError(left, right, node);
-        }
-        if (isStringOrNumber(right)) {
-            throw typeError(left, right, node);
-        }
 
         Object result = metatableNode.execute(left, right, LuaMetatables.__CONCAT);
         if (result != null) {
             return result;
         }
 
-        return concatNode.execute(toTruffleStringNodeLeft.execute(node, left), toTruffleStringNodeRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
+        if (!isStringOrNumber(left) || !isStringOrNumber(right)) {
+            throw LuaException.typeError(node, "..", left, right);
+        }
 
+        return concatNode.execute(toStrLeft.execute(node, left), toStrRight.execute(node, right), LuaLanguage.STRING_ENCODING, true);
     }
-
-    // --- 辅助方法 ---
 
     private static boolean isStringOrNumber(Object value) {
-        return !(value instanceof String) &&!(value instanceof TruffleString) && !(value instanceof Long) && !(value instanceof Double);
+        return value instanceof TruffleString || value instanceof String || value instanceof Long || value instanceof Double;
     }
-
-
-    public static AbstractTruffleException typeError(Object left, Object right, @Bind Node node) {
-        throw LuaException.typeError(node, "..", left, right);
-    }
-
-    // --- 辅助方法 ---
-
-
-    public static boolean isString(Object a, Object b) {
-        return a instanceof TruffleString || b instanceof TruffleString;
-    }
-
-
 }
