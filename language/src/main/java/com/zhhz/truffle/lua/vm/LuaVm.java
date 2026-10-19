@@ -7,6 +7,7 @@ import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.bytecode.Instruction;
 import com.zhhz.truffle.lua.bytecode.LuaConstant;
+import com.zhhz.truffle.lua.bytecode.LocVar;
 import com.zhhz.truffle.lua.bytecode.OpCode;
 import com.zhhz.truffle.lua.bytecode.Proto;
 import com.zhhz.truffle.lua.bytecode.Upvaldesc;
@@ -17,6 +18,7 @@ import com.zhhz.truffle.lua.runtime.LuaCell;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaLightUserdata;
+import com.zhhz.truffle.lua.runtime.LuaLineHook;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
@@ -38,6 +40,7 @@ import java.util.Arrays;
 public final class LuaVm {
 
     private static final int LFIELDS_PER_FLUSH = 50;
+    private static final int LUA_MINSTACK = 20;
     private static final int MAXTAGLOOP = 200;
     private static final Object[] NO_ARGS = new Object[0];
 
@@ -58,16 +61,20 @@ public final class LuaVm {
         final Proto p;
         final Object[] k;
         final Object[] upvals;
-        final Object[] regs;
+        Object[] regs;
         Object[] varargs = NO_ARGS;
         int top;
         int pc;
+        /** 对应的调试帧句柄（压入 LuaContext.getVmFrames()）。 */
+        VmFrame dbg;
 
         Frame(Proto p, Object[] upvals, Object[] k) {
             this.p = p;
             this.upvals = upvals;
             this.k = k;
-            this.regs = new Object[p.maxstacksize];
+            // 额外预留 LUA_MINSTACK(20) 个寄存器，容纳变长返回值溢出（对应 C 版
+            // Lua 栈在 maxstacksize 之外预留的 LUA_MINSTACK 余量）。
+            this.regs = new Object[p.maxstacksize + LUA_MINSTACK];
             Arrays.fill(this.regs, LuaNil.SINGLETON);
             this.top = p.maxstacksize;
         }
@@ -80,23 +87,74 @@ public final class LuaVm {
     /** 执行一个 VM 闭包，返回其结果数组。 */
     @TruffleBoundary
     public Object[] execute(LuaFunction function, Object[] args) {
-        Proto p = function.getProto();
-        Object[] upvals = function.getUpvalues();
-        Object[] k = materializeConstants(p);
-        Frame f = new Frame(p, upvals, k);
+        return execute(function, args, null, null);
+    }
 
-        int numParams = p.numparams;
-        for (int i = 0; i < numParams; i++) {
-            Object v = i < args.length ? args[i] : LuaNil.SINGLETON;
-            f.regs[i] = v == null ? LuaNil.SINGLETON : v;
+    /** 执行一个 VM 闭包，并记录其调用点解析出的 name/namewhat（供 debug.getinfo 'n'）。 */
+    @TruffleBoundary
+    public Object[] execute(LuaFunction function, Object[] args, String name, String namewhat) {
+        try {
+            context.enterLuaCall(null);
+        } catch (LuaException e) {
+            throw positionStackError(e);
         }
-        if ((p.isVararg & 2) != 0 && args.length > numParams) {
-            f.varargs = Arrays.copyOfRange(args, numParams, args.length);
-        }
+        try {
+            Proto p = function.getProto();
+            Object[] upvals = function.getUpvalues();
+            Object[] k = materializeConstants(p);
+            Frame f = new Frame(p, upvals, k);
 
-        curProto = p;
-        curPc = 0;
-        return runFrame(f);
+            int numParams = p.numparams;
+            for (int i = 0; i < numParams; i++) {
+                Object v = i < args.length ? args[i] : LuaNil.SINGLETON;
+                f.regs[i] = v == null ? LuaNil.SINGLETON : v;
+            }
+            if (p.isVararg != 0 && args.length > numParams) {
+                f.varargs = Arrays.copyOfRange(args, numParams, args.length);
+            }
+
+            VmFrame dbg = new VmFrame(function, p, f.regs);
+            dbg.varargs = f.varargs;
+            dbg.name = name;
+            dbg.namewhat = namewhat;
+            f.dbg = dbg;
+
+            java.util.List<VmFrame> stack = context.getVmFrames();
+            stack.add(dbg);
+            try {
+                curProto = p;
+                curPc = 0;
+                return runFrame(f);
+            } finally {
+                stack.remove(stack.size() - 1);
+            }
+        } finally {
+            context.exitLuaCall();
+        }
+    }
+
+    /**
+     * 为 {@link LuaContext#enterLuaCall} 抛出的无位置 "stack overflow" 补充当前 VM
+     * 指令的源码位置前缀（等价 C 端 {@code luaG_runerror}）。非栈溢出错误原样返回。
+     */
+    private RuntimeException positionStackError(LuaException e) {
+        Object errorObject = e.getErrorObject();
+        String text = null;
+        if (errorObject instanceof String s) {
+            text = s;
+        } else if (errorObject instanceof TruffleString ts) {
+            text = ts.toJavaStringUncached();
+        } else if (errorObject instanceof LuaString ls) {
+            text = ls.getValue().toJavaStringUncached();
+        }
+        if (text == null || !text.contains("stack overflow")) {
+            return e;
+        }
+        String full = withPosition(text);
+        if (full.equals(text)) {
+            return e;
+        }
+        return LuaException.positioned(full, full, null);
     }
 
     /**
@@ -152,10 +210,14 @@ public final class LuaVm {
         Object[] k = f.k;
         while (true) {
             int idx = f.pc;
+            dispatchHooks(f, idx);
             int i = code[idx];
             f.pc = idx + 1;
             curProto = f.p;
             curPc = idx;
+            if (f.dbg != null) {
+                f.dbg.pc = idx;
+            }
             OpCode op = Instruction.getOpcode(i);
             int a = Instruction.getA(i);
             switch (op) {
@@ -309,7 +371,9 @@ public final class LuaVm {
                     for (int j = 0; j < callArgs.length; j++) {
                         callArgs[j] = getR(f, a + 1 + j);
                     }
-                    Object[] results = callValue(getR(f, a), callArgs);
+                    Object function = getR(f, a);
+                    String[] nw = callName(f.p, idx, a, function);
+                    Object[] results = callValue(function, callArgs, nw[0], nw[1]);
                     if (c == 0) {
                         for (int j = 0; j < results.length; j++) {
                             setR(f, a + j, results[j]);
@@ -330,7 +394,9 @@ public final class LuaVm {
                     for (int j = 0; j < callArgs.length; j++) {
                         callArgs[j] = getR(f, a + 1 + j);
                     }
-                    Object[] results = callValue(getR(f, a), callArgs);
+                    Object function = getR(f, a);
+                    String[] nw = callName(f.p, idx, a, function);
+                    Object[] results = callValue(function, callArgs, nw[0], nw[1]);
                     for (int j = 0; j < results.length; j++) {
                         setR(f, a + j, results[j]);
                     }
@@ -388,9 +454,9 @@ public final class LuaVm {
                         f.pc++;
                     }
                     LuaTable table = (LuaTable) getR(f, a);
-                    long last = (long) (c - 1) * LFIELDS_PER_FLUSH + b;
-                    for (int j = b; j > 0; j--) {
-                        table.rawset(last--, getR(f, a + j));
+                    long base = (long) (c - 1) * LFIELDS_PER_FLUSH;
+                    for (int j = 1; j <= b; j++) {
+                        table.rawset(base + j, getR(f, a + j));
                     }
                     break;
                 }
@@ -422,8 +488,45 @@ public final class LuaVm {
     // =================================================================================
     // 寄存器 / upvalue 访问
     // =================================================================================
+    /**
+     * VM 解释器循环的钩子分发：在每个指令执行前检查 line/count 钩子，
+     * 复刻 C 版 {@code luaG_traceexec}（ldebug.c:612）的行为：
+     * <ul>
+     *   <li>函数首条指令（prevIdx<0）触发行钩子；</li>
+     *   <li>回边（idx <= prevIdx）强制触发；</li>
+     *   <li>与上一条指令的行不同时触发。</li>
+     * </ul>
+     * {@code lastHookPc} 每条指令都更新（对应 C 版每条指令 {@code L->oldpc = savedpc}），
+     * 这样函数调用返回后，下一条指令自动与调用指令的行比较（对应 {@code luaD_poscall}
+     * 把 {@code oldpc} 重置为调用者的 savedpc），从而抑制同行事件的重复触发。
+     */
+    private void dispatchHooks(Frame f, int idx) {
+        boolean active = !context.isInHook();
+        boolean needLine = active && context.isHookMask('l');
+        boolean needCount = active && context.getHookCount() > 0;
+        if (needCount) {
+            LuaLineHook.fireCount(context);
+        }
+        if (needLine && f.dbg != null) {
+            int[] lineinfo = f.p.lineinfo;
+            if (lineinfo != null && idx >= 0 && idx < lineinfo.length) {
+                int prevIdx = f.dbg.lastHookPc;
+                int line = lineinfo[idx];
+                int prevLine = (prevIdx >= 0 && prevIdx < lineinfo.length) ? lineinfo[prevIdx] : -1;
+                if (line > 0 && (prevIdx < 0 || idx <= prevIdx || line != prevLine)) {
+                    LuaLineHook.fireLine(context, line, true);
+                }
+            }
+        }
+        if (f.dbg != null) {
+            f.dbg.lastHookPc = idx;
+        }
+    }
 
     private static Object getR(Frame f, int r) {
+        if (r < 0 || r >= f.regs.length) {
+            return LuaNil.SINGLETON;
+        }
         Object v = f.regs[r];
         if (v instanceof LuaCell c) {
             return c.value == null ? LuaNil.SINGLETON : c.value;
@@ -435,11 +538,31 @@ public final class LuaVm {
         if (v == null) {
             v = LuaNil.SINGLETON;
         }
+        if (r >= f.regs.length) {
+            ensureRegs(f, r + 1);
+        }
         Object cur = f.regs[r];
         if (cur instanceof LuaCell c) {
             c.value = v;
         } else {
             f.regs[r] = v;
+        }
+    }
+
+    /**
+     * 确保寄存器数组至少有 {@code needed} 个槽位（对应 C 版 Lua 的栈增长）。
+     * 增长后同步更新调试帧持有的寄存器引用，保证 debug.getlocal 读到最新值。
+     */
+    private static void ensureRegs(Frame f, int needed) {
+        if (needed <= f.regs.length) {
+            return;
+        }
+        int oldCap = f.regs.length;
+        int newCap = Math.max(needed, oldCap + (oldCap >> 1));
+        f.regs = Arrays.copyOf(f.regs, newCap);
+        Arrays.fill(f.regs, oldCap, newCap, LuaNil.SINGLETON);
+        if (f.dbg != null) {
+            f.dbg.regs = f.regs;
         }
     }
 
@@ -495,10 +618,29 @@ public final class LuaVm {
                 ups[j] = f.upvals[ud.idx];
             }
         }
+        // 闭包缓存（对应 lvm.c 的 getcached/pushclosure）：若已缓存的闭包
+        // upvalue 全部一致（cell 身份相同），则复用，保证无 upvalue 闭包的相等性。
+        Object cachedObj = child.cachedClosure;
+        if (cachedObj instanceof LuaFunction cached) {
+            Object[] cups = cached.getUpvalues();
+            if (cups != null && cups.length == ups.length) {
+                boolean match = true;
+                for (int j = 0; j < ups.length; j++) {
+                    if (cups[j] != ups[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    return cached;
+                }
+            }
+        }
         LuaFunction closure = new LuaFunction(context.getFunctionShape(), context.getVmCallTarget());
         closure.setProto(child);
         closure.setVmClosure(true);
         closure.setUpvalues(ups);
+        child.cachedClosure = closure;
         return closure;
     }
 
@@ -613,9 +755,11 @@ public final class LuaVm {
             case '+': return x + y;
             case '-': return x - y;
             case '*': return x * y;
+            case '/': return (double) x / (double) y;
+            case '^': return Math.pow((double) x, (double) y);
             case '%': return luaMod(x, y);
             case '\\': return luaDiv(x, y);
-            default: return Math.pow((double) x, (double) y);
+            default: throw new IllegalStateException();
         }
     }
 
@@ -723,7 +867,7 @@ public final class LuaVm {
             if (y <= -64) {
                 return 0;
             }
-            return x >> (-y);
+            return x >>> (-y);
         }
         if (y >= 64) {
             return 0;
@@ -984,6 +1128,10 @@ public final class LuaVm {
     // =================================================================================
 
     private Object[] callValue(Object function, Object[] args) {
+        return callValue(function, args, null, null);
+    }
+
+    private Object[] callValue(Object function, Object[] args, String name, String namewhat) {
         if (!(function instanceof LuaFunction fn)) {
             Object tm = metafield(function, LuaMetatables.__CALL);
             if (tm instanceof LuaFunction) {
@@ -995,13 +1143,15 @@ public final class LuaVm {
             throw typeError(function, "call");
         }
         if (fn.isVmClosure()) {
-            return execute(fn, args);
+            return execute(fn, args, name, namewhat);
         }
         Object result;
         try {
             result = InteropLibrary.getUncached().execute(fn, args);
         } catch (com.oracle.truffle.api.interop.InteropException e) {
             throw error(e.getMessage());
+        } catch (LuaException e) {
+            throw decorate(e);
         }
         return toArray(result);
     }
@@ -1014,6 +1164,121 @@ public final class LuaVm {
             return new Object[]{LuaNil.SINGLETON};
         }
         return new Object[]{result};
+    }
+
+    // =================================================================================
+    // 调用点的函数名解析（复刻 ldebug.c 的 funcnamefromcode/getobjname）
+    // =================================================================================
+
+    private static final String[] NO_NAME = {null, null};
+
+    /** 仅对 VM 闭包解析调用点 name/namewhat；其余返回 {null,null}。 */
+    private static String[] callName(Proto p, int callPc, int funcReg, Object function) {
+        if (!(function instanceof LuaFunction fn) || !fn.isVmClosure()) {
+            return NO_NAME;
+        }
+        String local = localNameAt(p, funcReg + 1, callPc);
+        if (local != null) {
+            return new String[]{local, "local"};
+        }
+        return decodeObjName(p, findSetReg(p, callPc, funcReg), funcReg);
+    }
+
+    /** 复刻 luaF_getlocalname：第 n 个（1-based）活跃局部变量名，无则 null。 */
+    private static String localNameAt(Proto p, int n, int pc) {
+        if (n <= 0) {
+            return null;
+        }
+        LocVar[] locvars = p.locvars;
+        int remaining = n;
+        for (int i = 0; i < locvars.length && locvars[i].startpc <= pc; i++) {
+            if (pc < locvars[i].endpc) {
+                remaining--;
+                if (remaining == 0) {
+                    return locvars[i].varname;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 逆向查找最后一个写入寄存器 {@code reg} 的指令；无则 -1（简化版 findsetreg）。 */
+    private static int findSetReg(Proto p, int lastpc, int reg) {
+        int setreg = -1;
+        int[] code = p.code;
+        int limit = Math.min(Math.max(lastpc, 0), code.length);
+        for (int pc = 0; pc < limit; pc++) {
+            int i = code[pc];
+            if (Instruction.getA(i) == reg && writesA(Instruction.getOpcode(i))) {
+                setreg = pc;
+            }
+        }
+        return setreg;
+    }
+
+    /** 该 opcode 是否会写入其 A 寄存器（用于寄存器溯源）。 */
+    private static boolean writesA(OpCode op) {
+        return switch (op) {
+            case MOVE, LOADK, LOADKX, LOADBOOL, LOADNIL, GETUPVAL, GETTABUP, GETTABLE,
+                 NEWTABLE, SELF, ADD, SUB, MUL, DIV, MOD, POW, IDIV, BAND, BOR, BXOR,
+                 SHL, SHR, UNM, BNOT, NOT, LEN, CONCAT, CLOSURE, VARARG, TFORLOOP,
+                 TESTSET, FORLOOP -> true;
+            default -> false;
+        };
+    }
+
+    /** 复刻 getobjname：把「设置函数寄存器的指令」解码为 (name, namewhat)。 */
+    private static String[] decodeObjName(Proto p, int pc, int reg) {
+        if (pc < 0 || pc >= p.code.length) {
+            return NO_NAME;
+        }
+        int i = p.code[pc];
+        switch (Instruction.getOpcode(i)) {
+            case MOVE: {
+                int b = Instruction.getB(i);
+                if (b < Instruction.getA(i)) {
+                    String local = localNameAt(p, b + 1, pc);
+                    if (local != null) {
+                        return new String[]{local, "local"};
+                    }
+                    return decodeObjName(p, findSetReg(p, pc, b), b);
+                }
+                return NO_NAME;
+            }
+            case GETUPVAL:
+                return new String[]{upvalName(p, Instruction.getBx(i)), "upvalue"};
+            case GETTABUP: {
+                int b = Instruction.getB(i);
+                String table = upvalName(p, b);
+                String key = rkString(p, Instruction.getC(i));
+                return new String[]{key, "_ENV".equals(table) ? "global" : "field"};
+            }
+            case GETTABLE:
+                return new String[]{rkString(p, Instruction.getC(i)), "field"};
+            case SELF:
+                return new String[]{rkString(p, Instruction.getC(i)), "method"};
+            default:
+                return NO_NAME;
+        }
+    }
+
+    private static String upvalName(Proto p, int idx) {
+        if (idx >= 0 && idx < p.upvalues.length) {
+            return p.upvalues[idx].name;
+        }
+        return null;
+    }
+
+    /** 解析 RK(C) 操作数中的字符串常量（BITRK 位表示常量索引）；寄存器或非字符串返回 null。 */
+    private static String rkString(Proto p, int rk) {
+        if ((rk & 0x100) == 0) {
+            return null; // 是寄存器，不是常量
+        }
+        int idx = rk & 0xFF;
+        if (idx < p.k.length && p.k[idx] instanceof LuaConstant.Str s) {
+            return s.asString();
+        }
+        return null;
     }
 
     // =================================================================================
@@ -1165,7 +1430,36 @@ public final class LuaVm {
     // =================================================================================
 
     private RuntimeException error(String message) {
-        return LuaException.create(withPosition(message), null);
+        String full = withPosition(message);
+        return LuaException.positioned(full, full, null);
+    }
+
+    /**
+     * 在调用边界为被调函数抛出的「无位置」字符串错误补上 VM 当前 {@code chunkid:line:} 前缀
+     * （等价 C 端 {@code luaL_where(L,1)} / {@code luaG_addinfo}）。仅处理字符串错误对象，
+     * 表/数字等原样透传；已带位置的异常不重复加前缀。
+     */
+    private RuntimeException decorate(LuaException exception) {
+        if (exception.isPositioned()) {
+            return exception;
+        }
+        Object errorObject = exception.getErrorObject();
+        String text = null;
+        if (errorObject instanceof String s) {
+            text = s;
+        } else if (errorObject instanceof TruffleString ts) {
+            text = ts.toJavaStringUncached();
+        } else if (errorObject instanceof LuaString ls) {
+            text = ls.getValue().toJavaStringUncached();
+        }
+        if (text == null) {
+            return exception;
+        }
+        String full = withPosition(text);
+        if (full.equals(text)) {
+            return exception;
+        }
+        return LuaException.positioned(full, full, null);
     }
 
     private RuntimeException typeError(Object o, String operation) {

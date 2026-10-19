@@ -35,6 +35,7 @@ import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 import com.zhhz.truffle.lua.runtime.LuaThread;
+import com.zhhz.truffle.lua.vm.VmFrame;
 
 /**
  * Lua 5.3 {@code debug} 标准库的实现。
@@ -152,7 +153,7 @@ public final class DebugLibrary {
             // 非激活函数：只返回静态可得的信息；若该函数正出现在调用栈中，
             // 则补充 currentline 等动态信息。
             LuaFrameInfo active = findActiveFrame(function);
-            return new LuaFrameInfo(null, null, null, function).toInfoTable(context, what, active, false);
+            return new LuaFrameInfo(null, null, null, function, null).toInfoTable(context, what, active, false);
         }
 
         throw LuaException.create("bad argument #1 to 'getinfo' (number or function expected)", null);
@@ -184,6 +185,24 @@ public final class DebugLibrary {
         if (info == null) {
             throw LuaException.create("level out of range", null);
         }
+        // 字节码 VM 帧：局部变量名/值来自 Proto.locvars 与寄存器
+        if (info.vmFrame() != null) {
+            VmFrame vf = info.vmFrame();
+            if (n < 0) {
+                int idx = (int) -n;
+                if (idx < 1 || idx > vf.varargCount()) {
+                    return LuaNil.SINGLETON;
+                }
+                return new com.zhhz.truffle.lua.runtime.LuaMultiValue(new Object[]{
+                        LuaContext.toTruffleString("(*vararg)"), vf.vararg(idx)});
+            }
+            String name = vf.localName((int) n);
+            if (name == null) {
+                return LuaNil.SINGLETON;
+            }
+            return new com.zhhz.truffle.lua.runtime.LuaMultiValue(new Object[]{
+                    LuaContext.toTruffleString(name), vf.localValue((int) n)});
+        }
         Frame frame = info.frame();
         // 负 n：返回 vararg（"(*vararg)" + 值）
         if (n < 0) {
@@ -214,6 +233,22 @@ public final class DebugLibrary {
         LuaFrameInfo info = frameAtLevel(level);
         if (info == null) {
             throw LuaException.create("level out of range", null);
+        }
+        if (info.vmFrame() != null) {
+            VmFrame vf = info.vmFrame();
+            if (n < 0) {
+                int idx = (int) -n;
+                if (idx < 1 || !vf.setVararg(idx, value)) {
+                    return LuaNil.SINGLETON;
+                }
+                return LuaContext.toTruffleString("(*vararg)");
+            }
+            String name = vf.localName((int) n);
+            if (name == null) {
+                return LuaNil.SINGLETON;
+            }
+            vf.setLocal((int) n, value);
+            return LuaContext.toTruffleString(name);
         }
         if (!(info.frame() instanceof MaterializedFrame frame)) {
             return LuaNil.SINGLETON;
@@ -302,6 +337,19 @@ public final class DebugLibrary {
         return null;
     }
 
+    /** VM 闭包的 upvalue 名（来自 {@code Proto.upvalues}）；非 VM 闭包返回 null。 */
+    private static String[] vmUpvalueNames(LuaFunction function) {
+        if (function.isVmClosure() && function.getProto() != null) {
+            com.zhhz.truffle.lua.bytecode.Upvaldesc[] ups = function.getProto().upvalues;
+            String[] names = new String[ups.length];
+            for (int i = 0; i < ups.length; i++) {
+                names[i] = ups[i].name;
+            }
+            return names;
+        }
+        return null;
+    }
+
     private static boolean isChunkFunction(LuaFunction function) {
         return function.getCallTarget() instanceof RootCallTarget rct
                 && rct.getRootNode() instanceof LuaRootNode root && root.isChunk();
@@ -335,6 +383,16 @@ public final class DebugLibrary {
                             new Object[]{LuaContext.toTruffleString("_ENV"), environmentOf(function)})
                     : LuaNil.SINGLETON;
         }
+        String[] vmNames = vmUpvalueNames(function);
+        if (vmNames != null) {
+            Object[] cells = function.getUpvalues();
+            if (n > vmNames.length) {
+                return LuaNil.SINGLETON;
+            }
+            int idx = (int) n - 1;
+            Object name = vmNames[idx] != null ? LuaContext.toTruffleString(vmNames[idx]) : LuaNil.SINGLETON;
+            return new com.zhhz.truffle.lua.runtime.LuaMultiValue(new Object[]{name, readCell(cells, idx)});
+        }
         LuaRootNode.UpvalueDescriptor[] ups = upvalueDescriptors(function);
         Object[] cells = function.getUpvalues();
         if (ups == null || n > ups.length) {
@@ -359,6 +417,22 @@ public final class DebugLibrary {
                 return LuaContext.toTruffleString("_ENV");
             }
             return LuaNil.SINGLETON;
+        }
+        String[] vmNames = vmUpvalueNames(function);
+        if (vmNames != null) {
+            Object[] cells = function.getUpvalues();
+            if (n > vmNames.length) {
+                return LuaNil.SINGLETON;
+            }
+            int idx = (int) n - 1;
+            if (idx < cells.length) {
+                if (cells[idx] instanceof LuaCell cell) {
+                    cell.value = value;
+                } else {
+                    cells[idx] = new LuaCell(value);
+                }
+            }
+            return vmNames[idx] != null ? LuaContext.toTruffleString(vmNames[idx]) : LuaNil.SINGLETON;
         }
         LuaRootNode.UpvalueDescriptor[] ups = upvalueDescriptors(function);
         Object[] cells = function.getUpvalues();
@@ -394,6 +468,18 @@ public final class DebugLibrary {
                 return function;
             }
             throw LuaException.create("bad argument #2 to 'upvalueid' (invalid upvalue index)", null);
+        }
+        String[] vmIdNames = vmUpvalueNames(function);
+        if (vmIdNames != null) {
+            Object[] vmCells = function.getUpvalues();
+            int vmIdx = (int) n - 1;
+            if (n > vmIdNames.length || vmIdx >= vmCells.length || !(vmCells[vmIdx] instanceof LuaCell vmCell)) {
+                throw LuaException.create("bad argument #2 to 'upvalueid' (invalid upvalue index)", null);
+            }
+            if (vmCell.upvalueId == null) {
+                vmCell.upvalueId = new com.zhhz.truffle.lua.runtime.LuaLightUserdata(vmCell);
+            }
+            return vmCell.upvalueId;
         }
         LuaRootNode.UpvalueDescriptor[] ups = upvalueDescriptors(function);
         if (ups == null) {
@@ -472,6 +558,10 @@ public final class DebugLibrary {
         if (n > 0) {
             if (isChunkFunction(function)) {
                 valid = n == 1;
+            } else if (vmUpvalueNames(function) != null && function.getProto() != null) {
+                int idx = (int) n - 1;
+                Object[] cells = function.getUpvalues();
+                valid = idx < function.getProto().upvalues.length && idx < cells.length && cells[idx] != null;
             } else {
                 LuaRootNode.UpvalueDescriptor[] ups = upvalueDescriptors(function);
                 if (ups != null && n <= ups.length) {
@@ -658,10 +748,15 @@ public final class DebugLibrary {
         // 将 lastHookLine 锚定到 sethook 调用语句所在行，使同行的后续语句被去重
         LuaFrameInfo caller = frameAtLevel(1);
         int callerLine = -1;
-        if (caller != null && caller.callNode() != null) {
-            SourceSection section = caller.callNode().getEncapsulatingSourceSection();
-            if (section != null) {
-                callerLine = section.getStartLine();
+        if (caller != null) {
+            if (caller.vmFrame() != null) {
+                // VM 调用者：取当前指令行（等价 L->ci->u.l.savedpc 对应行）
+                callerLine = caller.vmFrame().currentLine();
+            } else if (caller.callNode() != null) {
+                SourceSection section = caller.callNode().getEncapsulatingSourceSection();
+                if (section != null) {
+                    callerLine = section.getStartLine();
+                }
             }
         }
         context.setLastHookLine(callerLine);
@@ -760,7 +855,12 @@ public final class DebugLibrary {
      * （currentline 的来源，帧每次嵌套调用都会更新）；{@code entryCallNode}
      * 是进入该帧的那次调用（来自调用者帧的 callNode，name/namewhat 的来源）。
      */
-    private record LuaFrameInfo(Node callNode, Node entryCallNode, Frame frame, LuaFunction function) {
+    private record LuaFrameInfo(Node callNode, Node entryCallNode, Frame frame, LuaFunction function, VmFrame vmFrame) {
+
+        /** 构造一个字节码 VM 调用帧的帧信息。 */
+        static LuaFrameInfo forVm(VmFrame vmFrame, Node entryCallNode) {
+            return new LuaFrameInfo(null, entryCallNode, null, vmFrame.function(), vmFrame);
+        }
 
         private RootNode root() {
             if (callNode != null) {
@@ -775,10 +875,34 @@ public final class DebugLibrary {
         }
 
         private boolean isLuaFrame() {
-            return root() instanceof LuaRootNode;
+            return vmFrame != null || isVmClosure() || root() instanceof LuaRootNode;
+        }
+
+        /** 若该函数是字节码 VM 闭包，返回其 {@link Proto}；否则返回 null。 */
+        private com.zhhz.truffle.lua.bytecode.Proto proto() {
+            if (function != null && function.isVmClosure()) {
+                return function.getProto();
+            }
+            return null;
+        }
+
+        /** 是否为字节码 VM 闭包（由 {@code load(binary)} 产生，静态信息来自 Proto 而非 AST）。 */
+        private boolean isVmClosure() {
+            return function != null && function.isVmClosure() && function.getProto() != null;
         }
 
         private String functionName() {
+            if (vmFrame != null) {
+                if (vmFrame.name() != null) {
+                    return vmFrame.name();
+                }
+                if (vmFrame.proto().linedefined == 0) {
+                    return "main chunk";
+                }
+            }
+            if (isVmClosure()) {
+                return function.getName() != null ? function.getName().toJavaStringUncached() : "?";
+            }
             RootNode root = root();
             if (root == null) {
                 return function != null && function.getName() != null
@@ -801,6 +925,10 @@ public final class DebugLibrary {
         }
 
         private String shortSource() {
+            if (isVmClosure()) {
+                String src = proto().source;
+                return src != null ? chunkId(src) : "?";
+            }
             SourceSection section = sourceSection();
             if (section != null) {
                 return section.getSource().getName();
@@ -821,6 +949,9 @@ public final class DebugLibrary {
 
         private int currentLine(LuaFrameInfo active) {
             LuaFrameInfo target = active != null ? active : this;
+            if (target.vmFrame != null) {
+                return target.vmFrame.currentLine();
+            }
             Node node = target.callNode();
             if (node != null) {
                 // callNode 通常是 Truffle 的 DirectCallNode，其封装 section 来自父
@@ -859,22 +990,32 @@ public final class DebugLibrary {
                 switch (what.charAt(i)) {
                     case 'S' -> {
                         boolean lua = isLuaFrame();
-                        SourceSection section = sourceSection();
                         // C 函数：source/short_src 为 "[C]"，无定义行
                         String source = "[C]";
                         String shortSrc = "[C]";
                         long lineDefined = -1L;
                         long lastLineDefined = -1L;
-                        if (lua && section != null) {
-                            // 文件型 Source 视为 "@path"（真实 Lua 的源名格式），
-                            // 其余用 Source 的名字（load 传入的 chunk 名或 chunk 文本）
-                            String rawName = section.getSource().getPath() != null
-                                    ? "@" + section.getSource().getName()
-                                    : section.getSource().getName();
-                            source = rawName;
-                            shortSrc = chunkId(rawName);
-                            lineDefined = section.getStartLine();
-                            lastLineDefined = section.getEndLine();
+                        if (isVmClosure()) {
+                            // 字节码闭包：静态信息全部来自 Proto（与 C 端 lua_getinfo 'S' 一致）
+                            com.zhhz.truffle.lua.bytecode.Proto p = proto();
+                            String src = p.source;
+                            source = src != null ? src : "=?";
+                            shortSrc = src != null ? chunkId(src) : "?";
+                            lineDefined = p.linedefined;
+                            lastLineDefined = p.lastlinedefined;
+                        } else if (lua) {
+                            SourceSection section = sourceSection();
+                            if (section != null) {
+                                // 文件型 Source 视为 "@path"（真实 Lua 的源名格式），
+                                // 其余用 Source 的名字（load 传入的 chunk 名或 chunk 文本）
+                                String rawName = section.getSource().getPath() != null
+                                        ? "@" + section.getSource().getName()
+                                        : section.getSource().getName();
+                                source = rawName;
+                                shortSrc = chunkId(rawName);
+                                lineDefined = section.getStartLine();
+                                lastLineDefined = section.getEndLine();
+                            }
                         }
                         table.rawset("source", LuaContext.toTruffleString(source));
                         table.rawset("short_src", LuaContext.toTruffleString(shortSrc));
@@ -887,40 +1028,67 @@ public final class DebugLibrary {
                         // name/namewhat 来自进入该帧的那次调用（调用者帧的当前位置），
                         // 而非该帧自己的当前位置
                         // 钩子函数被触发执行时，level 1 的 namewhat 为 "hook"
-                        String[] nameWhat;
-                        if (asHook) {
-                            nameWhat = new String[]{"hook", "hook"};
+                        if (vmFrame != null) {
+                            if (asHook) {
+                                table.rawset("name", LuaContext.toTruffleString("hook"));
+                                table.rawset("namewhat", LuaContext.toTruffleString("hook"));
+                            } else {
+                                table.rawset("name", vmFrame.name() != null
+                                        ? LuaContext.toTruffleString(vmFrame.name()) : LuaNil.SINGLETON);
+                                table.rawset("namewhat",
+                                        LuaContext.toTruffleString(vmFrame.namewhat() != null ? vmFrame.namewhat() : ""));
+                            }
                         } else {
-                            Node callSite = entryCallNode != null ? entryCallNode : callNode;
-                            nameWhat = resolveNameWhat(callSite);
+                            String[] nameWhat;
+                            if (asHook) {
+                                nameWhat = new String[]{"hook", "hook"};
+                            } else {
+                                Node callSite = entryCallNode != null ? entryCallNode : callNode;
+                                nameWhat = resolveNameWhat(callSite);
+                            }
+                            table.rawset("name", nameWhat[0] != null
+                                    ? LuaContext.toTruffleString(nameWhat[0]) : LuaNil.SINGLETON);
+                            table.rawset("namewhat", LuaContext.toTruffleString(nameWhat[1]));
                         }
-                        table.rawset("name", nameWhat[0] != null
-                                ? LuaContext.toTruffleString(nameWhat[0]) : LuaNil.SINGLETON);
-                        table.rawset("namewhat", LuaContext.toTruffleString(nameWhat[1]));
                     }
                     case 'f' -> table.rawset("func",
                             function != null ? function : LuaNil.SINGLETON);
                     case 'u' -> {
-                        table.rawset("nups", 0L);
-                        table.rawset("nparams", 0L);
-                        table.rawset("isvararg", false);
+                        if (isVmClosure()) {
+                            com.zhhz.truffle.lua.bytecode.Proto p = proto();
+                            table.rawset("nups", (long) p.upvalues.length);
+                            table.rawset("nparams", (long) p.numparams);
+                            table.rawset("isvararg", p.isVararg != 0);
+                        } else {
+                            table.rawset("nups", 0L);
+                            table.rawset("nparams", 0L);
+                            table.rawset("isvararg", false);
+                        }
                     }
                     case 't' -> table.rawset("istailcall", false);
                     case 'L' -> {
-                        // C 函数无 activelines（字段不存在，读取得 nil）
-                        if (!isLuaFrame()) {
-                            continue;
-                        }
-                        LuaTable lines = new LuaTable(context.getTableShape());
-                        SourceSection section = sourceSection();
-                        if (section != null) {
-                            // 近似：从函数体首行（linedefined+1）到 end 行。
-                            // 真实 Lua 中 `function` 关键字行无活跃代码
-                            for (long line = section.getStartLine() + 1; line <= section.getEndLine(); line++) {
-                                lines.rawset((Object) line, true);
+                        if (isVmClosure()) {
+                            // 字节码闭包：活跃行取自 Proto.lineinfo（与 C 端 lua_getinfo 'L' 一致）
+                            LuaTable lines = new LuaTable(context.getTableShape());
+                            for (int lineInfo : proto().lineinfo) {
+                                if (lineInfo > 0) {
+                                    lines.rawset((Object) (long) lineInfo, true);
+                                }
                             }
+                            table.rawset("activelines", lines);
+                        } else if (isLuaFrame()) {
+                            LuaTable lines = new LuaTable(context.getTableShape());
+                            SourceSection section = sourceSection();
+                            if (section != null) {
+                                // 近似：从函数体首行（linedefined+1）到 end 行。
+                                // 真实 Lua 中 `function` 关键字行无活跃代码
+                                for (long line = section.getStartLine() + 1; line <= section.getEndLine(); line++) {
+                                    lines.rawset((Object) line, true);
+                                }
+                            }
+                            table.rawset("activelines", lines);
                         }
-                        table.rawset("activelines", lines);
+                        // C 函数无 activelines（字段不存在，读取得 nil）
                     }
                     default -> {
                         // 已在上方校验，不会到达
@@ -952,6 +1120,19 @@ public final class DebugLibrary {
                 }
                 started[0] = true; // 第一个 Lua 帧 = level 1
             }
+            // 字节码 VM 容器帧：其内部的所有 VM 帧逻辑上位于此处（自内向外展开），
+            // 展开完后继续遍历 Truffle 帧（VM 根的外层调用者）。
+            if (isVmRootFrame(frameInstance)) {
+                java.util.List<VmFrame> vmFrames = context().getVmFrames();
+                for (int k = vmFrames.size() - 1; k >= 0; k--) {
+                    current[0]++;
+                    if (current[0] == level) {
+                        result[0] = LuaFrameInfo.forVm(vmFrames.get(k), frameInstance.getCallNode());
+                        return Boolean.TRUE;
+                    }
+                }
+                return null;
+            }
             current[0]++;
             if (current[0] == level) {
                 result[0] = toFrameInfo(frameInstance);
@@ -967,9 +1148,17 @@ public final class DebugLibrary {
             return null; // 返回 null 才会继续遍历后续帧
         });
         if (result[0] != null && entryCall[0] != null) {
-            return new LuaFrameInfo(result[0].callNode(), entryCall[0], result[0].frame(), result[0].function());
+            return new LuaFrameInfo(result[0].callNode(), entryCall[0], result[0].frame(), result[0].function(),
+                    result[0].vmFrame());
         }
         return result[0];
+    }
+
+    /** 该 Truffle 帧是否为字节码 VM 的容器帧（{@code LuaVmRootNode}）。 */
+    private static boolean isVmRootFrame(FrameInstance frameInstance) {
+        CallTarget target = frameInstance.getCallTarget();
+        return target instanceof RootCallTarget rootCallTarget
+                && rootCallTarget.getRootNode() instanceof com.zhhz.truffle.lua.vm.LuaVmRootNode;
     }
 
     /**
@@ -988,6 +1177,14 @@ public final class DebugLibrary {
 
     /** 在调用栈中查找指定函数的激活帧（用于对函数值调用 getinfo 时补充动态信息）。 */
     private static LuaFrameInfo findActiveFrame(LuaFunction function) {
+        // 先查字节码 VM 帧（整条 VM 调用栈不在 Truffle 帧中）
+        java.util.List<VmFrame> vmFrames = context().getVmFrames();
+        for (int k = vmFrames.size() - 1; k >= 0; k--) {
+            VmFrame vf = vmFrames.get(k);
+            if (vf.function() == function) {
+                return LuaFrameInfo.forVm(vf, null);
+            }
+        }
         LuaFrameInfo[] result = {null};
         Truffle.getRuntime().iterateFrames(frameInstance -> {
             Node callNode = frameInstance.getCallNode();
@@ -1010,7 +1207,7 @@ public final class DebugLibrary {
             TruffleString name = luaRoot.getTSName();
             function = new LuaFunction(context().getFunctionShape(), luaRoot.getCallTarget(), null, name);
         }
-        return new LuaFrameInfo(callNode, null, frame, function);
+        return new LuaFrameInfo(callNode, null, frame, function, null);
     }
 
     private static boolean isBuiltinRoot(FrameInstance frameInstance) {
@@ -1030,10 +1227,19 @@ public final class DebugLibrary {
                     return null;
                 }
                 started[0] = true;
-                current[0] = 1;
-            } else {
-                current[0]++;
             }
+            // 字节码 VM 容器帧：自内向外展开所有 VM 帧
+            if (isVmRootFrame(frameInstance)) {
+                java.util.List<VmFrame> vmFrames = ctx.getVmFrames();
+                for (int k = vmFrames.size() - 1; k >= 0; k--) {
+                    current[0]++;
+                    if (current[0] >= startLevel) {
+                        appendVmFrame(builder, vmFrames.get(k), current[0], inHook);
+                    }
+                }
+                return null;
+            }
+            current[0]++;
             if (current[0] < startLevel) {
                 return null;
             }
@@ -1063,6 +1269,20 @@ public final class DebugLibrary {
         });
     }
 
+    /** 把一个字节码 VM 帧追加到 traceback 文本。 */
+    private static void appendVmFrame(StringBuilder builder, VmFrame vf, long level, boolean inHook) {
+        LuaFrameInfo info = LuaFrameInfo.forVm(vf, null);
+        int line = info.currentLine(null);
+        builder.append("\n\t").append(info.shortSource()).append(":").append(line);
+        if (inHook && level == 1) {
+            builder.append(": in hook");
+        } else if ("main chunk".equals(info.functionName())) {
+            builder.append(": in main chunk");
+        } else {
+            builder.append(": in function '").append(info.functionName()).append("'");
+        }
+    }
+
     // =================================================================================
     // 内部实现：帧槽位工具
     // =================================================================================
@@ -1073,6 +1293,22 @@ public final class DebugLibrary {
      */
     private static String getParamName(LuaFunction func, int n) {
         if (n <= 0) {
+            return null;
+        }
+        if (func.isVmClosure() && func.getProto() != null) {
+            com.zhhz.truffle.lua.bytecode.Proto proto = func.getProto();
+            if (n > proto.numparams) {
+                return null;
+            }
+            int count = 0;
+            for (com.zhhz.truffle.lua.bytecode.LocVar lv : proto.locvars) {
+                if (lv.startpc <= 0 && 0 < lv.endpc) {
+                    count++;
+                    if (count == n) {
+                        return lv.varname;
+                    }
+                }
+            }
             return null;
         }
         if (func.getCallTarget() instanceof RootCallTarget rct

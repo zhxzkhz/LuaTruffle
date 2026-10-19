@@ -40,10 +40,14 @@ public final class LuaLineHook {
 
     /** 触发一次行事件（line <= 0 表示无行信息，忽略）。 */
     public static void fireLine(Node location, int line, boolean force) {
+        fireLine(LuaContext.get(location), line, force);
+    }
+
+    /** 触发一次行事件（VM 解释器循环直接调用，无需 Node）。 */
+    public static void fireLine(LuaContext context, int line, boolean force) {
         if (line <= 0) {
             return;
         }
-        LuaContext context = LuaContext.get(location);
         if (!context.isHookMask('l')) {
             return;
         }
@@ -86,7 +90,11 @@ public final class LuaLineHook {
 
     /** 触发一次 count 事件。语句计数达到阈值时调用。 */
     public static void fireCount(Node location) {
-        LuaContext context = LuaContext.get(location);
+        fireCount(LuaContext.get(location));
+    }
+
+    /** 触发一次 count 事件（VM 解释器循环直接调用）。 */
+    public static void fireCount(LuaContext context) {
         int count = context.getHookCount();
         if (count <= 0) {
             return;

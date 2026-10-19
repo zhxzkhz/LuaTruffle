@@ -34,6 +34,13 @@ public final class Proto {
     /** 需要的最大栈寄存器数。 */
     public int maxstacksize;
 
+    /**
+     * 最近一次为该原型创建的闭包缓存（对应 C 版 {@code Proto.cache}）。
+     * VM 的 OP_CLOSURE 在 upvalue 全部一致时复用它，使无 upvalue 的闭包
+     * 在同一原型下具有相同身份（影响闭包相等性判定）。
+     */
+    public Object cachedClosure;
+
     public int sizecode() {
         return code.length;
     }

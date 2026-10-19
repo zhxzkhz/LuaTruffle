@@ -208,6 +208,12 @@ public final class LuaContext {
     public int getInstructionCount() { return instructionCount; }
     public void setInstructionCount(int count) { this.instructionCount = count; }
 
+    // 字节码 VM 的逻辑调用栈（见 com.zhhz.truffle.lua.vm.VmFrame）。
+    // VM 整条调用栈运行在单个 Truffle 帧内，因此显式维护此列表供 debug 库做层级查询。
+    private final java.util.List<com.zhhz.truffle.lua.vm.VmFrame> vmFrames = new java.util.ArrayList<>();
+
+    public java.util.List<com.zhhz.truffle.lua.vm.VmFrame> getVmFrames() { return vmFrames; }
+
     // coroutine 线程跟踪
     public LuaThread getCurrentCoroutine() { return currentCoroutine.get(); }
     public void setCurrentCoroutine(LuaThread thread) { currentCoroutine.set(thread); }

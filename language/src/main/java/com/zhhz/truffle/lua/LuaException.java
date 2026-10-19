@@ -62,6 +62,7 @@ public final class LuaException extends AbstractTruffleException {
 
     private static final InteropLibrary UNCACHED_LIB = InteropLibrary.getFactory().getUncached();
     private final Object errorObject;
+    private boolean positioned;
 
     LuaException(String message, Node location) {
         this(message, message, location);
@@ -86,7 +87,26 @@ public final class LuaException extends AbstractTruffleException {
     @TruffleBoundary
     public static AbstractTruffleException runtimeError(String message, Node location) {
         String full = withPosition(message, location);
-        return new LuaException(full, full, location);
+        LuaException exception = new LuaException(full, full, location);
+        exception.positioned = true;
+        return exception;
+    }
+
+    /**
+     * 创建已带位置的运行时错误：{@code errorObject} 作为 pcall 返回值，
+     * {@code displayMessage} 作为显示消息。用于 VM 在调用边界为外层抛出的
+     * 无位置错误补充 {@code chunkid:line:} 前缀（等价 C 端 {@code luaL_where}）。
+     */
+    @TruffleBoundary
+    public static AbstractTruffleException positioned(Object errorObject, String displayMessage, Node location) {
+        LuaException exception = new LuaException(displayMessage, errorObject, location);
+        exception.positioned = true;
+        return exception;
+    }
+
+    /** 该异常是否已包含源码位置前缀（避免 VM 重复补前缀）。 */
+    public boolean isPositioned() {
+        return positioned;
     }
 
     /** 若 location 有可用的源码位置，则为 message 加上 {@code chunkid:line: } 前缀。 */

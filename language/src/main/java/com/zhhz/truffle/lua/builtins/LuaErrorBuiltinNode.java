@@ -49,16 +49,22 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
         String messageText = coercibleString(message);
         if (messageText != null) {
             Node errorLocation = findErrorLocation(level);
-            Object errorObject = message;
             if (level > 0 && errorLocation != null) {
                 SourceSection section = errorLocation.getEncapsulatingSourceSection();
                 if (section != null && section.isAvailable()) {
-                    errorObject = LuaContext.toTruffleString(
+                    Object errorObject = LuaContext.toTruffleString(
                             section.getSource().getName() + ":" + section.getStartLine() + ": "
                                     + messageText);
+                    throw LuaException.positioned(errorObject, String.valueOf(errorObject), errorLocation);
                 }
             }
-            throw LuaException.create(errorObject, errorLocation);
+            // level == 0：不加前缀，且标记已处理，避免 VM 调用边界再补前缀。
+            // level > 0 但位置不可用（如运行在字节码 VM 上）：保持无标记，
+            // 交给 VM 在调用边界用当前 chunkid:line 补充前缀。
+            if (level == 0) {
+                throw LuaException.positioned(message, String.valueOf(message), errorLocation);
+            }
+            throw LuaException.create(message, errorLocation);
         }
 
         // 非字符串错误对象：在抛出前（此时调用栈仍然活着）经 tostring 内建格式化，
