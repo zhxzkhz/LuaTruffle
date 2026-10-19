@@ -25,8 +25,10 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
 
     /**
      * Base implementation of parsing, which handles lexer and parser setup, and error reporting.
+     *
+     * @return 解析得到的语法树根节点，供调用方在需要时复用（例如字节码编译器直接消费同一棵 CST）。
      */
-    protected static void parseLuaImpl(Source source, LuaBaseParser visitor) {
+    protected static LuaParser.LualanguageContext parseLuaImpl(Source source, LuaBaseParser visitor) {
         String characters = toByteModelText(source);
         if (!characters.isEmpty() && characters.charAt(0) == '\uFEFF') {
             characters = ' ' + characters.substring(1);
@@ -45,8 +47,10 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
         parser.addErrorListener(listener);
         visitor.tokenStream = tokens;
 
+        LuaParser.LualanguageContext tree;
         try {
-            parser.lualanguage().accept(visitor);
+            tree = parser.lualanguage();
+            tree.accept(visitor);
         } catch (LuaParserBase.CLimitReached limit) {
             int line = limit.token != null ? limit.token.getLine() : 1;
             int column = limit.token != null ? limit.token.getCharPositionInLine() : 0;
@@ -54,6 +58,7 @@ public abstract class LuaBaseParser extends LuaParserBaseVisitor<LuaStatementNod
                     chunkId(source.getName()) + ":" + line
                             + ": too many C levels (limit is 200) in main function");
         }
+        return tree;
     }
 
     /**

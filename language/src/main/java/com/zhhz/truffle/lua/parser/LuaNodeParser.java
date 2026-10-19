@@ -30,7 +30,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
     public static RootCallTarget parseRootLua(LuaLanguage language, Source source) {
         LuaNodeParser visitor = new LuaNodeParser(language, source);
-        parseLuaImpl(source, visitor);
+        LuaParser.LualanguageContext tree = parseLuaImpl(source, visitor);
 
         final int functionStartPos = 0;
         final int functionLength = Math.max(source.getLength(), 0);
@@ -44,7 +44,7 @@ public class LuaNodeParser extends LuaBaseParser {
         rootNode.setChunk(true);
         rootNode.insert(rootBlock);
 
-        attachBytecodeProtos(source, rootNode, rootBlock);
+        attachBytecodeProtos(source, tree, rootNode);
 
         return rootNode.getCallTarget();
     }
@@ -52,16 +52,16 @@ public class LuaNodeParser extends LuaBaseParser {
     /**
      * 为源码函数附加字节码 {@link Proto}，仅用于 {@code string.dump}。
      *
-     * <p>做法：用与 CST 无关的 {@code LuaCompiler} 重新编译同一段源码，得到一棵 Proto 树；
-     * 再对 AST 做前序 DFS 收集 {@link LuaFunctionLiteralNode}（顺序与 Proto 树的前序一致，
-     * 因为函数字面量是嵌套的，前序即「外层先于内层、兄弟按源码顺序」）。若数量匹配，
-     * 逐个把对应子树 Proto 挂到其 RootNode 上；主 chunk 的 Proto 挂到根节点。
+     * <p>做法：复用 AST 解析所用同一棵 ANTLR CST，直接编译出 Proto 树（避免重复词法/语法
+     * 分析，并保证与 AST 使用完全一致的字节模型文本与行号）；再对 AST 做前序 DFS 收集
+     * {@link LuaFunctionLiteralNode}（顺序与 Proto 树的前序一致，因为函数字面量是嵌套的，
+     * 前序即「外层先于内层、兄弟按源码顺序」）。若数量匹配，逐个把对应子树 Proto 挂到其
+     * RootNode 上；主 chunk 的 Proto 挂到根节点。
      */
-    private static void attachBytecodeProtos(Source source, LuaRootNode rootNode, LuaStatementNode rootBlock) {
+    private static void attachBytecodeProtos(Source source, LuaParser.LualanguageContext tree, LuaRootNode rootNode) {
         try {
-            String text = source.getCharacters().toString();
             com.zhhz.truffle.lua.bytecode.Proto mainProto =
-                    com.zhhz.truffle.lua.bytecode.LuaCompiler.compile(text, source.getName());
+                    com.zhhz.truffle.lua.bytecode.LuaCompiler.compile(tree, source.getName());
             rootNode.setProto(mainProto);
 
             List<LuaFunctionLiteralNode> literals = new ArrayList<>();
