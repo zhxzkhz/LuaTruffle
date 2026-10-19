@@ -204,9 +204,10 @@ class DebugLibraryTest extends AbstractLuaTest {
             Value result = context.eval("lua", """
                     local up = 'captured'
                     local function reader()
-                        return debug.getupvalue(reader, 1)
+                        return up
                     end
-                    return reader()
+                    local name, value = debug.getupvalue(reader, 1)
+                    return name, value
                     """);
             assertEquals("up", result.getArrayElement(0).asString());
             assertEquals("captured", result.getArrayElement(1).asString());
