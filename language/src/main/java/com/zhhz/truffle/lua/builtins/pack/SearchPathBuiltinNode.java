@@ -4,6 +4,7 @@ import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
@@ -12,6 +13,7 @@ import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "package.searchpath")
 public abstract class SearchPathBuiltinNode extends LuaBuiltinNode {

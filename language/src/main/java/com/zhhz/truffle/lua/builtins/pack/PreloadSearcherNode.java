@@ -2,12 +2,14 @@ package com.zhhz.truffle.lua.builtins.pack;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "searcher_preload")
 public abstract class PreloadSearcherNode extends LuaBuiltinNode {

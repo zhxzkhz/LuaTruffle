@@ -10,6 +10,8 @@ import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode;
+import com.zhhz.truffle.lua.parser.LuaBaseParser.LocalSlot;
+import com.zhhz.truffle.lua.runtime.LuaCell;
 
 /**
  * Lua 语言中 "数值型 for 循环" (Numeric For Loop) 的 AST 节点实现。
@@ -37,6 +39,9 @@ public class LuaNumericForNode extends LuaStatementNode {
     private final int limitIndex;
     private final int stepIndex;
 
+    /** 循环变量是否被内层闭包捕获（此时以 cell 存储，每次迭代新建 cell）。 */
+    private final boolean loopCaptured;
+
     /** 负责将表达式结果强制转换为数字的节点 */
     @Child private LuaCoerceToNumberNode coerceNode;
 
@@ -47,23 +52,36 @@ public class LuaNumericForNode extends LuaStatementNode {
     @Child
     private LoopNode loopNode;
 
-    public LuaNumericForNode(int loopVariableIndex,
+    public LuaNumericForNode(int loopVariableIndex, int hookHeaderLine, int hookEndLine,
                              int limitIndex,
                              int stepIndex,
                              LuaExpressionNode startNode,
                              LuaExpressionNode limitNode,
                              LuaExpressionNode stepNode,
                              LuaStatementNode bodyNode) {
+        this(loopVariableIndex, hookHeaderLine, hookEndLine, limitIndex, stepIndex,
+                startNode, limitNode, stepNode, bodyNode, null);
+    }
+
+    public LuaNumericForNode(int loopVariableIndex, int hookHeaderLine, int hookEndLine,
+                             int limitIndex,
+                             int stepIndex,
+                             LuaExpressionNode startNode,
+                             LuaExpressionNode limitNode,
+                             LuaExpressionNode stepNode,
+                             LuaStatementNode bodyNode,
+                             LocalSlot loopSlot) {
         this.loopVariableIndex = loopVariableIndex;
         this.limitIndex = limitIndex;
         this.stepIndex = stepIndex;
+        this.loopCaptured = loopSlot != null && loopSlot.captured;
         this.startNode = startNode;
         this.limitNode = limitNode;
         this.stepNode = stepNode;
         // 创建转换节点，用于处理 Lua 的弱类型特性（如字符串 "10" 转数字 10）
         this.coerceNode = LuaCoerceToNumberNode.create();
         // 创建 LoopNode，包裹具体的重复执行逻辑 (RepeatingNode)
-        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaNumericForRepeatingNode(this.loopVariableIndex, this.limitIndex, this.stepIndex, bodyNode));
+        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaNumericForRepeatingNode(this.loopVariableIndex, this.limitIndex, this.stepIndex, bodyNode, hookHeaderLine, hookEndLine, this.loopCaptured));
     }
 
 
@@ -72,24 +90,28 @@ public class LuaNumericForNode extends LuaStatementNode {
         // 1. 【参数求值阶段】
         // Lua 语义规定：start, limit, step 只在循环开始前计算一次。
         // 这里我们获取结果并尝试转换为 long 类型。
-        Object startValue = expectNumber("for loop 'initial' value", startNode.executeGeneric(frame), coerceNode);
-        Object limitValue = expectNumber("for loop 'limit' value", limitNode.executeGeneric(frame), coerceNode);
+        Object startValue = expectNumber("initial", startNode.executeGeneric(frame), coerceNode);
+        Object limitValue = expectNumber("limit", limitNode.executeGeneric(frame), coerceNode);
         Object stepValue = stepNode == null
                 ? 1L
-                : expectNumber("for loop 'step' value", stepNode.executeGeneric(frame), coerceNode);
+                : expectNumber("step", stepNode.executeGeneric(frame), coerceNode);
 
         if (startValue instanceof Long startLong && stepValue instanceof Long stepLong) {
             if (stepLong == 0) {
-                throw LuaException.create("for loop step is zero", this);
+                throw LuaException.runtimeError("'for' step is zero", this);
             }
             Long limitLong = integerLimit(limitValue, stepLong);
             if (limitLong == null) {
                 return;
             }
-            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Long);
+            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, loopCaptured ? FrameSlotKind.Object : FrameSlotKind.Long);
             frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Long);
             frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Long);
-            frame.setLong(loopVariableIndex, startLong);
+            if (loopCaptured) {
+                frame.setObject(loopVariableIndex, new LuaCell(startLong));
+            } else {
+                frame.setLong(loopVariableIndex, startLong);
+            }
             frame.setLong(limitIndex, limitLong);
             frame.setLong(stepIndex, stepLong);
         } else {
@@ -97,12 +119,16 @@ public class LuaNumericForNode extends LuaStatementNode {
             double limitDouble = asDouble(limitValue);
             double stepDouble = asDouble(stepValue);
             if (stepDouble == 0.0) {
-                throw LuaException.create("for loop step is zero", this);
+                throw LuaException.runtimeError("'for' step is zero", this);
             }
-            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, FrameSlotKind.Double);
+            frame.getFrameDescriptor().setSlotKind(loopVariableIndex, loopCaptured ? FrameSlotKind.Object : FrameSlotKind.Double);
             frame.getFrameDescriptor().setSlotKind(limitIndex, FrameSlotKind.Double);
             frame.getFrameDescriptor().setSlotKind(stepIndex, FrameSlotKind.Double);
-            frame.setDouble(loopVariableIndex, startDouble);
+            if (loopCaptured) {
+                frame.setObject(loopVariableIndex, new LuaCell(startDouble));
+            } else {
+                frame.setDouble(loopVariableIndex, startDouble);
+            }
             frame.setDouble(limitIndex, limitDouble);
             frame.setDouble(stepIndex, stepDouble);
         }
@@ -157,8 +183,7 @@ public class LuaNumericForNode extends LuaStatementNode {
         return (long) Math.ceil(limit);
     }
 
-    RuntimeException createException(String context, Object value){
-        String type = value == null ? "null" : value.getClass().getSimpleName();
-        return LuaException.create("bad " + context + " (number expected, got " + type + ")", this);
+    RuntimeException createException(String which, Object value){
+        return LuaException.runtimeError("'for' " + which + " must be a number", this);
     }
 }

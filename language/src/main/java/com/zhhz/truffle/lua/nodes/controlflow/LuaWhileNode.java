@@ -67,8 +67,14 @@ public final class LuaWhileNode extends LuaStatementNode {
     @Child private LoopNode loopNode;
 
     public LuaWhileNode(LuaExpressionNode conditionNode, LuaStatementNode bodyNode) {
+        this(conditionNode, bodyNode, 0, 0);
+    }
+
+    public LuaWhileNode(LuaExpressionNode conditionNode, LuaStatementNode bodyNode,
+                        int condLine, int endLine) {
         // 创建 LoopNode，包裹具体的重复执行逻辑
-        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaWhileRepeatingNode(conditionNode, bodyNode));
+        this.loopNode = Truffle.getRuntime().createLoopNode(
+                new LuaWhileRepeatingNode(conditionNode, bodyNode, condLine, endLine));
     }
 
     @Override

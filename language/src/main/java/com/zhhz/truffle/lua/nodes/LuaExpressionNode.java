@@ -134,4 +134,13 @@ public abstract class LuaExpressionNode extends LuaStatementNode {
         return null;
     }
 
+    /**
+     * 用于运行时类型错误消息的变量来源后缀，形如 {@code " (global 'x')"}、
+     * {@code " (local 'x')"}、{@code " (upvalue 'x')"}、{@code " (field 'x')"}。
+     * 非简单变量读取的表达式返回空串（标准 Lua 的 varinfo）。
+     */
+    public String getErrorSuffix() {
+        return "";
+    }
+
 }

@@ -39,8 +39,8 @@ public abstract class LuaUnaryMinusNode extends LuaExpressionNode {
     @Specialization(replaces = {"negateNumber", "negateDouble"})
     @TruffleBoundary
     protected Object negateGeneric(Object value,
-                                   @Cached("create()") LuaCoerceToNumberNode coerce,
-                                   @Cached("create()") LuaMetatableNode metatableNode) {
+                                   @Cached(value = "create()", neverDefault = true) LuaCoerceToNumberNode coerce,
+                                   @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode) {
 
         Object object = coerce.executeArithmetic(value);
 
@@ -54,10 +54,12 @@ public abstract class LuaUnaryMinusNode extends LuaExpressionNode {
 
         Object result = metatableNode.execute(value, null, LuaMetatables.__UNM);
         if (result != null) {
-            return result;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result);
         }
 
-        throw LuaException.create("attempt to perform arithmetic on a non-number value",this);
+        throw LuaException.runtimeError("attempt to perform arithmetic on a "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(value) + " value"
+                + getOperandNode().getErrorSuffix(), this);
     }
 
 

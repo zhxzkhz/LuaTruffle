@@ -42,7 +42,11 @@ public abstract class LuaWriteTableNode extends LuaWriteVariableNode {
     public final void execute(VirtualFrame frame, Object value) {
         Object table = getTableNode().executeGeneric(frame);
         Object key = getKeyNode().executeGeneric(frame);
-        writeHelperNode.executeWrite(table, key, value);
+        try {
+            writeHelperNode.executeWrite(table, key, value);
+        } catch (com.oracle.truffle.api.exception.AbstractTruffleException e) {
+            throw withIndexSuffix(e);
+        }
     }
 
     @Override
@@ -53,7 +57,25 @@ public abstract class LuaWriteTableNode extends LuaWriteVariableNode {
     @Override
     public void writePrepared(VirtualFrame frame, Object preparedTarget, Object value) {
         PreparedTarget target = (PreparedTarget) preparedTarget;
-        writeHelperNode.executeWrite(target.table(), target.key(), value);
+        try {
+            writeHelperNode.executeWrite(target.table(), target.key(), value);
+        } catch (com.oracle.truffle.api.exception.AbstractTruffleException e) {
+            throw withIndexSuffix(e);
+        }
+    }
+
+    /**
+     * 写入路径的 "attempt to index a ... value" 错误需要附带上表表达式的变量来源后缀
+     * （如 {@code " (upvalue 'a')"}），与标准 Lua 的 varinfo 一致。
+     */
+    private com.oracle.truffle.api.exception.AbstractTruffleException withIndexSuffix(
+            com.oracle.truffle.api.exception.AbstractTruffleException e) {
+        String message = e.getMessage();
+        if (message != null && message.startsWith("attempt to index a ")) {
+            return com.zhhz.truffle.lua.LuaException.runtimeError(
+                    message + getTableNode().getErrorSuffix(), this);
+        }
+        return e;
     }
 
 

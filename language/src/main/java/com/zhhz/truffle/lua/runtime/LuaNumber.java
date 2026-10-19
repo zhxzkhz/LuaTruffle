@@ -29,6 +29,17 @@ public final class LuaNumber extends LuaValue  {
         return true;
     }
 
+    // 导出语言身份：标识此宿主对象归属 Lua 语言（工具与调试器依赖）
+    @ExportMessage
+    public boolean hasLanguageId() {
+        return true;
+    }
+
+    @ExportMessage
+    public String getLanguageId() {
+        return com.zhhz.truffle.lua.LuaLanguage.ID;
+    }
+
 
     /**
      * 辅助方法：检查这个double值是否是一个没有小数部分的整数。

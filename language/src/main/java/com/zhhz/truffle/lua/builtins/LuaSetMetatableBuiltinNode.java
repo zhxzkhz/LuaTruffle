@@ -2,35 +2,31 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.LuaException;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
-import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
+import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName;
 
 /**
  * 实现 `setmetatable(table, metatable)` 内置函数。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "setmetatable")
 public abstract class LuaSetMetatableBuiltinNode extends LuaBuiltinNode {
 
     @Specialization
     @TruffleBoundary
     public Object doSet(Object[] arguments) {
-        // 1. 【参数数量检查】
-        if (arguments.length < 2) {
-            throw LuaException.create("bad argument #1 to 'setmetatable' (table expected, got no value)",this);
-        }
+        Object tableArg = arguments.length > 0 ? arguments[0] : null;
 
-        Object tableArg = arguments[0];
-        Object metatableArg = arguments[1];
-
-        // 2. 【第一个参数类型检查】
-        //    通常只能为 table 设置元表。
-        //    (完整的实现也需要处理 userdata)
+        // 1. 【第一个参数类型检查】（与 luaL_checktype(L, 1, LUA_TTABLE) 一致）
         if (!(tableArg instanceof LuaTable table)) {
-            throw LuaException.create("bad argument #1 to 'setmetatable' (table expected, got " + getTypeName(tableArg) + ")",this);
+            String got = arguments.length == 0 ? "no value" : getArgumentTypeName(tableArg);
+            throw LuaTypesUtil.argumentError("setmetatable", 1, "table expected, got " + got);
         }
 
         // 【核心修改】检查保护时，也应该通过 Context
@@ -43,22 +39,27 @@ public abstract class LuaSetMetatableBuiltinNode extends LuaBuiltinNode {
             }
         }
 
-        // 4. 【第二个参数类型检查】
+        // 2. 【第二个参数类型检查】缺省（LUA_TNONE）与显式 nil 不同：
+        //    缺省不算 nil，报 "nil or table expected"。
+        if (arguments.length < 2) {
+            throw LuaTypesUtil.argumentError("setmetatable", 2, "nil or table expected");
+        }
+        Object metatableArg = arguments[1];
         LuaTable newMetatable;
         if (metatableArg == null || metatableArg == LuaNil.SINGLETON) {
             // 如果第二个参数是 nil，表示移除元表
             newMetatable = null;
-        } else if (metatableArg instanceof LuaTable) {
-            newMetatable = (LuaTable) metatableArg;
+        } else if (metatableArg instanceof LuaTable mt) {
+            newMetatable = mt;
         } else {
             // 如果是其他任何类型，都报错
-            throw LuaException.create("bad argument #2 to 'setmetatable' (table or nil expected)",this);
+            throw LuaTypesUtil.argumentError("setmetatable", 2, "nil or table expected");
         }
 
-        // 5. 【执行设置】
+        // 3. 【执行设置】
         table.setMetatable(newMetatable);
 
-        // 6. 【返回第一个参数】
+        // 4. 【返回第一个参数】
         return table;
     }
 

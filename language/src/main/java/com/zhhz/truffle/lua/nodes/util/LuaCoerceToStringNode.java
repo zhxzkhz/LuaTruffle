@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.nodes.util;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -15,6 +16,7 @@ import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @GenerateUncached
 public abstract class LuaCoerceToStringNode extends Node {
@@ -54,7 +56,7 @@ public abstract class LuaCoerceToStringNode extends Node {
     @Specialization(guards = {"!isPrimitive(value)"})
     @TruffleBoundary
     protected TruffleString fromObject(Object value,
-                                       @Cached("create()") LuaMetatableNode metaNode) {
+                                       @Cached(value = "create()", neverDefault = true) LuaMetatableNode metaNode) {
         if (value == null) {
             return LuaNil.NIL_CL;
         }

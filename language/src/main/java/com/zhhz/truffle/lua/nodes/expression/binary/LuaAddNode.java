@@ -91,7 +91,6 @@ public abstract class LuaAddNode extends LuaBinaryNode {
                                @Cached("create()") LuaCoerceToNumberNode coerceRight,
                                @Cached("create()") LuaMetatableNode metatableNode) {
 
-        assertNotNull(left,right,this);
 
         // 1. 尝试将操作数转换为数字
         Object numLeft = coerceLeft.executeArithmetic(left);
@@ -115,10 +114,10 @@ public abstract class LuaAddNode extends LuaBinaryNode {
         // 2. 尝试元方法 (逻辑不变)
         Object result = metatableNode.execute(left, right, LuaMetatables.__ADD);
         if (result != null) {
-            return result;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result);
         }
 
-        throw LuaException.typeError(this, "+", left, right);
+        throw arithmeticError(left, right, numLeft, numRight);
     }
 
 }

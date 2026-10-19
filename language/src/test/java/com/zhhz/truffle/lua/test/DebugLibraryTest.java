@@ -62,7 +62,7 @@ class DebugLibraryTest extends AbstractLuaTest {
                         return debug.traceback('oops')
                     end
                     local function outer()
-                        return inner()
+                        return inner() .. ''
                     end
                     return outer()
                     """);
@@ -111,7 +111,7 @@ class DebugLibraryTest extends AbstractLuaTest {
                         return debug.getinfo(2).what
                     end
                     local function caller()
-                        return target()
+                        return target() .. ''
                     end
                     return caller()
                     """);
@@ -233,15 +233,67 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
-    void hookPlaceholdersDoNotFail() {
+    void sethookRecordsHookAndMask() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """
-                    debug.sethook(print, 'line')
-                    local h = debug.gethook()
+                    debug.sethook(print, 'crl')
+                    local h, m, c = debug.gethook()
                     debug.debug()
-                    return h
+                    return h == print, m, c
                     """);
-            assertTrue(result.isNull());
+            assertTrue(result.getArrayElement(0).asBoolean());
+            assertEquals("crl", result.getArrayElement(1).asString());
+            assertEquals(0L, result.getArrayElement(2).asLong());
+        }
+    }
+
+    @Test
+    void sethookCountRecordsCount() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    debug.sethook(print, '', 4)
+                    local h, m, c = debug.gethook()
+                    return m, c
+                    """);
+            assertEquals("", result.getArrayElement(0).asString());
+            assertEquals(4L, result.getArrayElement(1).asLong());
+        }
+    }
+
+    @Test
+    void sethookClearsHookWithNil() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    debug.sethook(print, 'l')
+                    debug.sethook(nil)
+                    local h, m, c = debug.gethook()
+                    return h, m, c
+                    """);
+            assertTrue(result.getArrayElement(0).isNull());
+            assertEquals("", result.getArrayElement(1).asString());
+            assertEquals(0L, result.getArrayElement(2).asLong());
+        }
+    }
+
+    @Test
+    void sethookCallReturnEventsAreStrings() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local events = {}
+                    debug.sethook(function (e) events[#events + 1] = e end, 'crl')
+                    local function f() return 1 end
+                    f()
+                    debug.sethook()
+                    return events
+                    """);
+            // 至少应观察到事件（line/call/return）
+            Value events = result;
+            long size = events.getArraySize();
+            assertTrue(size >= 1, "expected at least 1 event, got " + size);
+            // 事件类型必须是字符串
+            for (long i = 0; i < size; i++) {
+                assertTrue(events.getArrayElement(i).isString());
+            }
         }
     }
 

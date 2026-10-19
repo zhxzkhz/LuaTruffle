@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -9,6 +10,7 @@ import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "string.gmatch")
 public abstract class LuaStringGmatchBuiltinNode extends LuaBuiltinNode {

@@ -98,6 +98,9 @@ public final class MathLibrary {
     @LuaBuiltin(name = "random")
     @TruffleBoundary
     public static Object random(Object[] args) {
+        if (args.length > 2) {
+            throw LuaException.create("wrong number of arguments", null);
+        }
         if (args.length == 0) {
             return RANDOM.nextDouble();
         }
@@ -108,7 +111,10 @@ public final class MathLibrary {
             upper = integer(args, 1, "random");
         }
         if (lower > upper) {
-            throw LuaException.create("interval is empty", null);
+            throw argumentError(2, "random", "interval is empty");
+        }
+        if (!(lower >= 0 || upper <= Long.MAX_VALUE + lower)) {
+            throw argumentError(1, "random", "interval too large");
         }
         if (lower == Long.MIN_VALUE && upper == Long.MAX_VALUE) {
             return RANDOM.nextLong();
@@ -146,6 +152,11 @@ public final class MathLibrary {
             throw argumentError(1, "tointeger", "number expected, got no value");
         }
         Object value = args[0];
+        if (value instanceof TruffleString || value instanceof com.zhhz.truffle.lua.runtime.LuaString) {
+            // 与标准 Lua 的 lua_tointegerx 一致：数字字符串也可转换
+            value = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode.create().execute(value);
+            if (value == null) return LuaNil.SINGLETON;
+        }
         if (value instanceof Long) return value;
         if (value instanceof Double number && Double.isFinite(number) && number == Math.rint(number)
                 && number >= -LONG_UPPER_BOUND && number < LONG_UPPER_BOUND) {
@@ -173,7 +184,7 @@ public final class MathLibrary {
     }
 
     private static Object extremum(Object[] args, boolean maximum) {
-        if (args.length == 0) throw argumentError(1, maximum ? "max" : "min", "number expected, got no values");
+        if (args.length == 0) throw argumentError(1, maximum ? "max" : "min", "value expected");
         Object result = number(args, 0, maximum ? "max" : "min");
         for (int i = 1; i < args.length; i++) {
             Object candidate = number(args, i, maximum ? "max" : "min");
@@ -187,7 +198,8 @@ public final class MathLibrary {
         if (index >= args.length) throw argumentError(index + 1, function, "number expected, got no value");
         Object value = args[index];
         if (value instanceof Long || value instanceof Double) return value;
-        throw argumentError(index + 1, function, "number expected");
+        throw argumentError(index + 1, function, "number expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }
 
     private static long integer(Object[] args, int index, String function) {
@@ -232,7 +244,12 @@ public final class MathLibrary {
     }
 
     private static Object integralResult(double value) {
-        return Double.isFinite(value) && value >= -LONG_UPPER_BOUND && value < LONG_UPPER_BOUND ? (long) value : value;
+        // 注意：不能写成 `cond ? (long) value : value` —— 三元运算符的数值提升
+        // 会把 long 分支提升为 double，导致结果总是被装箱成 Double。
+        if (Double.isFinite(value) && value >= -LONG_UPPER_BOUND && value < LONG_UPPER_BOUND) {
+            return (long) value;
+        }
+        return value;
     }
 
     private static TruffleString text(String value) {
@@ -240,7 +257,7 @@ public final class MathLibrary {
     }
 
     private static RuntimeException argumentError(int index, String function, String message) {
-        return LuaException.create("bad argument #" + index + " to '" + function + "' (" + message + ")", null);
+        return com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError(function, index, message);
     }
 
 }

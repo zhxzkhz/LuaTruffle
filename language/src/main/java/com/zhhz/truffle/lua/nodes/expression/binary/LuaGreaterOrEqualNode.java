@@ -48,12 +48,12 @@ public abstract class LuaGreaterOrEqualNode extends LuaBinaryNode {
                                    @Bind Node node) {
         Object result = metatableNode.execute(right, left, LuaMetatables.__LE);
         if (result != null) {
-            return LuaTypesUtil.isTruthy(result);
+            return LuaTypesUtil.isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
         result = metatableNode.execute(left, right, LuaMetatables.__LT);
         if (result != null) {
-            return !LuaTypesUtil.isTruthy(result);
+            return !LuaTypesUtil.isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
-        throw LuaException.typeError(node, ">=", left, right);
+        throw LuaException.runtimeError(LuaTypesUtil.orderErrorMessage(right, left), node);
     }
 }

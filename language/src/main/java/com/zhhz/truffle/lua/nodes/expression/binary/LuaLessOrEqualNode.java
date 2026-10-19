@@ -139,12 +139,12 @@ public abstract class LuaLessOrEqualNode extends LuaBinaryNode {
         Object result = metatableNode.execute(left, right, LuaMetatables.__LE);
 
         if (result != null) {
-            return LuaTypesUtil.isTruthy(result);
+            return LuaTypesUtil.isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
         result = metatableNode.execute(right, left, LuaMetatables.__LT);
         if (result != null) {
-            return !LuaTypesUtil.isTruthy(result);
+            return !LuaTypesUtil.isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
-        throw LuaException.typeError(node, "<=", left, right);
+        throw LuaException.runtimeError(LuaTypesUtil.orderErrorMessage(left, right), node);
     }
 }

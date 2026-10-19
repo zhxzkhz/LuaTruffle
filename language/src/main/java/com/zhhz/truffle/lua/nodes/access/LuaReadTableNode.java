@@ -13,7 +13,9 @@ import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
+import com.zhhz.truffle.lua.nodes.expression.LuaStringLiteralNode;
 import com.zhhz.truffle.lua.nodes.util.LuaToMemberNode;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
@@ -27,6 +29,7 @@ import com.zhhz.truffle.lua.runtime.LuaValue;
  *
  * <p>这个节点为整数键（数组访问）和非整数键（哈希访问）提供了特化的快速路径。
  */
+@SuppressWarnings("deprecation")
 @NodeInfo(shortName = "read_table")
 @NodeChild(value = "tableNode", type = LuaExpressionNode.class)
 @NodeChild(value = "keyNode", type = LuaExpressionNode.class)
@@ -100,21 +103,34 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     }
 
     // --- 回退路径 (Fallback) ---
+    // 注意：@CachedLibrary 对 DynamicObjectLibrary 按 Shape 缓存，而每次 put 都会产生新 Shape，
+    // 因此缓存条目会不断失效、耗尽 limit 后落到这里。必须先做一次 uncached rawget，
+    // 否则已存在的键会被误判为 nil（触发元表逻辑）。
     @Fallback
     protected Object doNonTable(Object object, Object key) {
-        return readWithMetatable(this, object, key);
-        //throw LuaException.create("attempt to index a " + getTypeName(table) + " value " + String.format(" (global '%s')", getUnresolvedVariableName()),this);
+        if (object instanceof LuaTable luaTable) {
+            Object result = luaTable.rawget(key, DynamicObjectLibrary.getUncached());
+            if (result != LuaNil.SINGLETON) {
+                return result;
+            }
+        }
+        return readWithMetatable(this, object, key, null);
     }
 
     @TruffleBoundary
     public static Object readUncached(Node node, Object table, Object key) {
+        return readUncached(node, table, key, null);
+    }
+
+    @TruffleBoundary
+    public static Object readUncached(Node node, Object table, Object key, String indexSuffix) {
         if (table instanceof LuaTable luaTable) {
             Object result = luaTable.rawget(key, DynamicObjectLibrary.getUncached());
             if (result != LuaNil.SINGLETON) {
                 return result;
             }
         }
-        return readWithMetatable(node, table, key);
+        return readWithMetatable(node, table, key, indexSuffix);
     }
 
 
@@ -126,81 +142,103 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
      */
     @TruffleBoundary
     private Object readWithMetatable(Object table, Object key) {
-        return readWithMetatable(this, table, key);
+        return readWithMetatable(this, table, key, null);
     }
 
-    private static Object readWithMetatable(Node node, Object table, Object key) {
-        LuaTable metatable = LuaContext.get(node).getEffectiveMetatable(table);
-        if (metatable == null) {
-            return LuaNil.SINGLETON; // 没有元表，查找结束
-        }
-
-        // 我们需要一个非缓存的库来安全地操作元表
+    private static Object readWithMetatable(Node node, Object table, Object key, String indexSuffix) {
+        LuaContext context = LuaContext.get(node);
         DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
-        Object indexValue = objLib.getOrDefault(metatable, LuaMetatables.__INDEX, LuaNil.SINGLETON);
-
-        if (indexValue == LuaNil.SINGLETON) {
-            return LuaNil.SINGLETON; // 元表中没有 __index，查找结束
-        }
-
-        // --- 处理 __index 的两种情况 ---
-
-        if (indexValue instanceof LuaTable) {
-            // 情况 A: __index 是一个表，递归地在这个表中查找
-            // 为了防止无限循环，我们限制查找深度
-            return findInIndexTableChain(node, (LuaTable) indexValue, key);
-        }
-
-        if (indexValue instanceof LuaFunction) {
-            // 情况 B: __index 是一个函数，调用它
-            try {
-                // 使用非缓存的 InteropLibrary 来执行调用
-                Object result = InteropLibrary.getUncached().execute(indexValue, table, key);
-                // 【重要】Lua 的元方法可以返回多值，我们需要处理这种情况
-                return LuaMultiValue.firstValue(result);
-            } catch (Exception e) {
-                // 包装在 __index 方法中发生的错误
-                throw LuaException.create("error in __index metamethod\n" +  e.getMessage(), node);
+        Object current = table;
+        for (int loop = 0; loop < MAX_TAG_LOOP; loop++) {
+            Object indexValue;
+            if (current instanceof LuaTable luaTable) {
+                Object result = luaTable.rawget(key, objLib);
+                if (result != LuaNil.SINGLETON) {
+                    return result;
+                }
+                LuaTable metatable = context.getEffectiveMetatable(current);
+                if (metatable == null) {
+                    return LuaNil.SINGLETON;
+                }
+                indexValue = metatable.rawget(LuaMetatables.__INDEX);
+                if (indexValue == LuaNil.SINGLETON) {
+                    return LuaNil.SINGLETON;
+                }
+            } else {
+                LuaTable metatable = context.getEffectiveMetatable(current);
+                if (metatable == null) {
+                    return finishMissingIndex(node, table, indexSuffix);
+                }
+                indexValue = metatable.rawget(LuaMetatables.__INDEX);
+                if (indexValue == LuaNil.SINGLETON) {
+                    return finishMissingIndex(node, table, indexSuffix);
+                }
             }
-        }
 
-        // 如果 __index 既不是 table 也不是 function，忽略它
-        return LuaNil.SINGLETON;
+            if (indexValue instanceof LuaFunction) {
+                try {
+                    Object result = InteropLibrary.getUncached().execute(indexValue, current, key);
+                    return LuaMultiValue.firstValue(result);
+                } catch (LuaException luaError) {
+                    // 标准 Lua 中元方法抛出的错误对象原样向上传播（不做包装），
+                    // 例如向上抛出一个 table 作为错误对象时必须保持其身份。
+                    throw luaError;
+                } catch (Exception e) {
+                    throw LuaException.create("error in metamethod '__index': " + e.getMessage(), node);
+                }
+            }
+
+            // 既不是函数也不是表：继续以该值为目标重复（与 luaV_gettable 一致）。
+            current = indexValue;
+        }
+        throw LuaException.create("gettable chain too long; possible loop", node);
     }
 
 
     /**
-     * 辅助方法，用于在 __index 表链中进行查找。
+     * 当对象没有可用 {@code __index}（既无元表，元表也无 __index）时的收尾行为：
+     * table 索引缺失键返回 nil；string 经字符串元表返回 nil；
+     * 其余类型（nil/number/boolean/function 等）按 Lua 语义报 "attempt to index a X value"。
      */
-    @TruffleBoundary
-    private static Object findInIndexTableChain(Node node, LuaTable currentTable, Object key) {
-        // 使用一个循环来处理 table -> metatable -> __index -> table 的链条
-        // 设置一个最大深度以防止无限循环 (e.g., t.meta.__index = t.meta)
-        for (int i = 0; i < 100; i++) {
-            // 检查当前 table 是否有这个 key
-            Object result = currentTable.rawget(key, DynamicObjectLibrary.getUncached());
-            if (result != LuaNil.SINGLETON) {
-                return result; // 找到了！
-            }
-
-            // 没找到，继续查找链条
-            LuaTable metatable = currentTable.getMetatable();
-            if (metatable == null) {
-                return LuaNil.SINGLETON; // 链条中断
-            }
-
-            Object nextIndex = DynamicObjectLibrary.getUncached().getOrDefault(metatable, "__index", LuaNil.SINGLETON);
-            if (nextIndex instanceof LuaTable) {
-                // 链条的下一环是一个 table，继续循环
-                currentTable = (LuaTable) nextIndex;
-            } else {
-                // 链条的下一环不是 table（可能是函数或 nil），查找结束
-                return LuaNil.SINGLETON;
-            }
+    private static Object finishMissingIndex(Node node, Object table, String indexSuffix) {
+        String typeName = LuaTypesUtil.getTypeName(table);
+        if ("table".equals(typeName) || "string".equals(typeName)) {
+            return LuaNil.SINGLETON;
         }
-        // 超过最大深度，抛出错误
-        throw LuaException.create("metatable __index chain too deep", node);
+        String suffix = indexSuffix != null ? indexSuffix : indexNameSuffix(node);
+        throw LuaException.runtimeError("attempt to index a " + typeName + " value" + suffix, node);
     }
+
+    /** 依据被索引表达式的来源，构造类似 {@code (global 'X')} 的名字后缀。 */
+    private static String indexNameSuffix(Node node) {
+        if (!(node instanceof LuaReadTableNode readNode)) {
+            return "";
+        }
+        LuaExpressionNode tableNode = readNode.getTableNode();
+        if (tableNode == null) {
+            return "";
+        }
+        TruffleString name = tableNode.getUnresolvedVariableName();
+        if (name == null) {
+            return "";
+        }
+        String what;
+        if (tableNode instanceof LuaReadGlobalVariableNode) {
+            what = "global";
+        } else if (tableNode instanceof LuaReadLocalVariableNode) {
+            what = "local";
+        } else if (tableNode instanceof LuaReadUpvalueNode) {
+            what = "upvalue";
+        } else if (tableNode instanceof LuaReadTableNode) {
+            what = "field";
+        } else {
+            return "";
+        }
+        return String.format(" (%s '%s')", what, name.toJavaStringUncached());
+    }
+
+    /** 对应 Lua 的 MAXTAGLOOP：__index 链的最大迭代次数。 */
+    private static final int MAX_TAG_LOOP = 2000;
 
     // --- 卫语句 ---
 
@@ -221,5 +259,21 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
     @Override
     public TruffleString getUnresolvedVariableName() {
         return getKeyNode().getUnresolvedVariableName();
+    }
+
+    /**
+     * 字段访问的运行时错误后缀：常量字符串键为 {@code (field 'x')}，
+     * 动态键（如 {@code a[b]}）为 {@code (field '?')}，与标准 Lua 的 varinfo 一致。
+     */
+    @Override
+    public String getErrorSuffix() {
+        LuaExpressionNode keyNode = getKeyNode();
+        if (keyNode instanceof LuaStringLiteralNode literal) {
+            TruffleString name = literal.getUnresolvedVariableName();
+            if (name != null) {
+                return " (field '" + name.toJavaStringUncached() + "')";
+            }
+        }
+        return " (field '?')";
     }
 }

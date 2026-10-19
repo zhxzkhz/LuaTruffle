@@ -70,6 +70,8 @@ public abstract class AbstractLuaTest {
         var b = Context.newBuilder(languages);
         b.allowExperimentalOptions(true);
         b.allowAllAccess(true);
+        // 启用内嵌 lua-hook instrument，使 debug.sethook 能获取 Instrumenter
+        // （Env.lookup 应当自动加载已注册 instrument，无需显式开启选项）
         // 空的、立即 EOF 的 stdin：避免 debug.debug()/io.read 等交互式内建
         // 在测试环境中阻塞读取继承的 System.in
         b.in(new java.io.ByteArrayInputStream(new byte[0]));

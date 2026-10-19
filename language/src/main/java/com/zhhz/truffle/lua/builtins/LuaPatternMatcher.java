@@ -179,15 +179,20 @@ final class LuaPatternMatcher {
         if (position < pattern.length && unsigned(pattern[position]) == '^') {
             position++;
         }
-        while (position < pattern.length) {
-            if (unsigned(pattern[position]) == ']' ) {
-                return position + 1;
+        // 与 lstrlib.c classEnd 一致：']' 若出现在开头的第一个位置则是普通字符。
+        do {
+            if (position >= pattern.length) {
+                throw patternError("malformed pattern (missing ']')");
             }
-            if (unsigned(pattern[position++]) == ESCAPE && position < pattern.length) {
+            int current = unsigned(pattern[position++]);
+            if (current == ESCAPE && position < pattern.length) {
                 position++;
             }
+        } while (position < pattern.length && unsigned(pattern[position]) != ']');
+        if (position >= pattern.length) {
+            throw patternError("malformed pattern (missing ']')");
         }
-        throw patternError("malformed pattern (missing ']')");
+        return position + 1;
     }
 
     private boolean singleMatch(int sourcePosition, int patternPosition, int itemEnd) {
@@ -426,6 +431,9 @@ final class LuaPatternMatcher {
             Object[] values = new Object[captures.length];
             for (int i = 0; i < captures.length; i++) {
                 Capture capture = captures[i];
+                if (capture.length == CAP_UNFINISHED) {
+                    throw patternError("unfinished capture");
+                }
                 values[i] = capture.length == CAP_POSITION
                         ? (long) capture.start + 1
                         : LuaStringSupport.fromBytes(source, capture.start, capture.length);

@@ -45,7 +45,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
-import com.zhhz.truffle.lua.runtime.LuaNil;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 
 /**
  * Lua 函数体的根节点。
@@ -115,7 +115,7 @@ public final class LuaFunctionBodyNode extends LuaExpressionNode {
         // 1. 更新 Profile：告诉编译器这条路径（自然结束）被执行了。
         nullTaken.enter();
 
-        // 2. Lua 语义规定：如果没有 return，函数默认返回 nil。
-        return LuaNil.SINGLETON;
+        // 2. Lua 语义规定：函数自然结束时返回【零个】值（select('#') == 0）。
+        return new LuaMultiValue(new Object[0]);
     }
 }

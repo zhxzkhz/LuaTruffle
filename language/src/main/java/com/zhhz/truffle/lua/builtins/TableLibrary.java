@@ -1,8 +1,15 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
+import com.zhhz.truffle.lua.nodes.access.LuaReadTableNode;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
+import com.zhhz.truffle.lua.nodes.util.WriteHelperNode;
+import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
@@ -27,7 +34,8 @@ public final class TableLibrary {
         LuaTable table = ensureTable(args, 0, "concat");
         String separator = args.length > 1 && !isNil(args[1]) ? ensureString(args[1], 2, "concat") : "";
         long start = args.length > 2 && !isNil(args[2]) ? toInteger(args[2], 3, "concat") : 1;
-        long end = args.length > 3 && !isNil(args[3]) ? toInteger(args[3], 4, "concat") : table.getArraySize();
+        boolean rawGet = !hasMeta(table, LuaMetatables.__INDEX);
+        long end = args.length > 3 && !isNil(args[3]) ? toInteger(args[3], 4, "concat") : lengthOf(table);
 
         if (start > end) {
             return toTruffleString("");
@@ -48,7 +56,7 @@ public final class TableLibrary {
             if (offset > 0) {
                 result.append(separator);
             }
-            Object value = table.rawget(index);
+            Object value = tableGet(table, index, rawGet);
             if (value == LuaNil.SINGLETON) {
                 throw LuaException.create("invalid value (nil) at index " + index + " in table.concat", null);
             }
@@ -65,24 +73,27 @@ public final class TableLibrary {
             throw LuaException.create("wrong number of arguments to 'insert'", null);
         }
 
-        int length = table.getArraySize();
-        int position;
+        // 标准 checktab：在调用 __len 之前先探测 __index/__newindex 是否存在，决定访问模式。
+        boolean rawGet = !hasMeta(table, LuaMetatables.__INDEX);
+        boolean rawSet = !hasMeta(table, LuaMetatables.__NEWINDEX);
+        long length = lengthOf(table);
+        long position;
         Object value;
         if (args.length == 2) {
-            position = checkedPosition(length + 1L, 2, "insert");
+            position = length + 1;
             value = args[1];
         } else {
-            position = toIndex(args[1], 2, "insert");
+            position = toInteger(args[1], 2, "insert");
             if (position < 1 || position > length + 1) {
                 throw LuaException.create("bad argument #2 to 'insert' (position out of bounds)", null);
             }
             value = args[2];
         }
 
-        for (int index = length; index >= position; index--) {
-            table.arrayRawSet(index + 1, table.arrayRawGet(index));
+        for (long index = length; index >= position; index--) {
+            tableSet(table, index + 1, tableGet(table, index, rawGet), rawSet);
         }
-        table.arrayRawSet(position, value);
+        tableSet(table, position, value, rawSet);
         return new LuaMultiValue(new Object[0]);
     }
 
@@ -97,30 +108,28 @@ public final class TableLibrary {
         long from = toInteger(args[1], 2, "move");
         long end = toInteger(args[2], 3, "move");
         long target = toInteger(args[3], 4, "move");
+        // 标准 tmove：起始位置必须为正，以避免若干溢出问题
+        if (from <= 0) {
+            throw LuaTypesUtil.argumentError("move", 2, "initial position must be positive");
+        }
         LuaTable destination = args.length == 5 && !isNil(args[4]) ? ensureTable(args, 4, "move") : source;
 
         if (end < from) {
             return destination;
         }
 
-        long count;
-        try {
-            count = Math.addExact(Math.subtractExact(end, from), 1);
-            Math.addExact(target, count - 1);
-        } catch (ArithmeticException exception) {
-            throw LuaException.create("index out of range in table.move", null);
-        }
-        if (count > Integer.MAX_VALUE || count < 1) {
-            throw LuaException.create("index out of range in table.move", null);
-        }
+        // 访问模式取决于源/目标是否带有 __index / __newindex（等价于 luaL_getmetafield）
+        boolean rawGet = !hasMeta(source, LuaMetatables.__INDEX);
+        boolean rawSet = !hasMeta(destination, LuaMetatables.__NEWINDEX);
 
-        if (source == destination && target > from && target <= end) {
-            for (int offset = (int) count - 1; offset >= 0; offset--) {
-                destination.rawset(target + offset, source.rawget(from + offset));
+        long count = end - from + 1;
+        if (target > from) {
+            for (long offset = count - 1; offset >= 0; offset--) {
+                tableSet(destination, target + offset, tableGet(source, from + offset, rawGet), rawSet);
             }
         } else {
-            for (int offset = 0; offset < (int) count; offset++) {
-                destination.rawset(target + offset, source.rawget(from + offset));
+            for (long offset = 0; offset < count; offset++) {
+                tableSet(destination, target + offset, tableGet(source, from + offset, rawGet), rawSet);
             }
         }
         return destination;
@@ -134,17 +143,19 @@ public final class TableLibrary {
             throw LuaException.create("wrong number of arguments to 'remove'", null);
         }
 
-        int length = table.getArraySize();
+        boolean rawGet = !hasMeta(table, LuaMetatables.__INDEX);
+        boolean rawSet = !hasMeta(table, LuaMetatables.__NEWINDEX);
+        long length = lengthOf(table);
         long position = args.length == 1 || isNil(args[1]) ? length : toInteger(args[1], 2, "remove");
-        if (position != length && (position < 1 || position > (long) length + 1)) {
+        if (position != length && (position < 1 || position > length + 1)) {
             throw LuaException.create("bad argument #2 to 'remove' (position out of bounds)", null);
         }
 
-        Object removed = table.rawget(position);
+        Object removed = tableGet(table, position, rawGet);
         for (long index = position; index < length; index++) {
-            table.rawset(index, table.rawget(index + 1));
+            tableSet(table, index, tableGet(table, index + 1, rawGet), rawSet);
         }
-        table.rawset(position < length ? length : position, LuaNil.SINGLETON);
+        tableSet(table, position < length ? length : position, LuaNil.SINGLETON, rawSet);
         return removed;
     }
 
@@ -153,7 +164,8 @@ public final class TableLibrary {
     public static LuaMultiValue unpack(Object[] args) {
         LuaTable table = ensureTable(args, 0, "unpack");
         long start = args.length > 1 && !isNil(args[1]) ? toInteger(args[1], 2, "unpack") : 1;
-        long end = args.length > 2 && !isNil(args[2]) ? toInteger(args[2], 3, "unpack") : table.getArraySize();
+        boolean rawGet = !hasMeta(table, LuaMetatables.__INDEX);
+        long end = args.length > 2 && !isNil(args[2]) ? toInteger(args[2], 3, "unpack") : lengthOf(table);
         if (start > end) {
             return new LuaMultiValue(new Object[0]);
         }
@@ -167,17 +179,85 @@ public final class TableLibrary {
         if (count > Integer.MAX_VALUE) {
             throw LuaException.create("too many results to unpack", null);
         }
+        // 复刻标准 Lua 的栈空间检查（luaL_checkstack "too many results to unpack"）：
+        // 结果数逼近 LUAI_MAXSTACK 时无法压栈。
+        if (count >= 999000) {
+            throw LuaException.create("too many results to unpack", null);
+        }
         Object[] values = new Object[(int) count];
         for (int offset = 0; offset < values.length; offset++) {
-            values[offset] = table.rawget(start + offset);
+            values[offset] = tableGet(table, start + offset, rawGet);
         }
         return new LuaMultiValue(values);
     }
 
+    /** 遵循 __index 的读取（标准 lua_geti 语义）。 */
+    static Object getIndex(Object table, long index) {
+        return LuaReadTableNode.readUncached(null, table, index);
+    }
+
+    /** 遵循 __newindex 的写入（标准 lua_seti 语义）。 */
+    static void setIndex(Object table, long index, Object value) {
+        WriteHelperNode.writeUncached(table, index, value);
+    }
+
+    /** 元表中是否存在（非 nil 的）指定事件，等价于标准 C 库的 luaL_getmetafield 判断。 */
+    static boolean hasMeta(LuaTable table, TruffleString event) {
+        LuaTable metatable = LuaContext.get(null).getEffectiveMetatable(table);
+        if (metatable == null) {
+            return false;
+        }
+        Object value = metatable.rawget(event, DynamicObjectLibrary.getUncached());
+        return value != null && value != LuaNil.SINGLETON;
+    }
+
+    /** 按访问模式读取：raw 模式走原始访问，否则遵循 __index。 */
+    static Object tableGet(LuaTable table, long index, boolean raw) {
+        return raw ? table.rawget(index) : getIndex(table, index);
+    }
+
+    /** 按访问模式写入：raw 模式走原始访问，否则遵循 __newindex。 */
+    static void tableSet(LuaTable table, long index, Object value, boolean raw) {
+        if (raw) {
+            table.rawset(index, value);
+        } else {
+            setIndex(table, index, value);
+        }
+    }
+
+    /** 遵循 __len 的长度（标准 luaL_len / luaV_objlen 语义）。 */
+    static long lengthOf(LuaTable table) {
+        LuaTable metatable = LuaContext.get(null).getEffectiveMetatable(table);
+        if (metatable != null) {
+            Object lenMeta = metatable.rawget(LuaMetatables.__LEN, DynamicObjectLibrary.getUncached());
+            if (lenMeta != null && lenMeta != LuaNil.SINGLETON) {
+                Object result;
+                try {
+                    result = InteropLibrary.getUncached().execute(lenMeta, table, table);
+                } catch (Exception e) {
+                    throw LuaException.create("error in metamethod '__len': " + e.getMessage(), null);
+                }
+                Object value = LuaMultiValue.firstValue(result);
+                if (value instanceof Long longValue) {
+                    return longValue;
+                }
+                if (value instanceof Integer integerValue) {
+                    return integerValue.longValue();
+                }
+                if (value instanceof Double doubleValue && doubleValue == Math.rint(doubleValue)) {
+                    return doubleValue.longValue();
+                }
+                throw LuaException.create("object length is not an integer", null);
+            }
+        }
+        return table.getArraySize();
+    }
+
     static LuaTable ensureTable(Object[] args, int index, String function) {
         if (index >= args.length || !(args[index] instanceof LuaTable table)) {
-            throw LuaException.create("bad argument #" + (index + 1) + " to '" + function + "' (table expected, got "
-                    + (index >= args.length ? "no value" : getTypeName(args[index])) + ")", null);
+            throw LuaTypesUtil.argumentError(function, index + 1, "table expected, got "
+                    + (index >= args.length ? "no value"
+                    : LuaTypesUtil.getArgumentTypeName(args[index])));
         }
         return table;
     }
@@ -206,13 +286,13 @@ public final class TableLibrary {
                 // Fall through to the standard argument error.
             }
         }
-        throw LuaException.create("bad argument #" + argument + " to '" + function + "' (integer expected, got "
-                + getTypeName(value) + ")", null);
+        throw LuaTypesUtil.argumentError(function, argument, "integer expected, got "
+                + LuaTypesUtil.getArgumentTypeName(value));
     }
 
     private static int checkedPosition(long value, int argument, String function) {
         if (value < 1 || value > Integer.MAX_VALUE) {
-            throw LuaException.create("bad argument #" + argument + " to '" + function + "' (position out of bounds)", null);
+            throw LuaTypesUtil.argumentError(function, argument, "position out of bounds");
         }
         return (int) value;
     }

@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.nodes.util;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -13,6 +14,7 @@ import com.oracle.truffle.api.strings.TruffleString;
  * - 如果值是可以解析为整数的字符串，转换并返回。
  * - 所有其他情况（包括带小数的浮点数），都返回 null 表示转换失败。
  */
+@GenerateInline(false)
 @GenerateUncached
 public abstract class LuaCoerceToIntegerNode extends Node {
 
@@ -44,36 +46,34 @@ public abstract class LuaCoerceToIntegerNode extends Node {
      */
     @Specialization
     public Long doDouble(double value) {
-        // 检查 double 值是否有小数部分
-        if (value == (long) value) {
+        // 复刻标准 Lua 的 lua_numbertointeger：
+        //   n >= LUA_MININTEGER && n < -LUA_MININTEGER
+        // 即 [-2^63, 2^63)。上界必须为开区间：2^63 无法用有符号 64 位整数表示，
+        // 若直接用 (long) 转换会饱和为 Long.MAX_VALUE 而错误地通过相等性检查。
+        if (value >= (double) Long.MIN_VALUE && value < -((double) Long.MIN_VALUE)
+                && value == (long) value) {
             return (long) value;
         }
-        // 如果有小数，转换失败
+        // 有小数部分或超出可表示范围，转换失败
         return null;
     }
 
     /**
      * 中速路径: 尝试将 TruffleString 转换为整数。
-     * 这是一个慢路径操作。
+     * 先按标准 Lua 的数字语法解析（支持十六进制浮点等，如 "0xAA.0"），
+     * 再检查其是否可无损表示为 long。
      */
     @Specialization
     @TruffleBoundary
     public Long doString(TruffleString value) {
-        try {
-            // 优先尝试直接解析为 long
-            return value.parseLongUncached();
-        } catch (TruffleString.NumberFormatException e1) {
-            // 如果直接解析 long 失败 (例如 "123.0")，
-            // 我们需要尝试将其解析为 double，然后检查它是否有小数
-            try {
-                double doubleValue = value.parseDoubleUncached();
-                // 复用 doDouble 的逻辑
-                return doDouble(doubleValue);
-            } catch (TruffleString.NumberFormatException e2) {
-                // 如果连 double 都解析失败，转换彻底失败
-                return null;
-            }
+        Object number = LuaCoerceToNumberNode.create().execute(value);
+        if (number instanceof Long longValue) {
+            return longValue;
         }
+        if (number instanceof Double doubleValue) {
+            return doDouble(doubleValue);
+        }
+        return null;
     }
 
     /**

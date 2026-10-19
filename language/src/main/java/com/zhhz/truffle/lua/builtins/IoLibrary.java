@@ -26,7 +26,7 @@ public final class IoLibrary {
     public static Object open(Object[] arguments) {
         String filename = stringArgument(arguments, 0, "open");
         String mode = arguments.length > 1 && !isNil(arguments[1]) ? string(arguments[1], 2, "open") : "r";
-        if (!mode.matches("[rwa](\\+b?|b\\+?)?")) throw argumentError(2, "open", "invalid mode");
+        if (!mode.matches("[rwa]\\+?b?")) throw argumentError(2, "open", "invalid mode");
         try {
             return LuaFileHandle.open(context().getFileShape(), context().resolveScriptPath(filename), mode);
         } catch (Exception exception) {
@@ -56,6 +56,8 @@ public final class IoLibrary {
     public static Object close(Object[] arguments) {
         LuaFileHandle handle = arguments.length == 0 || isNil(arguments[0])
                 ? context().getDefaultOutput() : file(arguments[0], 1, "close");
+        // 标准 Lua 的 tofile：对已关闭的文件抛错（io.close 属于此路径）。
+        if (handle.isClosed()) throw LuaException.create("attempt to use a closed file", null);
         return closeHandle(handle);
     }
 
@@ -73,12 +75,12 @@ public final class IoLibrary {
 
     @LuaBuiltin(name = "read")
     public static Object read(Object[] arguments) {
-        return readValues(context().getDefaultInput(), arguments, 0, "read");
+        return readValues(requireDefaultInput(), arguments, 0, "read");
     }
 
     @LuaBuiltin(name = "write")
     public static Object write(Object[] arguments) {
-        return writeValues(context().getDefaultOutput(), arguments, 0, "write");
+        return writeValues(requireDefaultOutput(), arguments, 0, "write");
     }
 
     @LuaBuiltin(name = "tmpfile")
@@ -104,8 +106,22 @@ public final class IoLibrary {
         String command = stringArgument(arguments, 0, "popen");
         String mode = arguments.length > 1 && !isNil(arguments[1]) ? string(arguments[1], 2, "popen") : "r";
         if (!mode.equals("r") && !mode.equals("w")) throw argumentError(2, "popen", "invalid mode");
-        ProcessBuilder builder = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
-                ? new ProcessBuilder("cmd.exe", "/c", command) : new ProcessBuilder("/bin/sh", "-c", command);
+        // 与 os.execute 保持同一 shell：测试套件假设 Unix-like shell（&、$! 等语法），
+        // Windows 上需经 Git Bash 执行而不是 cmd.exe
+        ProcessBuilder builder;
+        try {
+            if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+                java.nio.file.Path script = java.nio.file.Files.createTempFile("lua_cmd_", ".sh");
+                java.nio.file.Files.writeString(script, command + "\n");
+                script.toFile().deleteOnExit();
+                String bash = "D:\\Program Files\\Git\\bin\\bash.exe";
+                builder = new ProcessBuilder(bash, script.toString().replace('\\', '/'));
+            } else {
+                builder = new ProcessBuilder("/bin/sh", "-c", command);
+            }
+        } catch (java.io.IOException ioException) {
+            return failure(ioException);
+        }
         try {
             Process process = builder.start();
             return LuaFileHandle.process(context().getFileShape(), process,
@@ -121,14 +137,22 @@ public final class IoLibrary {
         LuaFileHandle handle;
         boolean closeAtEnd;
         int formatStart;
-        if (arguments.length == 0 || isNil(arguments[0])) {
-            handle = context().getDefaultInput();
+        if (arguments.length == 0) {
+            handle = requireDefaultInput();
             closeAtEnd = false;
             formatStart = 0;
+        } else if (isNil(arguments[0])) {
+            handle = requireDefaultInput();
+            closeAtEnd = false;
+            formatStart = 1;
         } else {
-            Object opened = open(new Object[]{arguments[0], text("r")});
-            if (!(opened instanceof LuaFileHandle file)) return opened;
-            handle = file;
+            String filename = string(arguments[0], 1, "lines");
+            try {
+                handle = LuaFileHandle.open(context().getFileShape(), context().resolveScriptPath(filename), "r");
+            } catch (Exception exception) {
+                // 标准 Lua 的 opencheck：打开失败时直接抛出错误（而非返回 nil）。
+                throw LuaException.create("cannot open file '" + filename + "' (" + errorMessage(exception) + ")", null);
+            }
             closeAtEnd = true;
             formatStart = 1;
         }
@@ -177,11 +201,13 @@ public final class IoLibrary {
 
     @LuaBuiltin(name = "file_setvbuf")
     public static Object fileSetvbuf(Object[] arguments) {
-        self(arguments, "setvbuf");
+        LuaFileHandle handle = self(arguments, "setvbuf");
         if (arguments.length < 2) throw argumentError(2, "setvbuf", "string expected, got no value");
         String mode = string(arguments[1], 2, "setvbuf");
         if (!mode.equals("no") && !mode.equals("full") && !mode.equals("line"))
             throw argumentError(2, "setvbuf", "invalid option '" + mode + "'");
+        int size = arguments.length > 2 && !isNil(arguments[2]) ? (int) integer(arguments[2], 3, "setvbuf") : 0;
+        handle.setvbuf(mode, size);
         return true;
     }
 
@@ -191,12 +217,30 @@ public final class IoLibrary {
         return lineIterator(handle, arguments, 1, false);
     }
 
+    @LuaBuiltin(name = "file_gc")
+    public static Object fileGc(Object[] arguments) {
+        if (arguments.length == 0) throw argumentError(1, "__gc", "FILE* expected, got no value");
+        if (!(arguments[0] instanceof LuaFileHandle handle)) {
+            throw argumentError(1, "__gc", "FILE* expected, got "
+                    + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(arguments[0]));
+        }
+        try {
+            handle.closeHandle();
+        } catch (Exception ignored) {
+            // __gc 忽略关闭过程中的错误（如已关闭的文件）
+        }
+        return LuaNil.SINGLETON;
+    }
+
     private static LuaFunction lineIterator(LuaFileHandle handle, Object[] arguments, int formatStart,
                                             boolean closeAtEnd) {
         Object[] formats = new Object[arguments.length - formatStart];
         System.arraycopy(arguments, formatStart, formats, 0, formats.length);
         RootNode root = new LinesIteratorRootNode(context().getLanguage(), handle, formats, closeAtEnd);
-        return new LuaFunction(context().getFunctionShape(), root.getCallTarget());
+        LuaFunction function = new LuaFunction(context().getFunctionShape(), root.getCallTarget());
+        // 句柄挂在 LuaFunction 上强引用（迭代器的 CallTarget 会被调用点缓存，不能依赖其回收）。
+        function.setRetainedResource(handle);
+        return function;
     }
 
     static Object readValues(LuaFileHandle handle, Object[] arguments, int start, String function) {
@@ -223,8 +267,8 @@ public final class IoLibrary {
 
     static Object writeValues(LuaFileHandle handle, Object[] arguments, int start, String function) {
         try {
+            // 注意：标准 Lua 的 io.write 不自动 flush（依赖 setvbuf 缓冲与显式 flush/close）。
             for (int i = start; i < arguments.length; i++) handle.write(bytes(arguments[i], i + 1, function));
-            handle.flush();
             return handle;
         } catch (IOException exception) {
             return failure(exception);
@@ -235,12 +279,14 @@ public final class IoLibrary {
         if (format instanceof Long number) return readCount(handle, number, argument, function);
         if (format instanceof Double number && number == Math.rint(number)) return readCount(handle, (long) number.doubleValue(), argument, function);
         String option = string(format, argument, function);
-        if (option.startsWith("*")) option = option.substring(1);
-        return switch (option) {
-            case "a" -> readAll(handle);
-            case "l" -> readLine(handle, false);
-            case "L" -> readLine(handle, true);
-            case "n" -> readNumber(handle);
+        if (option.startsWith("*")) option = option.substring(1); // 兼容可选的 '*'
+        if (option.isEmpty()) throw argumentError(argument, function, "invalid format");
+        // 与 liolib.c 的 g_read 一致：只检查格式串的第一个字符。
+        return switch (option.charAt(0)) {
+            case 'a' -> readAll(handle);
+            case 'l' -> readLine(handle, false);
+            case 'L' -> readLine(handle, true);
+            case 'n' -> readNumber(handle);
             default -> throw argumentError(argument, function, "invalid format");
         };
     }
@@ -288,22 +334,76 @@ public final class IoLibrary {
         return LuaStringSupport.fromBytes(bytes);
     }
 
+    /**
+     * 忠实移植 liolib.c 的 {@code read_number}：先按 Lua 词法读取一个数字的最长有效前缀，
+     * 再用 {@link com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode#parseLuaNumber} 校验并转换。
+     * 读取失败时仅回退一个前瞻字符，其余已消费字符按标准 Lua 语义丢弃。
+     */
+    private static final int MAXRN = 200;
+
+    private static final class RN {
+        LuaFileHandle f;
+        int c;                       // 前瞻字符
+        int n;                       // 缓冲区长度
+        final byte[] buff = new byte[MAXRN + 1];
+    }
+
+    private static boolean nextc(RN rn) throws IOException {
+        if (rn.n >= MAXRN) {         // 缓冲区溢出：使结果无效并停止消费
+            rn.n = 0;
+            return false;
+        }
+        rn.buff[rn.n++] = (byte) rn.c;
+        rn.c = rn.f.read();
+        return true;
+    }
+
+    private static boolean test2(RN rn, char first, char second) throws IOException {
+        if (rn.c == first || (rn.c == second && rn.c != '\0')) return nextc(rn);
+        return false;
+    }
+
+    private static int readDigits(RN rn, boolean hex) throws IOException {
+        int count = 0;
+        while ((hex ? isHexDigit(rn.c) : isDigit(rn.c)) && nextc(rn)) count++;
+        return count;
+    }
+
     private static Object readNumber(LuaFileHandle handle) throws IOException {
-        StringBuilder number = new StringBuilder();
-        int value;
-        do value = handle.read(); while (value >= 0 && Character.isWhitespace(value));
-        while (value >= 0 && (Character.isDigit(value) || "+-.eExXpPabcdefABCDEF".indexOf(value) >= 0)) {
-            number.append((char) value);
-            value = handle.read();
+        RN rn = new RN();
+        rn.f = handle;
+        int count = 0;
+        boolean hex = false;
+        do { rn.c = handle.read(); } while (isSpace(rn.c));
+        test2(rn, '-', '+');                       // 可选符号
+        if (test2(rn, '0', '\0')) {
+            if (test2(rn, 'x', 'X')) hex = true;   // 十六进制
+            else count = 1;                        // 起始的 '0' 计为一个有效数字
         }
-        handle.unread(value);
-        if (number.isEmpty()) return LuaNil.SINGLETON;
-        try {
-            String text = number.toString();
-            return text.matches("[+-]?\\d+") ? Long.parseLong(text) : Double.parseDouble(text);
-        } catch (NumberFormatException exception) {
-            return LuaNil.SINGLETON;
+        count += readDigits(rn, hex);              // 整数部分
+        if (test2(rn, '.', '\0')) count += readDigits(rn, hex);  // 小数部分
+        if (count > 0 && test2(rn, hex ? 'p' : 'e', hex ? 'P' : 'E')) {  // 指数标记
+            test2(rn, '-', '+');
+            readDigits(rn, false);
         }
+        handle.unread(rn.c);
+        if (rn.n == 0) return LuaNil.SINGLETON;
+        Object number = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode
+                .parseLuaNumber(new String(rn.buff, 0, rn.n, StandardCharsets.ISO_8859_1));
+        return number == null ? LuaNil.SINGLETON : number;
+    }
+
+    private static boolean isSpace(int value) {
+        return value == ' ' || value == '\f' || value == '\n'
+                || value == '\r' || value == '\t' || value == 0x0b;
+    }
+
+    private static boolean isDigit(int value) {
+        return value >= '0' && value <= '9';
+    }
+
+    private static boolean isHexDigit(int value) {
+        return isDigit(value) || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
     }
 
     private static Object closeHandle(LuaFileHandle handle) {
@@ -316,6 +416,11 @@ public final class IoLibrary {
 
     private static LuaFileHandle fileOrOpen(Object value, String mode, String function) {
         if (value instanceof LuaFileHandle handle) return handle;
+        if (!(value instanceof TruffleString) && !(value instanceof String)
+                && !(value instanceof Long) && !(value instanceof Double)) {
+            throw argumentError(1, function, "FILE* expected, got "
+                    + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
+        }
         String filename = string(value, 1, function);
         try {
             return LuaFileHandle.open(context().getFileShape(), context().resolveScriptPath(filename), mode);
@@ -330,8 +435,27 @@ public final class IoLibrary {
     }
 
     private static LuaFileHandle file(Object value, int argument, String function) {
-        if (value instanceof LuaFileHandle handle) return handle;
-        throw argumentError(argument, function, "FILE* expected");
+        if (value instanceof LuaFileHandle handle) {
+            // 对应 C 的 tofile：对已关闭的文件统一抛错。
+            if (handle.isClosed()) throw LuaException.create("attempt to use a closed file", null);
+            return handle;
+        }
+        throw argumentError(argument, function, "FILE* expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
+    }
+
+    /** 对应 C 的 getiofile(IO_INPUT)：默认输入已关闭时抛错。 */
+    private static LuaFileHandle requireDefaultInput() {
+        LuaFileHandle handle = context().getDefaultInput();
+        if (handle.isClosed()) throw LuaException.create("standard input file is closed", null);
+        return handle;
+    }
+
+    /** 对应 C 的 getiofile(IO_OUTPUT)：默认输出已关闭时抛错。 */
+    private static LuaFileHandle requireDefaultOutput() {
+        LuaFileHandle handle = context().getDefaultOutput();
+        if (handle.isClosed()) throw LuaException.create("standard output file is closed", null);
+        return handle;
     }
 
     private static byte[] bytes(Object value, int argument, String function) {
@@ -339,7 +463,8 @@ public final class IoLibrary {
             return TruffleString.CopyToByteArrayNode.getUncached().execute(string, com.zhhz.truffle.lua.LuaLanguage.STRING_ENCODING);
         if (value instanceof Long number) return Long.toString(number).getBytes(StandardCharsets.US_ASCII);
         if (value instanceof Double number) return Double.toString(number).getBytes(StandardCharsets.US_ASCII);
-        throw argumentError(argument, function, "string or number expected");
+        throw argumentError(argument, function, "string expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }
 
     private static String stringArgument(Object[] arguments, int index, String function) {
@@ -368,7 +493,14 @@ public final class IoLibrary {
     }
 
     private static RuntimeException argumentError(int argument, String function, String message) {
-        return LuaException.create("bad argument #" + argument + " to '" + function + "' (" + message + ")", null);
+        return LuaException.create("bad argument #" + argument + " to '"
+                + resolvedName(function) + "' (" + message + ")", null);
+    }
+
+    private static String resolvedName(String fallback) {
+        String found = com.zhhz.truffle.lua.nodes.util.LuaTypesUtil
+                .globalFuncName(com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.currentFunction());
+        return found != null ? found : fallback;
     }
 
     private static boolean isNil(Object value) {
@@ -384,25 +516,31 @@ public final class IoLibrary {
     }
 
     private static final class LinesIteratorRootNode extends RootNode {
-        private final LuaFileHandle handle;
+        private final java.lang.ref.WeakReference<LuaFileHandle> handleRef;
         private final Object[] formats;
         private final boolean closeAtEnd;
-        private boolean done;
 
         private LinesIteratorRootNode(com.zhhz.truffle.lua.LuaLanguage language, LuaFileHandle handle,
                                       Object[] formats, boolean closeAtEnd) {
             super(language);
-            this.handle = handle;
+            // 弱引用句柄：其生命周期由持有该迭代器函数的 LuaFunction 决定（见 lineIterator）。
+            this.handleRef = new java.lang.ref.WeakReference<>(handle);
             this.formats = formats;
             this.closeAtEnd = closeAtEnd;
         }
 
         @Override
         public Object execute(VirtualFrame frame) {
-            if (done) return LuaNil.SINGLETON;
+            LuaFileHandle handle = handleRef.get();
+            if (handle == null || handle.isClosed()) {
+                throw LuaException.create("file is already closed", null);
+            }
             Object result = readValues(handle, formats, 0, "lines");
             if (LuaMultiValue.firstValue(result) == LuaNil.SINGLETON) {
-                done = true;
+                // 对应 liolib.c 的 io_readline：若返回值中带有错误信息（>1 个值），抛出该错误。
+                if (result instanceof LuaMultiValue multiValue && multiValue.values().length > 1) {
+                    throw LuaException.create(string(multiValue.values()[1], 1, "lines"), null);
+                }
                 if (closeAtEnd) closeHandle(handle);
             }
             return result;

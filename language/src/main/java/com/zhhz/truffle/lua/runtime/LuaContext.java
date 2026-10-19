@@ -96,10 +96,130 @@ public final class LuaContext {
     private final Shape functionShape;
     private final Shape booleanShape;
     private final Shape fileShape;
+    private final Shape threadShape;
     private LuaFileHandle defaultInput;
     private LuaFileHandle defaultOutput;
 
+    // 打开的文件句柄弱引用注册表：用于在 collectgarbage() 时关闭已不可达的文件
+    // （模拟 C Lua 的 FILE* __gc 终结器，确保 Windows 上能删除被 GC 的打开文件）。
+    private final java.util.List<FileHandleEntry> openFileHandles = new java.util.ArrayList<>();
+
+    private static final class FileHandleEntry {
+        final java.lang.ref.WeakReference<Object> handle;
+        final Runnable closeAction;
+
+        FileHandleEntry(Object handle, Runnable closeAction) {
+            this.handle = new java.lang.ref.WeakReference<>(handle);
+            this.closeAction = closeAction;
+        }
+    }
+
+    /** 注册一个打开的文件句柄，供 collectgarbage() 在其不可达时关闭。 */
+    public void registerFileHandle(Object handle, Runnable closeAction) {
+        synchronized (openFileHandles) {
+            openFileHandles.add(new FileHandleEntry(handle, closeAction));
+        }
+    }
+
+    /** 关闭所有已不可达的文件句柄（在 GC 之后调用）。 */
+    public void collectFileHandles() {
+        System.gc();
+        synchronized (openFileHandles) {
+            java.util.Iterator<FileHandleEntry> iterator = openFileHandles.iterator();
+            while (iterator.hasNext()) {
+                FileHandleEntry entry = iterator.next();
+                if (entry.handle.get() == null) {
+                    try {
+                        entry.closeAction.run();
+                    } catch (Exception ignored) {
+                        // 终结过程忽略错误
+                    }
+                    iterator.remove();
+                }
+            }
+        }
+    }
+
     private LuaFunction ipairsIterator;
+    private LuaFunction utf8Iterator;
+
+    // collectgarbage 的状态（复刻标准 Lua 的 GC 控制接口；JVM 托管 GC 下仅模拟状态）。
+    private boolean gcRunning = true;
+    private long gcPause = 200;
+    private long gcStepMul = 200;
+
+    public boolean isGcRunning() {
+        return gcRunning;
+    }
+
+    public void setGcRunning(boolean running) {
+        this.gcRunning = running;
+    }
+
+    public long getGcPause() {
+        return gcPause;
+    }
+
+    public void setGcPause(long pause) {
+        this.gcPause = pause;
+    }
+
+    public long getGcStepMul() {
+        return gcStepMul;
+    }
+
+    public void setGcStepMul(long stepMul) {
+        this.gcStepMul = stepMul;
+    }
+
+    // debug.sethook 钩子状态（见 LuaLineHook 与 DebugLibrary.sethook）
+    private Object hookFunction;
+    private String hookMask = "";
+    private int hookCount;
+    private com.oracle.truffle.api.instrumentation.EventBinding<?> hookBinding;
+    private final java.util.List<com.oracle.truffle.api.instrumentation.EventBinding<?>> extraHookBindings = new java.util.ArrayList<>();
+    private int lastHookLine = -1;
+    private boolean inHook;
+    private int instructionCount;
+
+    // coroutine 当前线程跟踪：每个 Java 线程对应一个 LuaThread（协程）或 null（主线程）。
+    // 主线程的 LuaThread 也存入此 ThreadLocal，以便 coroutine.running() 能正确返回。
+    private final ThreadLocal<LuaThread> currentCoroutine = new ThreadLocal<>();
+    /** 主线程对象 */
+    private LuaThread mainThread;
+
+    public Object getHookFunction() { return hookFunction; }
+    public void setHookFunction(Object hook) { this.hookFunction = hook; }
+    public String getHookMask() { return hookMask; }
+    public void setHookMask(String mask) { this.hookMask = mask; }
+    public int getHookCount() { return hookCount; }
+    public void setHookCount(int count) { this.hookCount = count; }
+    /** 判断掩码中是否包含指定字符（'l'/'c'/'r'）。 */
+    public boolean isHookMask(char c) { return hookMask.indexOf(c) >= 0; }
+    public com.oracle.truffle.api.instrumentation.EventBinding<?> getHookBinding() { return hookBinding; }
+    public void setHookBinding(com.oracle.truffle.api.instrumentation.EventBinding<?> binding) { this.hookBinding = binding; }
+    public java.util.List<com.oracle.truffle.api.instrumentation.EventBinding<?>> getExtraHookBindings() { return extraHookBindings; }
+    public void addExtraHookBinding(com.oracle.truffle.api.instrumentation.EventBinding<?> binding) { extraHookBindings.add(binding); }
+    public void clearExtraHookBindings() { extraHookBindings.clear(); }
+    public int getLastHookLine() { return lastHookLine; }
+    public void setLastHookLine(int line) { this.lastHookLine = line; }
+    public boolean isInHook() { return inHook; }
+    public void setInHook(boolean inHook) { this.inHook = inHook; }
+    public int getInstructionCount() { return instructionCount; }
+    public void setInstructionCount(int count) { this.instructionCount = count; }
+
+    // coroutine 线程跟踪
+    public LuaThread getCurrentCoroutine() { return currentCoroutine.get(); }
+    public void setCurrentCoroutine(LuaThread thread) { currentCoroutine.set(thread); }
+
+    // tostring 内建函数对象：error() 格式化非字符串错误对象时经由它调用
+    // __tostring（保持标准 lua message handler 的帧深度），不能被用户替换的全局覆盖
+    private LuaFunction tostringFunction;
+
+    // import() 已导入符号缓存（Java 类 / polyglot 符号按名缓存）。
+    // 宿主符号查找是 @TruffleBoundary 慢路径操作，缓存使重复导入零查找开销。
+    // 仅缓存成功结果：导入失败会抛出 Lua 错误，不会写入此表。
+    private final Map<String, Object> importedSymbols = new HashMap<>();
 
     // 【1. 新增】一个用于存储【类型默认元表】的 Map
     private final Map<Class<?>, LuaTable> typeMetatables = new HashMap<>();
@@ -117,8 +237,12 @@ public final class LuaContext {
     public LuaContext(LuaLanguage language, Env env) {
         this.env = env;
 
-        this.output = new PrintWriter(env.out(), true);
-        this.error = new PrintWriter(env.err(), true);
+        // Lua 字符串内部按 Latin-1 字节模型存储（每个字符 = 一个字节），输出必须按
+        // ISO-8859-1 编码直通底层字节流，与标准 lua 的 8-bit clean 行为一致：
+        // 写入什么字节，终端就收到什么字节（UTF-8/GBK 源文件的中文可原样输出）。
+        // 若按默认 UTF-8 编码会再次编码导致乱码。
+        this.output = new PrintWriter(new java.io.OutputStreamWriter(env.out(), java.nio.charset.StandardCharsets.ISO_8859_1), true);
+        this.error = new PrintWriter(new java.io.OutputStreamWriter(env.err(), java.nio.charset.StandardCharsets.ISO_8859_1), true);
         this.language = language;
 
         // 1. 【关键】在上下文创建时，实例化全局表
@@ -127,11 +251,15 @@ public final class LuaContext {
         this.functionShape = Shape.newBuilder().layout(LuaFunction.class, MethodHandles.lookup()).build();
         this.booleanShape = Shape.newBuilder().layout(LuaBoolean.class, MethodHandles.lookup()).build();
         this.fileShape = Shape.newBuilder().layout(LuaFileHandle.class, MethodHandles.lookup()).build();
+        this.threadShape = Shape.newBuilder().layout(LuaThread.class, MethodHandles.lookup()).build();
 
         this.globals = new LuaTable(tableShape);
         // 2. 将全局表自身放入全局表中，键为 "_G"
         //    这是标准的 Lua 行为
         this.globals.rawset(toTruffleString("_G"), this.globals, DynamicObjectLibrary.getUncached());
+        // Lua 5.3: _ENV 是主块的 upvalue，默认指向全局表。简化实现为全局变量，
+        // 使 _ENV.x = v 与 x = v 等价（对主块外的函数，_ENV 仍解析为全局 _ENV）。
+        this.globals.rawset(toTruffleString("_ENV"), this.globals, DynamicObjectLibrary.getUncached());
         // Lua's standard version marker is observable by startup scripts and libraries.
         this.globals.rawset(toTruffleString("_VERSION"), toTruffleString("Lua 5.3"),
                 DynamicObjectLibrary.getUncached());
@@ -193,7 +321,9 @@ public final class LuaContext {
         installBuiltins();
         //初始化 package 表
         setupPackageSystem();
-
+        // 创建主线程 LuaThread 对象并设为当前协程（coroutine.running 返回它）
+        mainThread = new LuaThread(threadShape, null, null, toTruffleString("main"), null, env, true);
+        currentCoroutine.set(mainThread);
     }
 
     // --- 提供 Getter 以便外界可以访问这些 Shape ---
@@ -202,7 +332,22 @@ public final class LuaContext {
     public Shape getFunctionShape() { return functionShape; }
     public Shape getBooleanShape() { return booleanShape; }
     public Shape getFileShape() { return fileShape; }
+    public Shape getThreadShape() { return threadShape; }
     public LuaLanguage getLanguage() { return language; }
+
+    /** 查找内嵌 lua-hook instrument 暴露的 Instrumenter（debug.sethook 用）。 */
+    @TruffleBoundary
+    public com.oracle.truffle.api.instrumentation.Instrumenter lookupHookInstrumenter() {
+        java.util.Map<String, com.oracle.truffle.api.InstrumentInfo> instruments = env.getInstruments();
+        com.oracle.truffle.api.InstrumentInfo info = instruments.get(com.zhhz.truffle.lua.LuaHookInstrument.ID);
+        if (info == null) {
+            return null;
+        }
+        // lookup(InstrumentInfo, Class) 会触发该 instrument 的加载并取回已注册服务
+        com.zhhz.truffle.lua.LuaHookInstrument hookInstrument =
+                env.lookup(info, com.zhhz.truffle.lua.LuaHookInstrument.class);
+        return hookInstrument != null ? hookInstrument.getInstrumenterHandle() : null;
+    }
 
     public LuaFileHandle getDefaultInput() { return defaultInput; }
     public void setDefaultInput(LuaFileHandle input) { this.defaultInput = input; }
@@ -239,6 +384,14 @@ public final class LuaContext {
     }
 
     @TruffleBoundary
+    public Object getImportedSymbol(String name) {
+        return importedSymbols.get(name);
+    }
+
+    public void cacheImportedSymbol(String name, Object symbol) {
+        importedSymbols.put(name, symbol);
+    }
+
     public static TruffleString toTruffleString(String s){
         return TruffleString.fromJavaStringUncached(s,LuaLanguage.STRING_ENCODING);
     }
@@ -314,11 +467,13 @@ public final class LuaContext {
 
         installBuiltin("print",LuaPrintBuiltinNodeGen::create);
         installBuiltin("require", LuaRequireBuiltinNodeGen::create);
+        installBuiltin("import", LuaImportBuiltinNodeGen::create);
         installBuiltin("error",LuaErrorBuiltinNodeGen::create);
         installBuiltin("next",LuaNextBuiltinNodeGen::create);
         installBuiltin("pairs",LuaPairsBuiltinNodeGen::create);
         createIpairsIterator();
         installBuiltin("ipairs",LuaIpairsBuiltinNodeGen::create);
+        createUtf8Iterator();
 
         installBuiltin("setmetatable",LuaSetMetatableBuiltinNodeGen::create);
         installBuiltin("getmetatable", LuaGetMetatableBuiltinNodeGen::create);
@@ -329,6 +484,8 @@ public final class LuaContext {
         installBuiltin(LuaCollectGarbageBuiltinNodeGen.create());
         installBuiltin(LuaRawGetBuiltinNodeGen.create());
         installBuiltin(LuaRawSetBuiltinNodeGen.create());
+        installBuiltin("rawlen", LuaRawLenBuiltinNodeGen::create);
+        installBuiltin("rawequal", LuaRawEqualBuiltinNodeGen::create);
         installBuiltin(LuaTypeBuiltinNodeGen.create());
         installBuiltin(LuaSelectBuiltinNodeGen.create());
 
@@ -347,6 +504,8 @@ public final class LuaContext {
         mathTable.rawset("huge", Double.POSITIVE_INFINITY);
         mathTable.rawset("maxinteger", Long.MAX_VALUE);
         mathTable.rawset("mininteger", Long.MIN_VALUE);
+        // Lua 5.3 的兼容库 bit32（LUA_COMPAT_BITLIB）
+        installBuiltinLibrary(toTruffleString("bit32"), Bit32Library.class);
         var stringTable = installBuiltinLibrary(toTruffleString("string"),StringLibrary.class);
         installFunctionIntoTable(stringTable, "gmatch", LuaStringGmatchBuiltinNodeGen::create);
         LuaTable stringMetatable = new LuaTable(tableShape);
@@ -358,6 +517,15 @@ public final class LuaContext {
         installFunctionIntoTable(tableLibrary, "sort", LuaTableSortBuiltinNodeGen::create);
 
         installBuiltinLibrary(toTruffleString("debug"), DebugLibrary.class);
+
+        LuaTable utf8Table = installBuiltinLibrary(toTruffleString("utf8"), Utf8Library.class);
+        utf8Table.rawset(toTruffleString("charpattern"), toTruffleString(Utf8Library.CHARPATTERN));
+        installFunctionIntoTable(utf8Table, "codes", LuaUtf8CodesBuiltinNodeGen::create);
+
+        installBuiltinLibrary(toTruffleString("coroutine"), CoroutineLibrary.class);
+
+        // json.encode：Lua 值 → JSON 文本（数组部分 → JSON 数组，哈希部分 → JSON 对象）
+        installBuiltinLibrary(toTruffleString("json"), JsonLibrary.class);
 
         LuaTable ioLibrary = installBuiltinLibrary(toTruffleString("io"), IoLibrary.class);
         LuaFileHandle stdin = LuaFileHandle.stream(fileShape, env.in(), null, true);
@@ -373,8 +541,12 @@ public final class LuaContext {
             fileMethods.rawset(method, function);
             ioLibrary.rawset("file_" + method, LuaNil.SINGLETON);
         }
+        Object fileGc = ioLibrary.rawget("file_gc");
+        ioLibrary.rawset("file_gc", LuaNil.SINGLETON);
         LuaTable fileMetatable = new LuaTable(tableShape);
         fileMetatable.rawset(LuaMetatables.__INDEX, fileMethods);
+        fileMetatable.rawset("__gc", fileGc);
+        fileMetatable.rawset(LuaMetatables.__NAME, toTruffleString("FILE*"));
         stdin.setMetatable(fileMetatable);
         stdout.setMetatable(fileMetatable);
         stderr.setMetatable(fileMetatable);
@@ -398,13 +570,15 @@ public final class LuaContext {
         packageTable.rawset("cpath", toTruffleString(DEFAULT_CPATH)); // "./?.so;..."
 
         // Register standard libraries in package.loaded so require('string'), require('io'), etc. work
-        String[] stdLibs = {"string", "io", "math", "os", "table", "coroutine", "package", "debug"};
+        String[] stdLibs = {"string", "io", "math", "os", "table", "coroutine", "package", "debug", "utf8", "bit32"};
         for (String lib : stdLibs) {
             Object libTable = globals.rawget(toTruffleString(lib));
             if (libTable instanceof LuaTable) {
                 loaded.rawset(toTruffleString(lib), libTable);
             }
         }
+        // 与标准 Lua 一致：基础库以 "_G" 为名注册到 package.loaded（供错误消息解析限定名）。
+        loaded.rawset(toTruffleString("_G"), globals, DynamicObjectLibrary.getUncached());
 
         // Windows 用 \，其他用 /
         String dirSep = FileSystems.getDefault().getSeparator();
@@ -622,6 +796,21 @@ public final class LuaContext {
         return this.ipairsIterator;
     }
 
+    /** 创建并缓存 utf8.codes 的迭代器函数（不注册到任何表）。 */
+    private void createUtf8Iterator() {
+        RootNode rootNode = new BuiltinRootNode(language, com.zhhz.truffle.lua.builtins.LuaUtf8IteratorBuiltinNodeGen::create);
+        this.utf8Iterator = new LuaFunction(functionShape, rootNode.getCallTarget(), null, toTruffleString("utf8_iterator"));
+    }
+
+    public LuaFunction getUtf8Iterator() {
+        return this.utf8Iterator;
+    }
+
+    /** 供 error() 等内建调用的原始 tostring 函数（不受全局替换影响）。 */
+    public LuaFunction getTostringFunction() {
+        return this.tostringFunction;
+    }
+
     public void installBuiltin(String funcName,Supplier<LuaBuiltinNode> builtinNodeFactory) {
 
         // 步骤 A: 创建一个 BuiltinRootNode 来包装我们的内置节点
@@ -654,6 +843,9 @@ public final class LuaContext {
         LuaFunction function = new LuaFunction(this.functionShape, callTarget, null, name);
 
         globals.rawset(name, function, DynamicObjectLibrary.getUncached());
+        if ("tostring".equals(nodeInfo.shortName())) {
+            this.tostringFunction = function;
+        }
     }
 
 
@@ -732,6 +924,19 @@ public final class LuaContext {
         return null;
     }
 
+    /**
+     * 为基本类型（nil/boolean/number/string 等）设置共享的类型元表。
+     * 对应 Lua 的 {@code debug.setmetatable} 对非 table 值的行为。
+     */
+    public void setTypeMetatable(Object value, LuaTable metatable) {
+        if (value instanceof Long || value instanceof Double) {
+            typeMetatables.put(Long.class, metatable);
+            typeMetatables.put(Double.class, metatable);
+        } else if (value != null) {
+            typeMetatables.put(value.getClass(), metatable);
+        }
+    }
+
     public CallTarget parse(Source source) {
         return env.parsePublic(source);
     }
@@ -752,5 +957,164 @@ public final class LuaContext {
 
     public LuaTable getGlobals() {
         return this.globals;
+    }
+
+    // =================================================================================
+    // 调用点追踪（用于参数错误消息里复刻 luaL_argerror / getinfo "n" 的命名行为）
+    // =================================================================================
+    private com.oracle.truffle.api.nodes.Node pendingCallSite;
+    private com.oracle.truffle.api.nodes.Node activeCallSite;
+
+    public com.oracle.truffle.api.nodes.Node getPendingCallSite() {
+        return pendingCallSite;
+    }
+
+    public void setPendingCallSite(com.oracle.truffle.api.nodes.Node node) {
+        this.pendingCallSite = node;
+    }
+
+    /** 取出并清空“待消费”的调用点（内建函数进入时调用）。 */
+    public com.oracle.truffle.api.nodes.Node takePendingCallSite() {
+        com.oracle.truffle.api.nodes.Node node = pendingCallSite;
+        pendingCallSite = null;
+        return node;
+    }
+
+    public com.oracle.truffle.api.nodes.Node getActiveCallSite() {
+        return activeCallSite;
+    }
+
+    public void setActiveCallSite(com.oracle.truffle.api.nodes.Node node) {
+        this.activeCallSite = node;
+    }
+
+    // =================================================================================
+    // 调用深度限制 / 栈溢出（复刻标准 Lua 的 "stack overflow" 与 "C stack overflow"）
+    // =================================================================================
+
+    /** 标准 Lua 的 LUAI_MAXCCALLS（C 调用嵌套上限）。 */
+    private static final int LUAI_MAXCCALLS = 200;
+    /**
+     * Lua 函数嵌套上限。标准 Lua 通过 Lua 栈（约 1e6 槽）限制，纯 Lua 递归报
+     * "stack overflow"；本引擎使用 Java 栈，故取一个远低于 Java 栈容量的值。
+     */
+    private static final int LUA_MAX_DEPTH = Integer.getInteger("lua.maxdepth", 250);
+    /** 错误处理期间允许的额外嵌套余量（对应标准 Lua 的 LUAI_MAXCCALLS>>3）。 */
+    private static final int LUA_ERROR_HEADROOM = 25;
+
+    private int cCallDepth;
+    private int luaCallDepth;
+    /** 是否正处于一次栈溢出错误处理过程中（用于生成 "error in error handling"）。 */
+    private boolean stackOverflow;
+    /** 当前生效的 xpcall 消息处理函数（在抛出点调用，复刻 luaG_errormsg 行为）。 */
+    private Object errorHandler;
+
+    private static final com.oracle.truffle.api.interop.InteropLibrary UNCACHED_INTEROP =
+            com.oracle.truffle.api.interop.InteropLibrary.getFactory().getUncached();
+
+    public Object setErrorHandler(Object handler) {
+        Object previous = errorHandler;
+        errorHandler = handler;
+        return previous;
+    }
+
+    public void restoreErrorHandler(Object handler) {
+        errorHandler = handler;
+    }
+
+    /** 进入一个内建（C）函数调用；超过 LUAI_MAXCCALLS 抛 "C stack overflow"。 */
+    public void enterBuiltin(com.oracle.truffle.api.nodes.Node location) {
+        if (++cCallDepth >= LUAI_MAXCCALLS) {
+            cCallDepth--;
+            throw stackError("C stack overflow", location);
+        }
+    }
+
+    public void exitBuiltin() {
+        if (--cCallDepth <= 0) {
+            cCallDepth = 0;
+            // 栈已完全展开：清除溢出标记，避免后续调用误判为“错误处理中”。
+            // 标准 Lua 通过递减 nCcalls 隐式恢复，这里显式复位。
+            if (luaCallDepth <= 0) {
+                stackOverflow = false;
+            }
+        }
+    }
+
+    /** 进入一个 Lua 函数调用；超过 LUA_MAX_DEPTH 抛 "stack overflow"。 */
+    public void enterLuaCall(com.oracle.truffle.api.nodes.Node location) {
+        int depth = ++luaCallDepth;
+        // 硬上限：与标准 Lua 一致，在错误处理期间再次溢出时报 "error in error handling"。
+        if (depth >= LUA_MAX_DEPTH + LUA_ERROR_HEADROOM) {
+            luaCallDepth--;
+            stackOverflow = true;
+            throw LuaException.create("error in error handling", location);
+        }
+        // 软上限：首次达到上限时报 "stack overflow"（消息处理函数尚可在余量内运行）。
+        if (depth >= LUA_MAX_DEPTH && !stackOverflow) {
+            luaCallDepth--;
+            throw stackError("stack overflow", location);
+        }
+    }
+
+    public void exitLuaCall() {
+        if (--luaCallDepth <= 0) {
+            luaCallDepth = 0;
+            if (cCallDepth <= 0) {
+                stackOverflow = false;
+            }
+        }
+    }
+
+    // =================================================================================
+    // 可让出性（复刻标准 Lua 的 L->nny：non-yieldable 层数）
+    // =================================================================================
+    // 协程体在 nny==0 的环境中运行，可直接 yield；当 Lua 代码是经内建（C）函数回调
+    // 进入时（例如 table.sort 的比较器、元方法），nny>0，此时 yield 会报
+    // "attempt to yield across a C-call boundary"。计数按线程隔离（每个协程一条线程）。
+    private final ThreadLocal<int[]> nonYieldable = ThreadLocal.withInitial(() -> new int[1]);
+
+    public void enterNonYieldable() {
+        nonYieldable.get()[0]++;
+    }
+
+    public void exitNonYieldable() {
+        nonYieldable.get()[0]--;
+    }
+
+    public boolean isNonYieldable() {
+        return nonYieldable.get()[0] > 0;
+    }
+
+    private RuntimeException stackError(String message, com.oracle.truffle.api.nodes.Node location) {
+        if (stackOverflow) {
+            return LuaException.create("error in error handling", location);
+        }
+        stackOverflow = true;
+        LuaException error = (LuaException) LuaException.runtimeError(message, location);
+        Object handler = errorHandler;
+        if (handler != null) {
+            // 标准 Lua：消息处理函数在展开栈之前、栈仍然很深时被调用，
+            // 因此 debug.traceback 能看到完整的递归调用链。
+            try {
+                Object messageObject = error.getErrorObject();
+                if (messageObject instanceof String string) {
+                    messageObject = toTruffleString(string);
+                }
+                Object handled = UNCACHED_INTEROP.execute(handler, messageObject);
+                throw new LuaHandledError(handled);
+            } catch (LuaHandledError handled) {
+                throw handled;
+            } catch (Exception handlerError) {
+                stackOverflow = false;
+                return LuaException.create("error in error handling", location);
+            }
+        }
+        return error;
+    }
+
+    /** 由 pcall/xpcall 在捕获错误后调用，重置栈溢出状态。 */
+    public void clearStackOverflow() {
+        stackOverflow = false;
     }
 }

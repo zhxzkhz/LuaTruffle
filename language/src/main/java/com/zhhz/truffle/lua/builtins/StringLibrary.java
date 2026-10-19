@@ -84,7 +84,7 @@ public final class StringLibrary {
         } catch (ArithmeticException exception) {
             throw LuaException.create("resulting string too large", null);
         }
-        if (size > Integer.MAX_VALUE) {
+        if (size > Integer.MAX_VALUE - 1) {
             throw LuaException.create("resulting string too large", null);
         }
         ByteArrayOutputStream output = new ByteArrayOutputStream((int) size);
@@ -313,7 +313,7 @@ public final class StringLibrary {
         Object value;
         if (replacement instanceof LuaTable table) {
             Object[] captures = match.capturesOrWholeMatch();
-            value = table.rawget(captures[0]);
+            value = com.zhhz.truffle.lua.nodes.access.LuaReadTableNode.readUncached(null, table, captures[0]);
         } else if (InteropLibrary.getUncached().isExecutable(replacement)) {
             try {
                 value = InteropLibrary.getUncached().execute(replacement, match.capturesOrWholeMatch());
@@ -334,12 +334,22 @@ public final class StringLibrary {
             output.writeBytes(match.wholeMatch());
             return;
         }
+        if (!isStringLike(value)) {
+            String typeName = value instanceof com.zhhz.truffle.lua.runtime.LuaValue luaValue
+                    ? luaValue.getTypeName() : "userdata";
+            throw LuaException.create("invalid replacement value (a " + typeName + ")", null);
+        }
         output.writeBytes(LuaStringSupport.toBytes(value, 3, "gsub"));
+    }
+
+    private static boolean isStringLike(Object value) {
+        return value instanceof TruffleString || value instanceof com.zhhz.truffle.lua.runtime.LuaString
+                || value instanceof String || value instanceof Long || value instanceof Double || value instanceof Integer;
     }
 
     private static void appendReplacementTemplate(ByteArrayOutputStream output, byte[] replacement,
                                                    LuaPatternMatcher.MatchResult match) {
-        Object[] captures = match.capturesOrWholeMatch();
+        Object[] captures = null;
         for (int i = 0; i < replacement.length; i++) {
             int value = replacement[i] & 0xff;
             if (value != '%' || i + 1 >= replacement.length) {
@@ -352,6 +362,9 @@ public final class StringLibrary {
             } else if (escaped == '0') {
                 output.writeBytes(match.wholeMatch());
             } else if (escaped >= '1' && escaped <= '9') {
+                if (captures == null) {
+                    captures = match.capturesOrWholeMatch();
+                }
                 int capture = escaped - '1';
                 if (capture >= captures.length) {
                     throw LuaException.create("invalid capture index %" + (char) escaped, null);
@@ -402,6 +415,9 @@ public final class StringLibrary {
             return quote(value);
         }
         try {
+            if (directive.indexOf('.') >= 0 && isIntegerConversion(conversion)) {
+                return formatIntegerPrecision(directive, conversion, value, argument);
+            }
             String javaDirective = directive;
             Object javaValue;
             switch (conversion) {
@@ -426,6 +442,89 @@ public final class StringLibrary {
         } catch (Exception exception) {
             throw LuaException.create("invalid format: " + exception.getMessage(), null);
         }
+    }
+
+    private static boolean isIntegerConversion(int conversion) {
+        return conversion == 'd' || conversion == 'i' || conversion == 'o'
+                || conversion == 'x' || conversion == 'X' || conversion == 'u';
+    }
+
+    /**
+     * C 的 printf 允许对整数使用精度（最小位数），而 Java 的 {@link String.Format} 不支持。
+     * 这里复刻 C 语义：精度对数字部分零填充（按位无符号解释 o/x/X/u），随后按宽度补空格；
+     * 指定精度时忽略 {@code '0'} 标志。
+     */
+    private static byte[] formatIntegerPrecision(String directive, int conversion, Object value, int argument) {
+        int i = 1;
+        boolean leftAlign = false;
+        boolean plus = false;
+        boolean space = false;
+        boolean alternate = false;
+        while (i < directive.length()) {
+            char c = directive.charAt(i);
+            if (c == '-') leftAlign = true;
+            else if (c == '+') plus = true;
+            else if (c == ' ') space = true;
+            else if (c == '#') alternate = true;
+            else if (c == '0') { /* 精度存在时忽略 */ }
+            else break;
+            i++;
+        }
+        int width = 0;
+        while (i < directive.length() && Character.isDigit(directive.charAt(i))) {
+            width = width * 10 + (directive.charAt(i) - '0');
+            i++;
+        }
+        int precision = 0;
+        if (i < directive.length() && directive.charAt(i) == '.') {
+            i++;
+            while (i < directive.length() && Character.isDigit(directive.charAt(i))) {
+                precision = precision * 10 + (directive.charAt(i) - '0');
+                i++;
+            }
+        }
+
+        long number = toLong(value, argument, "format");
+        boolean negative = false;
+        String digits;
+        String prefix = "";
+        switch (conversion) {
+            case 'd', 'i' -> {
+                String raw = Long.toString(number);
+                if (raw.startsWith("-")) {
+                    negative = true;
+                    raw = raw.substring(1);
+                }
+                digits = raw;
+            }
+            case 'o' -> {
+                digits = Long.toOctalString(number);
+                if (alternate && !digits.startsWith("0")) prefix = "0";
+            }
+            case 'x' -> {
+                digits = Long.toHexString(number);
+                if (alternate) prefix = "0x";
+            }
+            case 'X' -> {
+                digits = Long.toHexString(number).toUpperCase(Locale.ROOT);
+                if (alternate) prefix = "0X";
+            }
+            default -> digits = Long.toUnsignedString(number);
+        }
+
+        if (precision == 0 && digits.equals("0")) {
+            digits = "";
+        } else if (digits.length() < precision) {
+            digits = "0".repeat(precision - digits.length()) + digits;
+        }
+
+        String sign = negative ? "-" : plus ? "+" : space ? " " : "";
+        String body = sign + prefix + digits;
+        if (body.length() < width) {
+            String pad = " ".repeat(width - body.length());
+            body = leftAlign ? body + pad : pad + body;
+        }
+        return body.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static String applyStringWidth(String directive, String value) {
@@ -463,16 +562,21 @@ public final class StringLibrary {
         for (int i = 0; i < bytes.length; i++) {
             int current = bytes[i] & 0xff;
             switch (current) {
-                case '"', '\\' -> {
+                // 标准 Lua addquoted：'"'、'\'、'\n' 输出 \+原字节（词法器 \<LF> 转义可还原）；
+                // 其余控制字符（含 \0 与 \r）按"下一字节是否为数字"选择最短 \d 或
+                // 3 位补零 \ddd 形式，避免转义数字与后续数字粘连产生解析歧义
+                case '"', '\\', '\n' -> {
                     output.write('\\');
                     output.write(current);
                 }
-                case '\n' -> output.writeBytes("\\n".getBytes(StandardCharsets.US_ASCII));
-                case '\r' -> output.writeBytes("\\r".getBytes(StandardCharsets.US_ASCII));
-                case 0 -> output.writeBytes("\\0".getBytes(StandardCharsets.US_ASCII));
                 default -> {
                     if (current < 32 || current == 127) {
-                        output.writeBytes(String.format(Locale.ROOT, "\\%03d", current).getBytes(StandardCharsets.US_ASCII));
+                        boolean nextIsDigit = i + 1 < bytes.length
+                                && (bytes[i + 1] & 0xff) >= '0' && (bytes[i + 1] & 0xff) <= '9';
+                        String escape = nextIsDigit
+                                ? String.format(Locale.ROOT, "\\%03d", current)
+                                : String.format(Locale.ROOT, "\\%d", current);
+                        output.writeBytes(escape.getBytes(StandardCharsets.US_ASCII));
                     } else {
                         output.write(current);
                     }

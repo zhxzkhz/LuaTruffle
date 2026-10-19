@@ -3,6 +3,7 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
@@ -16,6 +17,7 @@ import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "load")
 public abstract class LoadBuiltinNode extends LuaBuiltinNode {
@@ -31,7 +33,6 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
         }
 
         Object sourceProvider = arguments[0];
-        String chunkName = getChunkName(arguments);
 
         // 获取当前的 Env
         Env env = getContext().getEnv();
@@ -47,12 +48,20 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
                 sourceText = "";
             }
 
+            // chunk 名在拿到文本后解析（默认名 = chunk 文本本身）
+            String chunkName = getChunkName(arguments, sourceText);
             Source source = Source.newBuilder(LuaLanguage.ID, sourceText, chunkName).build();
             // 【核心】委托给 Truffle 框架进行解析
             // parseInternal 会返回一个 CallTarget
             var callTarget = env.parseInternal(source);
             // 将 CallTarget 包装成我们的 LuaFunction
             LuaFunction compiledFunction = new LuaFunction(getContext().getFunctionShape(), callTarget);
+
+            // load(chunk, chunkname, mode, env)：第 4 个参数（若提供，含显式 nil）
+            // 作为 chunk 的环境（_ENV 初值）。
+            if (arguments.length > 3) {
+                compiledFunction.setEnvironment(arguments[3]);
+            }
 
             // 【成功】返回函数
             return compiledFunction;
@@ -101,9 +110,9 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
 
                         sb.append(interop.asString(chunk));
                     } else {
-                        // 如果读取器返回了非字符串，是错误的
-                        // load 会中止并返回一个错误，但为了简化，我们这里直接中断
-                        break;
+                        // reader 返回非 nil/非字符串：标准 Lua 视为错误，load 返回 nil
+                        throw LuaException.create(
+                                "bad argument #1 to 'load' (reader function must return a string)", this);
                     }
                 } catch (LuaException e){
                     throw e;
@@ -122,11 +131,13 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
     // --- 其他辅助方法 ---
 
     @TruffleBoundary
-    private String getChunkName(Object[] arguments) {
+    private String getChunkName(Object[] arguments, String sourceText) {
         if (arguments.length > 1 && arguments[1] instanceof TruffleString) {
             return ((TruffleString) arguments[1]).toJavaStringUncached();
         }
-        return "=(load)"; // 默认的 chunk 名
+        // 标准 Lua：未指定 chunk 名时以 chunk 文本自身作为源名，
+        // debug.getinfo 的 short_src 据此显示 [string "..."]（经 chunkid 规则）
+        return sourceText;
     }
 
     @TruffleBoundary

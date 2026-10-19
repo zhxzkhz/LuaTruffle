@@ -413,7 +413,16 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
 
     @Test
     public void testStringEscapeUnicode() {
-        assertEquals("\u4e2d", run("'\\u{4e2d}'").asString());
+        // 字节模型：字符串按原始字节存储（8-bit clean），Unicode 转义产生 UTF-8 字节
+        // E4 B8 AD 共 3 字节。polyglot asString() 返回的是 Latin-1 字节模型字符串，
+        // 与 Java 字符串"中"不可直接比较，因此断言原始字节。
+        // （Java 源码中反斜杠与 u 相邻会触发 Unicode 转义预处理，故用字符拼接。）
+        String escape = '\\' + "u{4e2d}";
+        Value result = run("string.len('" + escape + "'), string.byte('" + escape + "', 1, -1)");
+        assertEquals(3L, result.getArrayElement(0).asLong());
+        assertEquals(0xE4, result.getArrayElement(1).asLong());
+        assertEquals(0xB8, result.getArrayElement(2).asLong());
+        assertEquals(0xAD, result.getArrayElement(3).asLong());
     }
 
     @Test
@@ -423,7 +432,14 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
 
     @Test
     public void testStringEscapeHexTwoDigits() {
-        assertEquals("\u00ff", run("'\\xff'").asString());
+        // 标准 Lua：\xHH 产生单字节（低 8 位），与 string.char / \ddd 一致。
+        // 官方测试套件 literals.lua 据此比较 \xff 与 string.char(255)/\255。
+        // 因此 '\xff' 应为单字节 0xFF，且等于 string.char(255) 与 '\255'。
+        Value result = run("string.byte('\\xff'), '\\xff' == string.char(255), '\\xff' == '\\255', string.len('\\xff')");
+        assertEquals(255L, result.getArrayElement(0).asLong());
+        assertTrue(result.getArrayElement(1).asBoolean());
+        assertTrue(result.getArrayElement(2).asBoolean());
+        assertEquals(1L, result.getArrayElement(3).asLong());
     }
 
     // ===== P2 #8 补充: GreaterOrEqual 边界 =====
@@ -1137,7 +1153,22 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
 
     @Test
     public void testStringLengthCountsUtf8Bytes() {
-        assertEquals(2L, eval("return #'é'").asLong());
+        // 字节模型：非 ASCII 字符按其 UTF-8 字节序列计数（Unicode 转义 e9 产生 C3 A9 两个字节）。
+        String escape = '\\' + "u{e9}";
+        assertEquals(2L, eval("return #('" + escape + "')").asLong());
+    }
+
+    @Test
+    public void testChineseLiteralPreservesUtf8Bytes() {
+        // 回归：中文字面量必须无损保留 UTF-8 字节（此前被 Latin-1 转换压成 '?'）。
+        // Java 源字符串中的中文字符（>0xFF）按 UTF-8 编码为字节存储。
+        assertEquals(6L, eval("return #'中文'").asLong());
+        // 尾随位置的调用展开为全部字节值
+        Value bytes = eval("return string.byte('中', 1, -1)");
+        assertEquals(0xE4, bytes.getArrayElement(0).asLong());
+        assertEquals(0xB8, bytes.getArrayElement(1).asLong());
+        assertEquals(0xAD, bytes.getArrayElement(2).asLong());
+        assertTrue(eval("return '中文' == string.char(228, 184, 173, 230, 150, 135)").asBoolean());
     }
 
     @Test
@@ -1205,7 +1236,7 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
                     and tonumber('+0x10') == 16
                     and tonumber('0x1.8') == 1.5
                     and tonumber('0x10000000000000000') == 0
-                    and tonumber('  \t123\n') == 123
+                    and tonumber('  \t123\\n') == 123
                 """).asBoolean());
     }
 

@@ -9,12 +9,14 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
+import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.builtins.LoadBuiltinNode;
 import com.zhhz.truffle.lua.builtins.LoadBuiltinNodeGen;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import java.io.IOException;
@@ -76,13 +78,23 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
         LuaTable globals = context.getGlobals();
 
         Object pkg = globals.rawget("package");
-        if (pkg instanceof LuaTable) {
-            Object path = ((LuaTable) pkg).rawget("path");
-            if (path != null) {
+        if (pkg instanceof LuaTable packageTable) {
+            Object path = packageTable.rawget("path");
+            if (path instanceof TruffleString string) {
+                return string.toJavaStringUncached();
+            }
+            if (path instanceof LuaString string) {
+                return string.getValue().toJavaStringUncached();
+            }
+            if (path instanceof String string) {
+                return string;
+            }
+            if (path instanceof Long || path instanceof Double) {
                 return path.toString();
             }
         }
-        return null;
+        // 标准 Lua 在 package.path 非字符串时抛出错误（而非返回 "no package.path"）
+        throw LuaException.create("'package.path' must be a string", null);
     }
 
     /**
@@ -122,6 +134,6 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
     }
 
     private static TruffleString toTruffleString(String s) {
-        return TruffleString.fromJavaStringUncached(s, TruffleString.Encoding.UTF_8);
+        return TruffleString.fromJavaStringUncached(s, LuaLanguage.STRING_ENCODING);
     }
 }

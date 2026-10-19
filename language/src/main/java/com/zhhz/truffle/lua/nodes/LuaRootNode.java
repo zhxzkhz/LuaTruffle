@@ -63,9 +63,67 @@ public abstract class LuaRootNode extends RootNode {
 
     private final TruffleString name;
 
+    /**
+     * 固定参数个数（不含 {@code ...}）。-1 表示未设置（main chunk 等）。
+     * 用于 {@code debug.getlocal(f, n)} 仅返回参数名而非局部变量名。
+     */
+    private int paramCount = -1;
+
+    /** 是否为变长参数函数（含 {@code ...}）。用于 debug.getlocal 的负索引 vararg 语义。 */
+    private boolean variadic;
+
+    /**
+     * 一个函数按首次引用顺序排列的 upvalue 描述符。
+     *
+     * @param name  upvalue 名
+     * @param slot  槽位在祖先帧中的索引
+     * @param depth 需要沿静态链向上跨越的函数边界数（1 表示直接父帧）
+     */
+    public record UpvalueDescriptor(TruffleString name, int slot, int depth) {}
+
+    private UpvalueDescriptor[] upvalueDescriptors = new UpvalueDescriptor[0];
+
+    /**
+     * 该根节点是否为一个 chunk（main chunk 或 load/require 加载的代码块）。
+     * chunk 的 {@code _ENV} 是特殊 upvalue，单独由 LuaFunction 的环境字段处理。
+     */
+    private boolean chunk;
+
+    public UpvalueDescriptor[] getUpvalueDescriptors() {
+        return upvalueDescriptors;
+    }
+
+    public void setUpvalueDescriptors(UpvalueDescriptor[] upvalueDescriptors) {
+        this.upvalueDescriptors = upvalueDescriptors;
+    }
+
+    public boolean isChunk() {
+        return chunk;
+    }
+
+    public void setChunk(boolean chunk) {
+        this.chunk = chunk;
+    }
+
     public LuaRootNode(LuaLanguage language, FrameDescriptor frameDescriptor, TruffleString name) {
         super(language, frameDescriptor);
         this.name = name;
+    }
+
+    public int getParamCount() {
+        return paramCount;
+    }
+
+    public void setParamCount(int paramCount) {
+        this.paramCount = paramCount;
+    }
+
+    public boolean isVariadic() {
+        return variadic;
+    }
+
+    public void setVariadic(boolean variadic) {
+        this.variadic = variadic;
     }
 
     @Override

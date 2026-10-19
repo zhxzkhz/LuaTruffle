@@ -119,7 +119,6 @@ public abstract class LuaMulNode extends LuaBinaryNode {
                                @Cached("create()") LuaMetatableNode metatableNode) {
 
         // 开发阶段的断言，确保输入不为空
-        assertNotNull(left, right, this);
 
         // --- 1. 尝试类型转换 (Coercion) ---
         // Lua 允许字符串参与算术运算，例如 "10" * 2
@@ -150,11 +149,11 @@ public abstract class LuaMulNode extends LuaBinaryNode {
         // 如果无法转换为数字（例如 table * table），查找 __mul 元方法
         Object result = metatableNode.execute(left, right, LuaMetatables.__MUL);
         if (result != null) {
-            return result;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result);
         }
 
         // --- 3. 报错 ---
         // 既不是数字，也没有元方法，抛出 Lua 类型错误
-        throw LuaException.typeError(this, "*", left, right);
+        throw arithmeticError(left, right, numLeft, numRight);
     }
 }

@@ -41,6 +41,7 @@
 package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
@@ -87,10 +88,21 @@ public final class LuaWhileRepeatingNode extends Node implements RepeatingNode {
     private final BranchProfile continueTaken = BranchProfile.create();
     private final BranchProfile breakTaken = BranchProfile.create();
 
+    // debug 行钩子：条件行（每次检查触发，回边强制）与 end 行（正常耗尽退出触发；break 不触发）
+    private final int condLine;
+    private final int endLine;
+
     public LuaWhileRepeatingNode(LuaExpressionNode conditionNode, LuaStatementNode bodyNode) {
+        this(conditionNode, bodyNode, 0, 0);
+    }
+
+    public LuaWhileRepeatingNode(LuaExpressionNode conditionNode, LuaStatementNode bodyNode,
+                                 int condLine, int endLine) {
         this.conditionNode = LuaToBooleanNodeGen.create(conditionNode);
         this.conditionNode.setSourceSection(conditionNode.getSourceCharIndex(), conditionNode.getSourceLength());
         this.bodyNode = bodyNode;
+        this.condLine = condLine;
+        this.endLine = endLine;
     }
 
     /**
@@ -101,9 +113,14 @@ public final class LuaWhileRepeatingNode extends Node implements RepeatingNode {
      */
     @Override
     public boolean executeRepeating(VirtualFrame frame) {
+        // 每轮迭代都在安全点轮询：使 context.interrupt()（如 Ctrl-C）能打断死循环
+        TruffleSafepoint.poll(this);
+        com.zhhz.truffle.lua.runtime.LuaInterrupt.check(this);
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, true);
         // 1. 【前置条件检查】
         // 如果条件为假，直接退出循环 (return false)。
         if (!evaluateCondition(frame)) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, endLine, false);
             return false;
         }
 

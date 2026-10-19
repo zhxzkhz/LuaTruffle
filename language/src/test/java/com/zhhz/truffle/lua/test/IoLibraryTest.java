@@ -19,7 +19,7 @@ class IoLibraryTest extends AbstractLuaTest {
             Value result = context.eval("lua", """
                     local path = [[%s]]
                     local output = assert(io.output(path))
-                    assert(io.write('alpha', 42, '\n', 'beta'))
+                    assert(io.write('alpha', 42, '\\n', 'beta'))
                     assert(io.close())
                     local input = assert(io.input(path))
                     local first = io.read('l')
@@ -82,7 +82,7 @@ class IoLibraryTest extends AbstractLuaTest {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """
                     local file = assert(io.tmpfile())
-                    assert(file:write('10 2.5\ntext'))
+                    assert(file:write('10 2.5\\ntext'))
                     assert(file:seek('set', 0) == 0)
                     local integer, float = file:read('n', 'n')
                     local line = file:read('l')

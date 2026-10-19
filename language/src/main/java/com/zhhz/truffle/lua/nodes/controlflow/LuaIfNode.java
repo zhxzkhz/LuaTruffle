@@ -95,21 +95,49 @@ public final class LuaIfNode extends LuaStatementNode {
      */
     private final CountingConditionProfile condition = CountingConditionProfile.create();
 
+    // debug 行钩子的关键字行号（0 = 无/不触发）：
+    // 行归属复刻标准 Lua 字节码：
+    //   - condLine / thenLine：条件求值与 OP_TEST 指令分别归属条件行与 then 关键字行，
+    //     两者均触发 line 事件（then 行对应 VM 进入 then/跳到 else 的指令）。
+    //   - then 分支末尾跳过 else 的 OP_JMP 归属 else 关键字行，但该跳转直达 end 行，
+    //     故 then 分支收尾触发 endLine（而非 elseLine）。
+    //   - else 分支：条件为假时跳到 else 块首指令，不经过 else 关键字行，故 elseLine 不触发；
+    //     else 块执行完后落至 end 行，触发 endLine。
+    private final int condLine;
+    private final int thenLine;
+    private final int elseLine;
+    private final int endLine;
+
     public LuaIfNode(LuaExpressionNode conditionNode, LuaStatementNode thenPartNode, LuaStatementNode elsePartNode) {
+        this(conditionNode, thenPartNode, elsePartNode, 0, 0, 0, 0);
+    }
+
+    public LuaIfNode(LuaExpressionNode conditionNode, LuaStatementNode thenPartNode,
+                     LuaStatementNode elsePartNode, int condLine, int thenLine, int elseLine, int endLine) {
         this.conditionNode = LuaToBooleanNodeGen.create(conditionNode);
         this.conditionNode.setSourceSection(conditionNode.getSourceCharIndex(), conditionNode.getSourceLength());
         this.thenPartNode = thenPartNode;
         this.elsePartNode = elsePartNode;
+        this.condLine = condLine;
+        this.thenLine = thenLine;
+        this.elseLine = elseLine;
+        this.endLine = endLine;
     }
 
     @Override
     public void executeVoid(VirtualFrame frame) {
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, false);
         /*
          * 1. 计算条件并进行 Profile 记录。
          * evaluateCondition(frame) 计算出 boolean 结果。
          * condition.profile(...) 将结果“注入”到 Profile 中并透传返回。
          */
-        if (condition.profile(evaluateCondition(frame))) {
+        boolean condResult = condition.profile(evaluateCondition(frame));
+        // thenLine 对应标准 Lua 字节码中的 OP_TEST 指令（then 关键字行），
+        // 无论条件真假都会触发：条件真时 VM 继续执行 then 块；条件假时
+        // OP_JMP 跳转到 else 块。两者指令均归属 then 关键字行。
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, thenLine, false);
+        if (condResult) {
             /* 2. 执行 Then 分支 */
             thenPartNode.executeVoid(frame);
         } else {
@@ -118,6 +146,7 @@ public final class LuaIfNode extends LuaStatementNode {
                 elsePartNode.executeVoid(frame);
             }
         }
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, endLine, false);
     }
 
     private boolean evaluateCondition(VirtualFrame frame) {

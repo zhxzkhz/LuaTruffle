@@ -52,25 +52,21 @@ public abstract class LuaValue extends DynamicObject {
         return getTypeName() + ": 0x" + Integer.toHexString(hashCode());
     }
 
+    /**
+     * 每个 Lua 值的元表。使用普通 Java 字段而非 DynamicObject 属性存储，
+     * 避免它作为可见键出现在 {@code next}/{@code pairs}/键枚举中。
+     */
+    private LuaTable metatable;
+
     public final void setMetatable(LuaTable metatable) {
-        // 使用一个uncached的库来设置隐藏属性
-        DynamicObjectLibrary.getUncached().put(this, LuaMetatables.__METATABLE, metatable);
+        this.metatable = metatable;
+        if (this instanceof LuaTable table) {
+            table.updateWeakMode(metatable);
+        }
     }
 
     public final LuaTable getMetatable() {
-        // 使用uncached的库来读取隐藏属性
-        Object mt = DynamicObjectLibrary.getUncached().getOrDefault(this, LuaMetatables.__METATABLE, null);
-        return (mt instanceof LuaTable) ? (LuaTable) mt : null;
-    }
-
-    @ExportMessage
-    public boolean hasLanguage() {
-        return false;
-    }
-
-    @ExportMessage
-    public Class<? extends com.oracle.truffle.api.TruffleLanguage<?>> getLanguage() throws UnsupportedMessageException {
-        throw UnsupportedMessageException.create();
+        return this.metatable;
     }
 
     /**

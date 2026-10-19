@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
@@ -10,6 +11,7 @@ import com.zhhz.truffle.lua.runtime.LuaTable;
 /**
  * 实现了Lua的 'ipairs' 内置函数。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "ipairs")
 public abstract class LuaIpairsBuiltinNode extends LuaBuiltinNode {
 

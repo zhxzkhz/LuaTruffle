@@ -39,12 +39,12 @@ public abstract class LuaModNode extends LuaBinaryNode {
 
     /**
      * 特化：整数除以 0。
-     * Lua 规则：整数对 0 取模会抛出错误 (attempt to perform 'n' modulo 0)。
+     * Lua 规则：整数对 0 取模会抛出错误 (attempt to perform 'n%0')。
      * 注意：浮点数对 0.0 取模结果是 NaN，不报错。
      */
     @Specialization(guards = "right == 0")
     protected long doLongZero(long left, long right) {
-        throw LuaException.create("attempt to perform 'n' modulo 0", this);
+        throw LuaException.create("attempt to perform 'n%0'", this);
     }
 
     // --- 2. 浮点数快速路径 (double % double) ---
@@ -111,7 +111,7 @@ public abstract class LuaModNode extends LuaBinaryNode {
                 long lRight = (Long) numRight;
 
                 if (lRight == 0) {
-                    throw LuaException.create("attempt to perform 'n' modulo 0", this);
+                    throw LuaException.create("attempt to perform 'n%0'", this);
                 }
                 // 整数取模逻辑
                 return Math.floorMod(lLeft, lRight);
@@ -123,11 +123,11 @@ public abstract class LuaModNode extends LuaBinaryNode {
         // 如果无法转为数字（例如 Table % Table），查找元方法
         Object metaResult = metatableNode.execute(left, right, LuaMetatables.__MOD);
         if (metaResult != null) {
-            return metaResult;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(metaResult);
         }
 
         // --- 第三阶段：报错 ---
 
-        throw LuaException.typeError(this, "%", left, right);
+        throw arithmeticError(left, right, numLeft, numRight);
     }
 }

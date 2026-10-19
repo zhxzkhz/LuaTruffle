@@ -90,15 +90,15 @@ public abstract class LuaLessThanNode extends LuaBinaryNode {
 
     @Fallback
     public static boolean typeError(Object left, Object right,
-                                   @Cached("create()") LuaMetatableNode metatableNode,
+                                   @Cached(value = "create()", neverDefault = true) LuaMetatableNode metatableNode,
                                    @Bind Node node) {
 
         Object result = metatableNode.execute(left, right, LuaMetatables.__LT);
 
         if (result != null) {
-            return LuaTypesUtil.isTruthy(result);
+            return LuaTypesUtil.isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
-        throw LuaException.typeError(node, "<", left, right);
+        throw LuaException.runtimeError(LuaTypesUtil.orderErrorMessage(left, right), node);
     }
 
 

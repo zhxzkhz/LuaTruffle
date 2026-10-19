@@ -14,8 +14,7 @@ final class LuaStringSupport {
 
     static byte[] ensureBytes(Object[] arguments, int index, String function) {
         if (index >= arguments.length) {
-            throw LuaException.create("bad argument #" + (index + 1) + " to '" + function
-                    + "' (string expected, got no value)", null);
+            throw argumentError(function, index + 1, "string expected, got no value");
         }
         return toBytes(arguments[index], index + 1, function);
     }
@@ -37,7 +36,12 @@ final class LuaStringSupport {
             String text = number == number.longValue() ? Long.toString(number.longValue()) : Double.toString(number);
             return text.getBytes(StandardCharsets.US_ASCII);
         }
-        throw LuaException.create("bad argument #" + argument + " to '" + function + "' (string expected)", null);
+        throw argumentError(function, argument, "string expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
+    }
+
+    static RuntimeException argumentError(String function, int arg, String message) {
+        return com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError(function, arg, message);
     }
 
     static TruffleString fromBytes(byte[] bytes) {
@@ -58,8 +62,7 @@ final class LuaStringSupport {
 
     static long ensureInteger(Object[] arguments, int index, String function) {
         if (index >= arguments.length) {
-            throw LuaException.create("bad argument #" + (index + 1) + " to '" + function
-                    + "' (number expected, got no value)", null);
+            throw argumentError(function, index + 1, "number expected, got no value");
         }
         Object value = arguments[index];
         if (value instanceof Long number) {
@@ -68,18 +71,30 @@ final class LuaStringSupport {
         if (value instanceof Integer number) {
             return number.longValue();
         }
-        if (value instanceof Double number && Double.isFinite(number) && number == Math.rint(number)
-                && number >= Long.MIN_VALUE && number <= Long.MAX_VALUE) {
-            return number.longValue();
+        if (value instanceof Double number) {
+            if (Double.isFinite(number) && number == Math.rint(number)
+                    && number >= Long.MIN_VALUE && number <= Long.MAX_VALUE) {
+                return number.longValue();
+            }
+            // 数值存在但无整数表示（与 luaL_checkinteger 的 interror 一致）
+            throw argumentError(function, index + 1, "number has no integer representation");
         }
         if (value instanceof TruffleString string) {
+            String text = string.toJavaStringUncached();
             try {
-                return Long.parseLong(string.toJavaStringUncached());
+                return Long.parseLong(text);
             } catch (NumberFormatException ignored) {
-                // Fall through to the argument error.
+                // 可解析为浮点则是「无整数表示」，否则是「类型不是数字」
+                try {
+                    Double.parseDouble(text.trim());
+                    throw argumentError(function, index + 1, "number has no integer representation");
+                } catch (NumberFormatException notNumber) {
+                    throw argumentError(function, index + 1, "number expected, got string");
+                }
             }
         }
-        throw LuaException.create("bad argument #" + (index + 1) + " to '" + function + "' (integer expected)", null);
+        throw argumentError(function, index + 1, "number expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }
 
     static int relativePosition(long position, int length) {

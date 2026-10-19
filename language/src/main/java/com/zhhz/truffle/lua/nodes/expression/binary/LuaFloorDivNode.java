@@ -110,11 +110,11 @@ public abstract class LuaFloorDivNode extends LuaBinaryNode {
         Object result = metatableNode.execute(left, right, LuaMetatables.__IDIV);
 
         if (result != null) {
-            return result;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result);
         }
 
         // 如果元方法也没找到，才报错
-        throw LuaException.create("attempt to perform arithmetic on a " + getTypeName(left) + " value",this);
+        throw arithmeticError(left, right, numLeft, numRight);
 
     }
 

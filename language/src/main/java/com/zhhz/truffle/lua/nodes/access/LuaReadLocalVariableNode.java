@@ -50,6 +50,8 @@ import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.interop.NodeObjectDescriptor;
+import com.zhhz.truffle.lua.parser.LuaBaseParser.LocalSlot;
+import com.zhhz.truffle.lua.runtime.LuaCell;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 /**
@@ -60,6 +62,7 @@ import com.zhhz.truffle.lua.runtime.LuaNil;
  * （long, double, boolean 或 Object）生成最高效的机器码。
  */
 @NodeField(name = "slotIndex", type = int.class)
+@NodeField(name = "slot", type = LocalSlot.class)
 public abstract class LuaReadLocalVariableNode extends LuaExpressionNode {
 
     /**
@@ -69,6 +72,9 @@ public abstract class LuaReadLocalVariableNode extends LuaExpressionNode {
      * 我们不需要自己编写实现。
      */
     protected abstract int getSlotIndex();
+
+    /** 该局部变量声明的可变句柄（用于判断是否被内层闭包捕获为 cell）。 */
+    protected abstract LocalSlot getSlot();
 
     /**
      * 特化 1：读取 Long 类型。
@@ -131,13 +137,21 @@ public abstract class LuaReadLocalVariableNode extends LuaExpressionNode {
 
             Object result = frame.getValue(getSlotIndex());
             frame.setObject(getSlotIndex(), result);
-            return result;
+            return unwrapCell(result);
         }
         Object result = frame.getObject(getSlotIndex());
-        if (result == null){
+        return unwrapCell(result);
+    }
+
+    /** 若槽位存放的是被捕获变量的 {@link LuaCell}，取出其当前值。 */
+    private static Object unwrapCell(Object result) {
+        if (result instanceof LuaCell cell) {
+            Object value = cell.value;
+            return value == null ? LuaNil.SINGLETON : value;
+        }
+        if (result == null) {
             return LuaNil.SINGLETON;
         }
-        // 正常路径：直接读取 Object
         return result;
     }
 
@@ -178,6 +192,21 @@ public abstract class LuaReadLocalVariableNode extends LuaExpressionNode {
      * 提供给调试器的元数据对象。
      * 这里返回的是变量的名称。
      */
+    /**
+     * 调试信息：局部变量名（供 debug.getinfo 的 name/namewhat 调用点分析使用）。
+     */
+    @Override
+    public TruffleString getUnresolvedVariableName() {
+        Object name = getRootNode().getFrameDescriptor().getSlotName(getSlotIndex());
+        return name instanceof TruffleString ts ? ts : null;
+    }
+
+    @Override
+    public String getErrorSuffix() {
+        TruffleString name = getUnresolvedVariableName();
+        return name == null ? "" : " (local '" + name.toJavaStringUncached() + "')";
+    }
+
     @Override
     public Object getNodeObject() {
         // 获取变量名并封装为 NodeObjectDescriptor

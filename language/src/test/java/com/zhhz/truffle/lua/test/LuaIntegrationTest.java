@@ -178,6 +178,44 @@ public class LuaIntegrationTest extends AbstractLuaTest {
     }
 
     @Test
+    public void testErrorNumberGetsPositionPrefixLikeLua530() {
+        // Lua 5.3.0 的 lua_isstring 语义：数字消息同样加位置前缀，且前缀后的
+        // 字符串成为错误对象（pcall 返回它）
+        Value result = eval("""
+                local ok, err = pcall(function() error(10) end)
+                return ok, err, type(err)
+                """);
+        assertFalse(result.getArrayElement(0).asBoolean());
+        assertTrue(result.getArrayElement(1).asString().endsWith(":1: 10"),
+                result.getArrayElement(1).asString());
+        assertEquals("string", result.getArrayElement(2).asString());
+    }
+
+    @Test
+    public void testErrorObjectTostringSeesOriginalStack() {
+        // error() 在抛出前（调用栈仍存活）经 tostring 内建格式化非字符串错误对象，
+        // __tostring 内 debug.getinfo(4) 指向 error() 调用行（本片段第 4 行）
+        org.graalvm.polyglot.PolyglotException exception = assertThrows(org.graalvm.polyglot.PolyglotException.class, () -> eval("""
+                local m = setmetatable({x = 0}, {__tostring = function(x)
+                  return tostring(debug.getinfo(4).currentline + x.x)
+                end})
+                error(m)
+                """));
+        assertEquals("4", exception.getMessage());
+    }
+
+    @Test
+    public void testErrorObjectTostringPreservesPcallObject() {
+        Value result = eval("""
+                local m = setmetatable({}, {__tostring = function() return 'formatted' end})
+                local ok, err = pcall(error, m)
+                return not ok, err == m
+                """);
+        assertTrue(result.getArrayElement(0).asBoolean());
+        assertTrue(result.getArrayElement(1).asBoolean());
+    }
+
+    @Test
     public void testMissingTableKeysReturnNilForAllKeyKinds() {
         Value result = eval("""
                 local table = {}
@@ -226,7 +264,7 @@ public class LuaIntegrationTest extends AbstractLuaTest {
         ByteArrayOutputStream error = new ByteArrayOutputStream();
         try (Context ioContext = newContextBuilder("lua").err(error).build()) {
             Value result = ioContext.eval("lua", """
-                    local handle = io.stderr:write('error ', 42, '\n')
+                    local handle = io.stderr:write('error ', 42, '\\n')
                     return handle == io.stderr
                     """);
             assertTrue(result.asBoolean());
@@ -321,5 +359,181 @@ public class LuaIntegrationTest extends AbstractLuaTest {
         // 例如 "hello":upper()
         String code = "return ('abc'):upper()";
         assertEquals("ABC", eval(code).asString());
+    }
+
+    // --- 3. 尾调用优化 (Tail Call Optimization) ---
+
+    /**
+     * 尾调用不得增加栈深度：深层尾递归必须正常返回，而非 StackOverflowError
+     * （Lua 5.3 手册 3.4.10）。这里使用一个累计计数器避免空转被 JIT 折叠。
+     */
+    @Test
+    public void testDeepTailRecursionDoesNotOverflow() {
+        Value result = eval("""
+                local function sum(n, acc)
+                    if n == 0 then return acc end
+                    return sum(n - 1, acc + 1)
+                end
+                return sum(1000000, 0)
+                """);
+        assertEquals(1000000L, result.asLong());
+    }
+
+    /**
+     * 尾调用语义的"透明替换"要求：当一个非尾位置的调用包裹了一个内部尾调用时，
+     * 外层调用自身的返回值必须由其函数体决定，而内部尾调用抛出的
+     * {@code LuaTailCallException} 不得逃逸到外层调用者之外而丢掉外层逻辑。
+     * <p>
+     * 复现 doDirect 路径缺失 TCO 捕获的 bug：B 内部尾调用 f，A 调用 B 后 +1。
+     * 若 LuaTailCallException 从 B 冒泡越过 A 的 +1，结果会错误地等于 f 的返回值。
+     */
+    @Test
+    public void testNonTailCallerAroundTailCallPreservesOuterComputation() {
+        Value result = eval("""
+                local function f(x) return x end
+                local function B(v) return f(v) end      -- 尾调用
+                local function A(v) return B(v) + 1 end  -- 非尾调用：B() 的结果必须参与 +1
+                return A(41)
+                """);
+        assertEquals(42L, result.asLong());
+    }
+
+    /**
+     * 顶层 main chunk 的尾调用也必须正确执行（顶层 LuaAstRootNode.doTailCall 路径）。
+     */
+    @Test
+    public void testTopLevelTailCall() {
+        Value result = eval("""
+                local function id(x) return x end
+                return id(7)  -- 顶层 return f(...) 形式
+                """);
+        assertEquals(7L, result.asLong());
+    }
+
+    /**
+     * 尾调用 obj:method(...) 形式同样需要 TCO 处理。
+     */
+    @Test
+    public void testTailMethodCallPreservesOuterComputation() {
+        Value result = eval("""
+                local obj = { base = 100 }
+                function obj:inner(v) return v end                  -- 尾调用目标
+                function obj:outer(v) return self:inner(v) + 1 end  -- 非尾调用包裹
+                return obj:outer(41)
+                """);
+        assertEquals(42L, result.asLong());
+    }
+
+    // --- import：导入 Java 类（宿主符号） ---
+
+    @Test
+    public void testImportJavaClass() {
+        Value result = eval("return import('java.lang.String')");
+        assertTrue(result.isHostObject());
+        assertEquals(String.class, result.asHostObject());
+    }
+
+    @Test
+    public void testImportStaticMethod() {
+        // Java 对象统一用 . 调用：成员读取返回（绑定的）宿主函数，直接执行
+        assertEquals(42L, eval("return import('java.lang.Math').abs(-42)").asLong());
+        assertEquals(4L, eval("return import('java.lang.Math').round(3.7)").asLong());
+    }
+
+    @Test
+    public void testImportConstructorAndInstanceMethod() {
+        Value result = eval("""
+                local SB = import('java.lang.StringBuilder')
+                local sb = SB('hello')          -- 类调用即实例化
+                sb.append(' world')             -- 实例方法：. 调用（方法已绑定接收者）
+                return sb.toString()
+                """);
+        assertEquals("hello world", result.asString());
+    }
+
+    @Test
+    public void testImportInstanceFieldsAndChaining() {
+        Value result = eval("""
+                local URI = import('java.net.URI')
+                local u = URI('https://example.com/path')
+                return u.getHost()
+                """);
+        assertEquals("example.com", result.asString());
+    }
+
+    @Test
+    public void testImportRepeatedLookupIsCached() {
+        // 重复导入应命中缓存并返回同一宿主类对象
+        Value result = eval("""
+                local a = import('java.lang.StringBuilder')
+                for i = 1, 1000 do a = import('java.lang.StringBuilder') end
+                return a == import('java.lang.StringBuilder')
+                """);
+        assertTrue(result.asBoolean());
+    }
+
+    @Test
+    public void testImportUnknownSymbolThrows() {
+        org.graalvm.polyglot.PolyglotException e = assertThrows(org.graalvm.polyglot.PolyglotException.class,
+                () -> eval("return import('java.lang.NoSuchClassXYZ')"));
+        assertTrue(e.getMessage().contains("cannot import 'java.lang.NoSuchClassXYZ'"));
+    }
+
+    @Test
+    public void testImportPolyglotBindingsFallback() {
+        // 无宿主符号时回退到 polyglot bindings（其他语言/宿主导出的符号）
+        context.getPolyglotBindings().putMember("myExportedValue", 42);
+        assertEquals(42L, eval("return import('myExportedValue')").asLong());
+    }
+
+    // --- json.encode：Lua 值 → JSON 文本 ---
+
+    @Test
+    public void testJsonArray() {
+        assertEquals("[1,2,3]", eval("return json.encode({1,2,3})").asString());
+        // 字符串键/混合值
+        assertEquals("{}", eval("return json.encode({})").asString());
+        assertEquals("[0.5,1000.0,-7,40.0]", eval("return json.encode({0.5, 1e3, -7, 40.0})").asString());
+    }
+
+    @Test
+    public void testJsonObject() {
+        // 键按数字序/字典序确定输出;nil 键值对省略
+        assertEquals("{\"a\":1,\"b\":\"x\",\"c\":true}", eval("return json.encode({b=\"x\", a=1, c=true, d=nil})").asString());
+        // 数字键转字符串键
+        assertEquals("{\"9\":2,\"1111\":{\"a\":1}}", eval("return json.encode({[1111]={a=1}, [9]=2})").asString());
+    }
+
+    @Test
+    public void testJsonNestedAndChinese() {
+        Value result = eval("""
+                local t = {name = '张三', age = 30, scores = {98.5, 87}, addr = {city = '北京', zip = 100000}}
+                return json.encode(t)
+                """);
+        // 返回值是字节模型字符串（Latin-1 字符 = UTF-8 字节），按 UTF-8 还原后比对
+        String actual = new String(result.asString().getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+        assertEquals("{\"addr\":{\"city\":\"北京\",\"zip\":100000},\"age\":30,\"name\":\"张三\",\"scores\":[98.5,87]}",
+                actual);
+    }
+
+    @Test
+    public void testJsonEscaping() {
+        // Lua 单引号字符串内双引号无需转义；JSON 输出必须转义为 \"（4 字符）
+        Value result = eval("return json.encode({s = 'a\"b'})");
+        assertEquals("{\"s\":\"a\\\"b\"}", result.asString());
+    }
+
+    @Test
+    public void testJsonCycleDetected() {
+        org.graalvm.polyglot.PolyglotException e = assertThrows(org.graalvm.polyglot.PolyglotException.class,
+                () -> eval("local t = {}; t.self = t; return json.encode(t)"));
+        assertTrue(e.getMessage().contains("cycle"));
+    }
+
+    @Test
+    public void testJsonUnsupportedValueThrows() {
+        org.graalvm.polyglot.PolyglotException e = assertThrows(org.graalvm.polyglot.PolyglotException.class,
+                () -> eval("return json.encode(function() end)"));
+        assertTrue(e.getMessage().contains("Cannot encode value of type 'function'"));
     }
 }

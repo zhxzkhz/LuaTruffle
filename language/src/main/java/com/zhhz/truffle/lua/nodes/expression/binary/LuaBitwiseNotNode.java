@@ -18,6 +18,9 @@ import com.zhhz.truffle.lua.runtime.LuaMetatables;
 @NodeChild("operandNode")
 public abstract class LuaBitwiseNotNode extends LuaExpressionNode {
 
+    /** 操作数表达式节点（供运行时类型错误消息使用）。 */
+    protected abstract LuaExpressionNode getOperandNode();
+
     // --- 快速路径 ---
     @Specialization
     protected long doLong(long operand) {
@@ -41,10 +44,19 @@ public abstract class LuaBitwiseNotNode extends LuaExpressionNode {
         // 2. 尝试查找 __bnot 元方法
         Object metaResult = metatableNode.execute(operand, null, LuaMetatables.__BNOT);
         if (metaResult != null) {
-            return metaResult;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(metaResult);
         }
 
         // 3. 报错
-        throw LuaException.typeError(this, "bitwise operation", operand);
+        boolean numeric = operand instanceof Long || operand instanceof Double
+                || operand instanceof com.oracle.truffle.api.strings.TruffleString
+                || operand instanceof String;
+        if (numeric) {
+            throw LuaException.runtimeError("number" + getOperandNode().getErrorSuffix()
+                    + " has no integer representation", this);
+        }
+        throw LuaException.runtimeError("attempt to perform bitwise operation on a "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(operand) + " value"
+                + getOperandNode().getErrorSuffix(), this);
     }
 }

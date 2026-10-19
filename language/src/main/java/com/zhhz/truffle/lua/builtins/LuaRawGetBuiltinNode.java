@@ -1,11 +1,14 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaTable;
+@SuppressWarnings("deprecation")
+@GenerateInline(false)
 
 @NodeInfo(shortName = "rawget")
 public abstract class LuaRawGetBuiltinNode extends LuaBuiltinNode {

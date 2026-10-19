@@ -64,6 +64,11 @@ public abstract class LuaStatementNode extends Node implements InstrumentableNod
     private int sourceCharIndex = NO_SOURCE;
     private int sourceLength;
 
+    // 词法器报告的源码行号（标准 Lua 行号语义：\r、\n、\r\n、\n\r 各按规则计行）。
+    // 用于 debug.getinfo().currentline 等需要精确行号的场景，避免 Truffle Source
+    // 行号映射对 \n\r 的处理与标准 Lua 不一致。
+    private int sourceLine = NO_SOURCE;
+
     // 标记该节点是否属于某种特定的标签（用于调试器识别）
     private boolean hasStatementTag;
     private boolean hasRootTag;
@@ -135,6 +140,21 @@ public abstract class LuaStatementNode extends Node implements InstrumentableNod
         }
         this.sourceCharIndex = charIndex;
         this.sourceLength = length;
+    }
+
+    /** 设置词法器报告的源码行号（标准 Lua 行号语义）。 */
+    public final void setSourceLine(int line) {
+        this.sourceLine = line;
+    }
+
+    /** 获取词法器报告的源码行号；未设置时返回 NO_SOURCE。 */
+    public final int getSourceLine() {
+        return sourceLine;
+    }
+
+    /** 是否已设置词法器源码行号。 */
+    public final boolean hasSourceLine() {
+        return sourceLine != NO_SOURCE;
     }
 
     // 标记源码不可用（例如由内部逻辑生成的代码）

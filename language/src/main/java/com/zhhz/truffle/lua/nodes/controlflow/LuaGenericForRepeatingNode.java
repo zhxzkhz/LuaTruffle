@@ -2,15 +2,19 @@ package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.FrameSlotKind;
+import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
+import com.oracle.truffle.api.source.SourceSection;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.nodes.access.LuaWriteLocalVariableNode;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
@@ -53,14 +57,32 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     @Child
     private InteropLibrary funcLib;
 
+    // debug 行钩子：for 头行（每次迭代触发，回边强制）与 end 行（迭代器耗尽退出触发；break 不触发）
+    private final int headerLine;
+    private final int endLine;
+    /**
+     * 迭代器调用（OP_TFORCALL）所在行：标准 Lua 中等于 {@code in} 之后表达式的首个记号所在行，
+     * 用于“迭代器不可调用”错误的位置。
+     */
+    private final int callLine;
+
     public LuaGenericForRepeatingNode(int iteratorFuncIndex, int stateIndex, int controlVarIndex,
                                       LuaWriteLocalVariableNode[] writeNodes, LuaStatementNode bodyNode) {
+        this(iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode, 0, 0, 0);
+    }
+
+    public LuaGenericForRepeatingNode(int iteratorFuncIndex, int stateIndex, int controlVarIndex,
+                                      LuaWriteLocalVariableNode[] writeNodes, LuaStatementNode bodyNode,
+                                      int headerLine, int endLine, int callLine) {
         this.iteratorFuncIndex = iteratorFuncIndex;
         this.stateIndex = stateIndex;
         this.controlVarIndex = controlVarIndex;
         this.writeNodes = writeNodes;
         this.bodyNode = bodyNode;
         this.funcLib = InteropLibrary.getFactory().createDispatched(3);
+        this.headerLine = headerLine;
+        this.endLine = endLine;
+        this.callLine = callLine;
     }
 
     /**
@@ -72,6 +94,9 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     @Override
     @ExplodeLoop
     public boolean executeRepeating(VirtualFrame frame) {
+        TruffleSafepoint.poll(this);
+        com.zhhz.truffle.lua.runtime.LuaInterrupt.check(this);
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, headerLine, true);
         Object[] loopVarValues;
         Object iteratorFunc = frame.getObject(iteratorFuncIndex);
         Object state = frame.getObject(stateIndex);
@@ -90,10 +115,18 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
                 loopVarValues = new Object[]{result};
             }
 
-        } catch (Exception e) {
-            // 这是一个慢速路径（Slow Path），转移到解释器执行并抛出错误
+        } catch (UnsupportedMessageException e) {
+            // 迭代器不可调用：与标准 Lua 一致，报告 "attempt to call a <type> value"，
+            // 位置取 for 头行（对应 OP_TFORCALL 指令所在行）。
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            throw LuaException.create("error in 'for' loop\n" + e.getMessage(), this);
+            throw callError(iteratorFunc);
+        } catch (Exception e) {
+            // 其它异常（含迭代器内部抛出的 Lua 错误）原样传播。
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            if (e instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new RuntimeException(e);
         }
 
         // 2. 【更新控制变量】
@@ -105,6 +138,7 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
         // 3. 【检查终止条件】
         // Lua 核心语义：如果第一个返回值为 nil，则循环终止
         if (nextControlVar == LuaNil.SINGLETON) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, endLine, false);
             return false; // 返回 false 通知 LoopNode 停止循环
         }
 
@@ -133,5 +167,18 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
 
         // 7. 【继续下一轮】
         return true;
+    }
+
+    /**
+     * 构造“迭代器不可调用”的运行时错误，位置取 for 头行。
+     * 例如 {@code for k,v in 3 do end} → {@code <chunk>:<line>: attempt to call a number value}。
+     */
+    private RuntimeException callError(Object iteratorFunc) {
+        String message = "attempt to call a " + LuaTypesUtil.getTypeName(iteratorFunc) + " value";
+        SourceSection root = getRootNode().getSourceSection();
+        if (root != null && root.isAvailable() && root.getSource() != null && callLine > 0) {
+            message = LuaException.chunkId(root.getSource().getName()) + ":" + callLine + ": " + message;
+        }
+        return LuaException.create(message, this);
     }
 }

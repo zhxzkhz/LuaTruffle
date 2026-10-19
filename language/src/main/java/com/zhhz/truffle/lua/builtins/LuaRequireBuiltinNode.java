@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
@@ -24,6 +25,7 @@ import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
  * 4. 调用 loader(modname, data) -> 返回 module result。
  * 5. 存入 package.loaded 并返回。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "require")
 public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
 
@@ -134,8 +136,10 @@ public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
                     errorMsg.append(searchResult);
                 }
 
+            } catch (com.oracle.truffle.api.exception.AbstractTruffleException e) {
+                // 标准 Lua：searcher 抛出的错误（如 "'package.path' must be a string"）直接向上传播
+                throw e;
             } catch (Exception e) {
-                e.printStackTrace();
                 throw LuaException.create("error calling package.searchers[" + i + "]: " + e.getMessage(), this);
             }
         }

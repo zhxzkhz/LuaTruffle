@@ -40,7 +40,8 @@ public class LuaNodeParser extends LuaBaseParser {
 
         var frameDescriptorBuilder = visitor.exitMain();
 
-        final LuaRootNode rootNode = new LuaAstRootNode(language, frameDescriptorBuilder, rootBlock, functionSrc ,toTruffleString(source.getName()));
+        final LuaRootNode rootNode = new LuaAstRootNode(language, frameDescriptorBuilder, rootBlock, functionSrc ,toTruffleString(source.getName()), true);
+        rootNode.setChunk(true);
         rootNode.insert(rootBlock);
 
         return rootNode.getCallTarget();
@@ -56,6 +57,9 @@ public class LuaNodeParser extends LuaBaseParser {
     private boolean currentIsVariadic;
     private final Deque<ParamState> paramStateStack = new ArrayDeque<>();
     private int loopDepth;
+    // repeat...until 的循环体不是以块结尾（'until' 条件仍在同一作用域内），
+    // 因此其中的尾部标签不适用「标签位于块末尾」的特殊规则。
+    private boolean suppressTrailingLabelAdjustment;
     private final Deque<FunctionControlInfo> controlInfoStack = new ArrayDeque<>();
     private final Deque<BlockControlInfo> blockInfoStack = new ArrayDeque<>();
     private static final LuaExpressionNode[] EMPTY_EXPRESSIONS = new LuaExpressionNode[0];
@@ -64,6 +68,12 @@ public class LuaNodeParser extends LuaBaseParser {
     private static final LuaTableFieldInitializerNode[] EMPTY_TABLE_FIELD_INITIALIZERS = new LuaTableFieldInitializerNode[0];
     private int nextBlockId;
     private boolean suppressLocalTracking;
+
+    /**
+     * 每个正在解析的函数一个 upvalue 注册表，按首次引用顺序记录该函数的 upvalue。
+     * 栈顶对应当前函数；主块不注册（其 _ENV 为隐式局部变量）。
+     */
+    private final Deque<LinkedHashMap<TruffleString, LuaRootNode.UpvalueDescriptor>> upvalueRegistries = new ArrayDeque<>();
 
     protected LuaNodeParser(LuaLanguage language, Source source) {
         super(language, source);
@@ -76,18 +86,37 @@ public class LuaNodeParser extends LuaBaseParser {
 
     @Override
     public LuaStatementNode visitChunk(LuaParser.ChunkContext ctx) {
+        new LuaParserLimits(source, chunkId(source.getName())).check(ctx.block());
         enterMain();
         enterControlInfo();
         enterBlockInfo();
         try {
             var value = visit(ctx.block());
             validateControlInfo();
-            rootBlock = value;
-            return value;
+            LuaStatementNode chunkBlock = prependEnvironmentPrologue(value);
+            rootBlock = chunkBlock;
+            return chunkBlock;
         } finally {
             exitBlockInfo();
             exitControlInfo();
         }
+    }
+
+    /**
+     * 在 chunk 体最前面插入 {@code local _ENV = <environment>} 序言，
+     * 把调用时通过 {@code arguments[0]} 传入的环境（load 第 4 个参数或全局表）
+     * 绑定到主块的隐式 _ENV 局部变量上。
+     */
+    private LuaStatementNode prependEnvironmentPrologue(LuaStatementNode block) {
+        if (!(block instanceof LuaBlockNode luaBlock) || mainEnvSlot < 0) {
+            return block;
+        }
+        LuaExpressionNode envNode = new LuaEnvironmentNode();
+        LuaWriteVariableNode writeEnv = LuaWriteLocalVariableNodeGen.create(mainEnvSlot, mainEnvLocalSlot, true);
+        LuaStatementNode prologue = new LuaMultiAssignmentNode(
+                new LuaWriteVariableNode[]{ writeEnv },
+                new LuaExpressionNode[]{ envNode });
+        return luaBlock.prependStatement(prologue);
     }
 
     @Override
@@ -97,11 +126,49 @@ public class LuaNodeParser extends LuaBaseParser {
         }
         BlockControlInfo block = blockInfoStack.peek();
         block.localDeclarationIds.set(declarationId);
+        FunctionControlInfo controlInfo = controlInfoStack.peek();
+        if (controlInfo != null) {
+            controlInfo.localNames.put(declarationId, name);
+            if (++controlInfo.localCount > 200) {
+                throw new LuaParseError(source, controlInfo.definitionLine, 0, 1,
+                        withLocation(source, controlInfo.definitionLine,
+                                "too many local variables (limit is 200) in function at line "
+                                        + controlInfo.definitionLine));
+            }
+        }
         if (attribute == LocalAttribute.CLOSE) {
             CloseSlot closeSlot = new CloseSlot(declarationId, slotIndex, name);
             block.closeSlots.add(closeSlot);
             controlInfoStack.peek().closeSlots.put(declarationId, closeSlot);
         }
+    }
+
+    @Override
+    protected int onUpvalueReferenced(TruffleString name, int slotIndex, int depth) {
+        LinkedHashMap<TruffleString, LuaRootNode.UpvalueDescriptor> registry = upvalueRegistries.peek();
+        if (registry == null) {
+            return -1;
+        }
+        LuaRootNode.UpvalueDescriptor previous =
+                registry.putIfAbsent(name, new LuaRootNode.UpvalueDescriptor(name, slotIndex, depth));
+        if (previous == null) {
+            if (registry.size() > 255) {
+                FunctionControlInfo controlInfo = controlInfoStack.peek();
+                int line = controlInfo != null ? controlInfo.definitionLine : 0;
+                throw new LuaParseError(source, line, 0, 1,
+                        withLocation(source, line,
+                                "too many upvalues (limit is 255) in function at line " + line));
+            }
+            return registry.size() - 1;
+        }
+        int index = 0;
+        for (TruffleString key : registry.keySet()) {
+            if (key.equals(name)) {
+                return index;
+            }
+            index++;
+        }
+        return -1;
     }
 
     @Override
@@ -161,6 +228,29 @@ public class LuaNodeParser extends LuaBaseParser {
                     statement.addStatementTag();
                 }
             }
+
+            // Lua 5.3 lparser.c createlabel(): 位于块末尾（其后只有标签/空语句）的标签，
+            // 被视为已处于本块局部变量作用域之外，因此向前跳入此类标签合法。
+            // 参见 closure.lua 中 'l4b' 的用法。
+            FunctionControlInfo controlInfo = controlInfoStack.peek();
+            for (int i = suppressTrailingLabelAdjustment ? -1 : bodyNodes.size() - 1; i >= 0; i--) {
+                if (!(bodyNodes.get(i) instanceof LuaLabelNode labelNode)) {
+                    break;
+                }
+                List<LabelInfo> sameName = controlInfo.labels.get(labelNode.getLabel());
+                if (sameName == null) {
+                    continue;
+                }
+                for (int j = 0; j < sameName.size(); j++) {
+                    LabelInfo li = sameName.get(j);
+                    if (Arrays.equals(li.blockPath(), blockInfo.path())) {
+                        BitSet scoped = (BitSet) li.visibleLocalIds().clone();
+                        scoped.andNot(blockInfo.localDeclarationIds);
+                        sameName.set(j, new LabelInfo(li.label(), li.token(), li.blockPath(), scoped));
+                    }
+                }
+            }
+
             LuaBlockNode blockNode = new LuaBlockNode(
                     bodyNodes.toArray(EMPTY_STATEMENTS),
                     createCloseNodes(blockInfo),
@@ -257,7 +347,9 @@ public class LuaNodeParser extends LuaBaseParser {
                 exitBlockScope();
             }
 
-            LuaWhileNode node = new LuaWhileNode(conditionNode, bodyNode);
+            int condLine = ctx.exp().start.getLine();
+            int endLine = ctx.END() != null ? ctx.END().getSymbol().getLine() : 0;
+            LuaWhileNode node = new LuaWhileNode(conditionNode, bodyNode, condLine, endLine);
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -276,7 +368,13 @@ public class LuaNodeParser extends LuaBaseParser {
             LuaStatementNode bodyNode;
             LuaExpressionNode conditionNode;
             try {
-                bodyNode = visit(ctx.block());
+                boolean savedSuppress = suppressTrailingLabelAdjustment;
+                suppressTrailingLabelAdjustment = true;
+                try {
+                    bodyNode = visit(ctx.block());
+                } finally {
+                    suppressTrailingLabelAdjustment = savedSuppress;
+                }
 
                 // 3. 【解析条件表达式】
                 //    【关键】在【退出作用域之前】visit `exp`。
@@ -293,7 +391,8 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 5. 【创建循环节点】
             //    创建并返回我们的 LuaRepeatNode。
-            LuaStatementNode repeatNode = new LuaRepeatNode(bodyNode, conditionNode);
+            int untilLine = ctx.UNTIL() != null ? ctx.UNTIL().getSymbol().getLine() : 0;
+            LuaStatementNode repeatNode = new LuaRepeatNode(bodyNode, conditionNode, untilLine);
             setSourceSectionFromContext(repeatNode, ctx);
             return repeatNode;
         }
@@ -333,7 +432,19 @@ public class LuaNodeParser extends LuaBaseParser {
                     exitBlockInfo();
                     exitBlockScope();
                 }
-                elseBranch = new LuaIfNode(elseifCondition, elseifThen, elseBranch);
+                int elseifCondLine = conditions.get(i).start.getLine();
+                int elseifThenLine = ctx.THEN(i) != null ? ctx.THEN(i).getSymbol().getLine() : 0;
+                int elseifElseLine;
+                if (i == expCount - 1) {
+                    // 最内层 elseif：else 可能是真正的 else 块
+                    elseifElseLine = ctx.ELSE() != null ? ctx.ELSE().getSymbol().getLine() : 0;
+                } else {
+                    // 下一个 elseif 的行（elseif 语法糖的 else 分支入口）
+                    elseifElseLine = conditions.get(i + 1).start.getLine();
+                }
+                int sharedEndLine = ctx.END() != null ? ctx.END().getSymbol().getLine() : 0;
+                elseBranch = new LuaIfNode(elseifCondition, elseifThen, elseBranch,
+                        elseifCondLine, elseifThenLine, elseifElseLine, sharedEndLine);
             }
 
 
@@ -348,7 +459,17 @@ public class LuaNodeParser extends LuaBaseParser {
                 exitBlockInfo();
                 exitBlockScope();
             }
-            var node = new LuaIfNode(mainCondition, mainThen, elseBranch);
+            int mainCondLine = conditions.getFirst().start.getLine();
+            int mainThenLine = ctx.THEN(0) != null ? ctx.THEN(0).getSymbol().getLine() : 0;
+            int mainElseLine;
+            if (expCount > 1) {
+                mainElseLine = conditions.get(1).start.getLine(); // 第一个 elseif 行
+            } else {
+                mainElseLine = ctx.ELSE() != null ? ctx.ELSE().getSymbol().getLine() : 0;
+            }
+            int mainEndLine = ctx.END() != null ? ctx.END().getSymbol().getLine() : 0;
+            var node = new LuaIfNode(mainCondition, mainThen, elseBranch,
+                    mainCondLine, mainThenLine, mainElseLine, mainEndLine);
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -364,6 +485,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
             TruffleString loopVarName = asTruffleString(ctx.NAME().getSymbol(), false);
             int loopVariableIndex = declareLocalVariable(loopVarName);
+            LocalSlot loopSlot = lastDeclaredLocalSlot;
             int limitIndex = declareHiddenSlot(hiddenSlotName("for.limit", ctx.start));
             int stepIndex = declareHiddenSlot(hiddenSlotName("for.step", ctx.start));
 
@@ -379,7 +501,10 @@ public class LuaNodeParser extends LuaBaseParser {
             }
 
             // 創建我們新的、方案 A 的節點
-            LuaNumericForNode node = new LuaNumericForNode(loopVariableIndex, limitIndex, stepIndex, startNode, limitNode, stepNode, bodyNode);
+            int numForHeader = ctx.FOR() != null ? ctx.FOR().getSymbol().getLine() : 0;
+            int numForEnd = ctx.END() != null ? ctx.END().getSymbol().getLine() : 0;
+            LuaNumericForNode node = new LuaNumericForNode(loopVariableIndex, numForHeader, numForEnd,
+                    limitIndex, stepIndex, startNode, limitNode, stepNode, bodyNode, loopSlot);
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -406,8 +531,8 @@ public class LuaNodeParser extends LuaBaseParser {
                 TruffleString varName = asTruffleString(loopVarNames.get(i).getSymbol(), false);
                 // 声明槽位
                 int slotIndex = declareLocalVariable(varName);
-                // 创建写入节点
-                writeNodes[i] = LuaWriteLocalVariableNodeGen.create(slotIndex);
+                // 创建写入节点（循环变量每次迭代都是新变量，使用声明语义）
+                writeNodes[i] = LuaWriteLocalVariableNodeGen.create(slotIndex, lastDeclaredLocalSlot, true);
             }
 
             // 4. 【解析循环体】
@@ -426,7 +551,13 @@ public class LuaNodeParser extends LuaBaseParser {
             //setSourceSectionFromContext(bodyNode, ctx);
 
             // 6. 【创建 For 节点】
-            LuaGenericForNode node = new LuaGenericForNode(expListNode, iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode);
+            int genForHeader = ctx.FOR() != null ? ctx.FOR().getSymbol().getLine() : 0;
+            int genForEnd = ctx.END() != null ? ctx.END().getSymbol().getLine() : 0;
+            // 迭代器调用行 = `in` 之后表达式首个记号所在行（标准 Lua 中 OP_TFORCALL 的行号）。
+            int genForCallLine = ctx.explist() != null && ctx.explist().getStart() != null
+                    ? ctx.explist().getStart().getLine() : genForHeader;
+            LuaGenericForNode node = new LuaGenericForNode(expListNode, genForHeader, genForEnd, genForCallLine,
+                    iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode);
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -481,7 +612,7 @@ public class LuaNodeParser extends LuaBaseParser {
                     hasClose = true;
                 }
                 int slotIndex = declareLocalVariable(varName, attribute);
-                LuaWriteLocalVariableNode writeNode = LuaWriteLocalVariableNodeGen.create(slotIndex);
+                LuaWriteLocalVariableNode writeNode = LuaWriteLocalVariableNodeGen.create(slotIndex, lastDeclaredLocalSlot, true);
                 srcFromToken(writeNode, nameNode.getSymbol());
 
                 writeNodes[i] = writeNode;
@@ -522,19 +653,30 @@ public class LuaNodeParser extends LuaBaseParser {
             TruffleString funcName = asTruffleString(ctx.NAME().getSymbol(), false);
 
             // --- 阶段 1: 声明局部变量 & 创建写入目标 ---
-            // 为函数名声明一个新的局部变量槽位
+            // `local function f ... end` 在 Lua 中等价于 `local f; f = function ... end`：
+            // 名字在函数体内可见（可递归），且函数体内读到的是同一个 cell。
+            // 因此先声明（isDeclare=true，创建 cell，初值 nil），再解析函数体（闭包捕获该 cell），
+            // 最后用【赋值】语义（isDeclare=false）写回同一 cell。
             int slotIndex = declareLocalVariable(funcName);
+            LocalSlot funcSlot = lastDeclaredLocalSlot;
 
-            // 创建一个写入节点，指向这个新槽位
-            LuaWriteLocalVariableNode writeNode = LuaWriteLocalVariableNodeGen.create(slotIndex);
-            srcFromToken(writeNode, ctx.NAME().getSymbol());
+            LuaWriteLocalVariableNode declareNode = LuaWriteLocalVariableNodeGen.create(slotIndex, funcSlot, true);
+            srcFromToken(declareNode, ctx.NAME().getSymbol());
+            LuaMultiAssignmentNode declaration = new LuaMultiAssignmentNode(
+                    new LuaWriteVariableNode[]{declareNode},
+                    new LuaExpressionNode[]{new LuaNilLiteralNode()});
+            srcFromToken(declaration, ctx.NAME().getSymbol());
 
-            // 因为这是单赋值，所以写入目标的数组只有一个元素
-            LuaWriteVariableNode[] destinationNodes = new LuaWriteVariableNode[]{writeNode};
+            LuaWriteLocalVariableNode assignNode = LuaWriteLocalVariableNodeGen.create(slotIndex, funcSlot, false);
 
             LuaExpressionNode valueNode = parseFunction(ctx.funcbody(), funcName);
 
-            LuaMultiAssignmentNode node = new LuaMultiAssignmentNode(destinationNodes, new LuaExpressionNode[]{valueNode});
+            LuaMultiAssignmentNode assignment = new LuaMultiAssignmentNode(
+                    new LuaWriteVariableNode[]{assignNode},
+                    new LuaExpressionNode[]{valueNode});
+
+            LuaBlockNode node = new LuaBlockNode(
+                    new LuaStatementNode[]{declaration, assignment});
             setSourceSectionFromContext(node, ctx);
             return node;
         }
@@ -553,6 +695,15 @@ public class LuaNodeParser extends LuaBaseParser {
         @Override
         public LuaStatementNode visitRetstat(LuaParser.RetstatContext ctx) {
             final LuaExpressionNode[] valueNodes = visitExpListAsArray(ctx.explist());
+
+            // Lua 尾调用语义：当且仅当 return 仅含一个函数调用表达式时为尾调用。
+            // 标记该调用节点，使其在执行时抛出 LuaTailCallException 由根节点重试，
+            // 避免递归 Java 栈增长（参考 Lua 5.3 手册 3.4.10）。
+            if (valueNodes.length == 1 && valueNodes[0] instanceof com.zhhz.truffle.lua.nodes.expression.LuaInvokeNode invoke) {
+                invoke.markTailCall();
+            } else if (valueNodes.length == 1 && valueNodes[0] instanceof com.zhhz.truffle.lua.nodes.expression.LuaMethodCallNode methodCall) {
+                methodCall.markTailCall();
+            }
 
             // 创建 LuaReturnNode
             final LuaReturnNode returnNode = new LuaReturnNode(valueNodes);
@@ -574,6 +725,17 @@ public class LuaNodeParser extends LuaBaseParser {
 
         @Override
         public LuaExpressionNode visitStatFunctionCall(LuaParser.StatFunctionCallContext ctx) {
+            // 语句位置的表达式必须是函数调用（标准 Lua 语法）。
+            // 由于文法把 functioncall 定义为 prefixexp 的别名（"a"、"a.b" 也能匹配），
+            // 这里在 visitor 层校验最外层备选是否以调用结尾。
+            LuaParser.PrefixexpContext prefix = ctx.functioncall().prefixexp();
+            if (!(prefix instanceof LuaParser.FuncCallContext)
+                    && !(prefix instanceof LuaParser.MethodCallContext)) {
+                // 标准 Lua 的 exprstat 在 suffixedexp 之后校验是否为调用，失败时
+                // 报 "syntax error near '<当前 token>'"，即前缀表达式之后的那个 token。
+                throw parseError(prefix,
+                        "syntax error near '" + nextTokenText(prefix.stop) + "'");
+            }
             return visit(ctx.functioncall());
         }
 
@@ -626,6 +788,9 @@ public class LuaNodeParser extends LuaBaseParser {
             } else {
                 setSourceSectionFromContext(result, ctx);
             }
+            // 标准 Lua：二元运算指令的行号取自运算符所在行（luaK_posfix 的 line 参数），
+            // 因此类型错误的行号应为运算符行，而非左操作数起始行。
+            result.setSourceLine(opToken.getLine());
             result.addExpressionTag();
 
             return result;
@@ -768,7 +933,7 @@ public class LuaNodeParser extends LuaBaseParser {
         public LuaExpressionNode visitExpVararg(LuaParser.ExpVarargContext ctx) {
             // 1. 语义检查：如果当前函数不是可变参数函数，使用 `...` 是语法错误
             if (!LuaNodeParser.this.currentIsVariadic) {
-                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 3, "cannot use '...' outside a vararg function");
+                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 3, withLocation(source, ctx.start.getLine(), "cannot use '...' outside a vararg function"));
             }
 
             LuaExpressionNode node = new LuaReadVarargsNode(LuaNodeParser.this.currentFixedParamCount);
@@ -806,23 +971,28 @@ public class LuaNodeParser extends LuaBaseParser {
                     } catch (NumberFormatException ex) {
                         throw new LuaParseError(source, literalToken.getLine(),
                                 literalToken.getCharPositionInLine(), text.length(),
-                                "invalid hex float number: " + text);
+                                withLocation(source, literalToken.getLine(), "invalid hex float number: " + text));
                     }
                 } else {
                     value = Double.parseDouble(text);
                 }
                 result = new LuaDoubleLiteralNode(value);
             } else {
-                try {
-                    long value;
-                    if (isHex) {
-                        value = Long.parseUnsignedLong(text.substring(2), 16);
-                    } else {
-                        value = Long.parseLong(text);
+                if (isHex) {
+                    // 标准 Lua l_str2int：十六进制整数按 64 位无符号环绕（l_castU2S），
+                    // 高位溢出直接丢弃，绝不回退为浮点（tpack.lua 含 26 位十六进制常量）。
+                    long value = 0L;
+                    for (int i = 2; i < text.length(); i++) {
+                        value = value * 16L + Character.digit(text.charAt(i), 16);
                     }
                     result = new LuaLongLiteralNode(value);
-                } catch (NumberFormatException ex) {
-                    result = new LuaDoubleLiteralNode(Double.parseDouble(text));
+                } else {
+                    try {
+                        result = new LuaLongLiteralNode(Long.parseLong(text));
+                    } catch (NumberFormatException ex) {
+                        // 十进制整数溢出时标准 Lua 回退为浮点
+                        result = new LuaDoubleLiteralNode(Double.parseDouble(text));
+                    }
                 }
             }
 
@@ -837,7 +1007,7 @@ public class LuaNodeParser extends LuaBaseParser {
             LuaExpressionNode expressionNode = visit(ctx.prefixexp());
 
             if (expressionNode == null) {
-                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 1, "unexpected null expression in prefix expression");
+                throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 1, withLocation(source, ctx.start.getLine(), "unexpected null expression in prefix expression"));
             }
 
             return expressionNode;
@@ -921,7 +1091,7 @@ public class LuaNodeParser extends LuaBaseParser {
             LuaExpressionNode[] argNodes = visitArgsAsArray(ctx.args());
             for (LuaExpressionNode node : argNodes) {
                 if (node == null){
-                    throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 1, "unexpected null argument in function call");
+                    throw new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), 1, withLocation(source, ctx.start.getLine(), "unexpected null argument in function call"));
                 }
             }
             var invoke = new LuaInvokeNode(functionNode, argNodes);
@@ -1054,21 +1224,32 @@ public class LuaNodeParser extends LuaBaseParser {
                 if (!resolution.isUpvalue()) {
                 // 深度为0，意味着在当前最内层作用域找到了，这是一个*局部变量*。
                 // 我们使用之前为它分配的 `slotIndex` 来创建节点。
-                readNode = LuaReadLocalVariableNodeGen.create(resolution.slotIndex());
+                readNode = LuaReadLocalVariableNodeGen.create(resolution.slotIndex(), resolution.localSlot());
 
             } else {
                 // 深度大于0，意味着它是一个*Upvalue*。
-                // 我们需要将槽位索引和嵌套深度都传递给节点。
-                readNode = LuaReadUpvalueNodeGen.create(resolution.slotIndex(), resolution.depth());
+                // 它对应闭包 upvalue 数组中的下标。
+                readNode = LuaReadUpvalueNodeGen.create(resolution.upvalueIndex());
             }
         } else {
             // `findVariable` 返回 null，意味着在所有词法作用域中都找不到。
-            // 根据Lua规则，这被视为一个*全局变量*的读取。
-            // 我们将变量名传递给节点，它将在运行时从全局表中查找。
-            readNode = LuaReadGlobalVariableNodeGen.create(name);
+            // 根据Lua规则，这被视为一个*全局变量*的读取：编译为 _ENV.x。
+            readNode = createGlobalRead(name);
         }
 
         return readNode;
+    }
+
+    /**
+     * 把全局读取 {@code x} 编译为 {@code _ENV.x}（保留节点类型以便 debug.getinfo 识别 global）。
+     */
+    private LuaExpressionNode createGlobalRead(TruffleString name) {
+        if (name.equals(ENV_NAME)) {
+            // _ENV 本身未解析（理论上不会发生）：直接求值当前环境。
+            return new LuaEnvironmentNode();
+        }
+        LuaExpressionNode envNode = _createNode(ENV_NAME);
+        return new LuaReadGlobalVariableNode(envNode, name);
     }
 
     /**
@@ -1105,14 +1286,14 @@ public class LuaNodeParser extends LuaBaseParser {
                     prefixExpCtx.start.getLine(),
                     prefixExpCtx.start.getCharPositionInLine(),
                     contextLength(prefixExpCtx),
-                    "syntax error near '='"
+                    withLocation(source, prefixExpCtx.start.getLine(), "syntax error near '='")
             );
             default -> throw new LuaParseError(
                     source,
                     prefixExpCtx.start.getLine(),
                     prefixExpCtx.start.getCharPositionInLine(),
                     contextLength(prefixExpCtx),
-                    "syntax error: unexpected symbol near '=' (cannot assign to " + prefixExpCtx.getClass().getSimpleName() + ")"
+                    withLocation(source, prefixExpCtx.start.getLine(), "syntax error: unexpected symbol near '=' (cannot assign to " + prefixExpCtx.getClass().getSimpleName() + ")")
             );
         }
     }
@@ -1209,7 +1390,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 为每个参数创建一个 LuaWriteArgumentNode
             // 参数 i 对应 argument 数组中的索引 i
-            prologueStatements[i] = LuaWriteArgumentNodeGen.create(i, slotIndex);
+            prologueStatements[i] = LuaWriteArgumentNodeGen.create(i, slotIndex, result.localSlot());
         }
 
         return new LuaBlockNode(prologueStatements);
@@ -1260,19 +1441,27 @@ public class LuaNodeParser extends LuaBaseParser {
     private LuaWriteVariableNode getLuaWriteVariableNode(TruffleString varName) {
         VariableResolutionResult result = findVariable(varName);
         if (result == null) {
-            return LuaWriteGlobalVariableNodeGen.create(varName);
+            return createGlobalWrite(varName);
         } else {
             LuaWriteVariableNode writeNode;
             if (result.depth() == 0) {
-                writeNode = LuaWriteLocalVariableNodeGen.create(result.slotIndex());
+                writeNode = LuaWriteLocalVariableNodeGen.create(result.slotIndex(), result.localSlot(), false);
             } else {
-                writeNode = LuaWriteUpvalueNodeGen.create(result.depth(), result.slotIndex());
+                writeNode = LuaWriteUpvalueNodeGen.create(result.upvalueIndex());
             }
             if (result.attribute() == LocalAttribute.CONST) {
                 return new LuaWriteConstVariableNode(writeNode);
             }
             return writeNode;
         }
+    }
+
+    /**
+     * 把全局写入 {@code x = v} 编译为 {@code _ENV.x = v}（保留节点类型以便 debug.getinfo 识别 global）。
+     */
+    private LuaWriteVariableNode createGlobalWrite(TruffleString varName) {
+        LuaExpressionNode envNode = _createNode(ENV_NAME);
+        return new LuaWriteGlobalVariableNode(envNode, varName);
     }
 
 
@@ -1294,6 +1483,12 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private void enterControlInfo() {
         controlInfoStack.push(new FunctionControlInfo());
+    }
+
+    private void enterControlInfo(int definitionLine) {
+        FunctionControlInfo info = new FunctionControlInfo();
+        info.definitionLine = definitionLine;
+        controlInfoStack.push(info);
     }
 
     private void exitControlInfo() {
@@ -1341,7 +1536,7 @@ public class LuaNodeParser extends LuaBaseParser {
                 Token token = pendingGoto.token();
                 throw parseError(token, "no visible label '" + token.getText() + "' for goto");
             }
-            validateGotoTarget(pendingGoto, label);
+            validateGotoTarget(pendingGoto, label, info);
             pendingGoto.node().setTargetBlockPath(label.blockPath());
             pendingGoto.node().setCloseOnJump(createCloseOnJumpNodes(info, pendingGoto, label));
         }
@@ -1379,18 +1574,21 @@ public class LuaNodeParser extends LuaBaseParser {
         if (result != null) {
             return result;
         }
-        return sameNameLabels.size() == 1 ? sameNameLabels.getFirst() : null;
+        return null;
     }
 
-    private void validateGotoTarget(PendingGoto pendingGoto, LabelInfo label) {
+    private void validateGotoTarget(PendingGoto pendingGoto, LabelInfo label, FunctionControlInfo info) {
         Token token = pendingGoto.token();
         if (!isPrefix(label.blockPath(), pendingGoto.blockPath())) {
-            throw parseError(token, "goto '" + token.getText() + "' jumps into a block");
+            throw parseError(token, "no visible label '" + token.getText() + "' for goto");
         }
         BitSet targetOnlyLocals = (BitSet) label.visibleLocalIds().clone();
         targetOnlyLocals.andNot(pendingGoto.visibleLocalIds());
         if (!targetOnlyLocals.isEmpty()) {
-            throw parseError(token, "goto '" + token.getText() + "' jumps into the scope of a local variable");
+            int declarationId = targetOnlyLocals.nextSetBit(0);
+            TruffleString localName = info.localNames.get(declarationId);
+            String nameText = localName != null ? localName.toJavaStringUncached() : token.getText();
+            throw parseError(token, "goto '" + token.getText() + "' jumps into the scope of local '" + nameText + "'");
         }
     }
 
@@ -1454,7 +1652,7 @@ public class LuaNodeParser extends LuaBaseParser {
         return switch (attributeName) {
             case "const" -> LocalAttribute.CONST;
             case "close" -> LocalAttribute.CLOSE;
-            default -> throw new LuaParseError(source, ctx.NAME().getSymbol().getLine(), ctx.NAME().getSymbol().getCharPositionInLine(), attributeName.length(), "unknown local attribute '" + attributeName + "'");
+            default -> throw new LuaParseError(source, ctx.NAME().getSymbol().getLine(), ctx.NAME().getSymbol().getCharPositionInLine(), attributeName.length(), withLocation(source, ctx.NAME().getSymbol().getLine(), "unknown local attribute '" + attributeName + "'"));
         };
     }
 
@@ -1462,6 +1660,11 @@ public class LuaNodeParser extends LuaBaseParser {
         private final Map<TruffleString, List<LabelInfo>> labels = new HashMap<>();
         private final List<PendingGoto> gotos = new ArrayList<>();
         private final Map<Integer, CloseSlot> closeSlots = new HashMap<>();
+        private final Map<Integer, TruffleString> localNames = new HashMap<>();
+        /** 函数定义行（errorlimit 的 "function at line N"）；主块为 0。 */
+        private int definitionLine;
+        /** 该函数作用域内累计声明的局部变量数（用于 MAXVARS 限制）。 */
+        private int localCount;
     }
 
     private static final class BlockControlInfo {
@@ -1539,6 +1742,8 @@ public class LuaNodeParser extends LuaBaseParser {
 
         boolean functionScopeEntered = false;
         boolean paramStatePushed = false;
+        LinkedHashMap<TruffleString, LuaRootNode.UpvalueDescriptor> upvalueRegistry = new LinkedHashMap<>();
+        boolean upvalueRegistryPushed = false;
         FrameDescriptor frameDescriptor;
         LuaBlockNode fullBodyNode;
         try {
@@ -1554,6 +1759,9 @@ public class LuaNodeParser extends LuaBaseParser {
                 suppressLocalTracking = false;
             }
 
+            upvalueRegistries.push(upvalueRegistry);
+            upvalueRegistryPushed = true;
+
             paramStateStack.push(new ParamState(currentFixedParamCount, currentIsVariadic));
             paramStatePushed = true;
             currentFixedParamCount = fixedParamCount;
@@ -1561,7 +1769,10 @@ public class LuaNodeParser extends LuaBaseParser {
 
             // 【解析函数体】递归地调用 statementVisitor 来解析函数体内的代码块。
             // 这会将函数体内的所有语句转换成一个 LuaBlockNode。
-            enterControlInfo();
+            int funcLine = funcNameCtx != null && funcNameCtx.getStart() != null
+                    ? funcNameCtx.getStart().getLine()
+                    : funcBody.getStart().getLine();
+            enterControlInfo(funcLine);
             enterBlockInfo();
             LuaBlockNode bodyNode;
             try {
@@ -1591,6 +1802,9 @@ public class LuaNodeParser extends LuaBaseParser {
             if (functionScopeEntered) {
                 exitFunctionScope();
             }
+            if (upvalueRegistryPushed) {
+                upvalueRegistries.pop();
+            }
             if (paramStatePushed) {
                 ParamState prev = paramStateStack.pop();
                 currentFixedParamCount = prev.fixedParamCount();
@@ -1605,6 +1819,10 @@ public class LuaNodeParser extends LuaBaseParser {
         // 它封装了执行函数所需的所有信息：语言实例、栈帧布局(frameDescriptor)、
         // 完整的可执行代码(fullBodyNode)以及用于调试的函数名。
         final LuaRootNode rootNode = new LuaAstRootNode(language, frameDescriptor, fullBodyNode,functionSrc,functionName);
+        rootNode.setParamCount(fixedParamCount);
+        rootNode.setVariadic(isVariadic);
+        rootNode.setChunk(false);
+        rootNode.setUpvalueDescriptors(upvalueRegistry.values().toArray(new LuaRootNode.UpvalueDescriptor[0]));
 
         // 【创建函数字面量节点】
         // 这个节点是一个表达式节点。当它在运行时被执行时，它的作用就是创建一个真正的 LuaFunction 对象（闭包）。
@@ -1633,10 +1851,13 @@ public class LuaNodeParser extends LuaBaseParser {
     }
 
     private static boolean isHaltInCondition(LuaStatementNode statement) {
-        return (statement instanceof LuaIfNode) || (statement instanceof LuaWhileNode);
+        return (statement instanceof LuaIfNode) || (statement instanceof LuaWhileNode)
+                || (statement instanceof LuaRepeatNode)
+                || (statement instanceof LuaNumericForNode)
+                || (statement instanceof LuaGenericForNode);
     }
 
-    // 辅助方法，用于从 ANTLR Context 设置 SourceSection
+    // 辅助方法：从 ANTLR Context 设置 SourceSection 及词法器行号
     private static void setSourceSectionFromContext(LuaStatementNode node, ParserRuleContext ctx) {
         Token startToken = ctx.getStart();
         Token stopToken = ctx.getStop();
@@ -1648,19 +1869,45 @@ public class LuaNodeParser extends LuaBaseParser {
         int length = stopToken == null || stopToken.getStopIndex() < start
                 ? 0 : stopToken.getStopIndex() - start + 1;
         node.setSourceSection(start, length);
+        node.setSourceLine(startToken.getLine());
     }
 
 
     private static void srcFromToken(LuaStatementNode node, Token token) {
         node.setSourceSection(token.getStartIndex(), token.getStopIndex() - token.getStartIndex() + 1);
+        node.setSourceLine(token.getLine());
     }
 
     private LuaParseError parseError(Token token, String message) {
-        return new LuaParseError(source, token.getLine(), token.getCharPositionInLine(), tokenLength(token), message);
+        int line = token.getLine();
+        return new LuaParseError(source, line, token.getCharPositionInLine(), tokenLength(token),
+                chunkId(source.getName()) + ":" + line + ": " + message);
     }
 
     private LuaParseError parseError(ParserRuleContext ctx, String message) {
-        return new LuaParseError(source, ctx.start.getLine(), ctx.start.getCharPositionInLine(), contextLength(ctx), message);
+        int line = ctx.start.getLine();
+        return new LuaParseError(source, line, ctx.start.getCharPositionInLine(), contextLength(ctx),
+                chunkId(source.getName()) + ":" + line + ": " + message);
+    }
+
+    /** 返回 stop 之后的下一个 token 文本（用于复刻标准 Lua "near '<当前 token>'" 的措辞）。 */
+    private String nextTokenText(Token stop) {
+        if (tokenStream == null || stop == null) {
+            return "<eof>";
+        }
+        Token next = tokenStream.get(stop.getTokenIndex() + 1);
+        while (next != null && next.getChannel() != Token.DEFAULT_CHANNEL) {
+            next = tokenStream.get(next.getTokenIndex() + 1);
+        }
+        if (next == null || next.getType() == Token.EOF) {
+            return "<eof>";
+        }
+        return next.getText();
+    }
+
+    /** 为标准 Lua 风格的位置前缀 {@code chunkname:line: } 生成消息文本。 */
+    private static String withLocation(Source source, int line, String message) {
+        return chunkId(source.getName()) + ":" + line + ": " + message;
     }
 
     private static int tokenLength(Token token) {
@@ -1669,6 +1916,24 @@ public class LuaNodeParser extends LuaBaseParser {
 
     private static int contextLength(ParserRuleContext ctx) {
         return ctx.stop == null ? 0 : ctx.stop.getStopIndex() - ctx.start.getStartIndex() + 1;
+    }
+
+    /**
+     * 将字面量文本转回 Lua 字节串。Lua 字符串是 8-bit clean 的字节序列：
+     * <ul>
+     *   <li>文件型 Source 按 Latin-1 读入，字符与源字节一一对应，按 ISO-8859-1
+     *       编码无损取回原始字节（UTF-8 / GBK 等任何编码的源文件均不受损）；</li>
+     *   <li>含真实 Unicode 字符（&gt;0xFF）的文本只能来自非文件输入（-e、REPL、
+     *       load 传入的 Java 字符串），按 UTF-8 编码取回，与该文本的实际字节一致。</li>
+     * </ul>
+     */
+    private static byte[] toLuaSourceBytes(String content) {
+        for (int i = 0; i < content.length(); i++) {
+            if (content.charAt(i) > 0xFF) {
+                return content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        return content.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
     }
 
     @TruffleBoundary
@@ -1681,119 +1946,197 @@ public class LuaNodeParser extends LuaBaseParser {
         int contentStart = equalsCount + 2;
         int contentEnd = rawString.length() - equalsCount - 2;
         String content = rawString.substring(contentStart, contentEnd);
-        if (content.startsWith("\r\n")) {
+        // 标准 Lua inclinenumber：\r\n、\n\r、孤立 \r、孤立 \n 各计一次换行；
+        // 长括号紧后的首个换行（含两种配对形式）被跳过
+        if (content.startsWith("\r\n") || content.startsWith("\n\r")) {
             content = content.substring(2);
         } else if (content.startsWith("\n") || content.startsWith("\r")) {
             content = content.substring(1);
         }
-        return toTruffleString(content);
+        // 标准 Lua：长字符串中所有的换行序列（\r\n、\n\r、单独 \r、单独 \n）
+        // 都规范化为单个 \n
+        content = normalizeLongStringNewlines(content);
+        // 保留原始源字节：文件型 Source 按 Latin-1 读入时字符与源字节一一对应，
+        // 按 Latin-1 取字节可无损保留所有 0-255 字节（含转义产生的高位字节）。
+        // 若文本含真实 Unicode 字符（-e、REPL、load 传入的 Java 字符串），按 UTF-8 取字节，
+        // 与该文本在 UTF-8 终端中的实际字节一致。
+        byte[] bytes = toLuaSourceBytes(content);
+        return TruffleString.fromByteArrayUncached(bytes, LuaLanguage.STRING_ENCODING, true);
+    }
+
+    @TruffleBoundary
+    private static String normalizeLongStringNewlines(String content) {
+        if (content.indexOf('\r') < 0) {
+            return content;
+        }
+        StringBuilder sb = new StringBuilder(content.length());
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (c == '\r') {
+                sb.append('\n');
+                if (i + 1 < content.length() && (content.charAt(i + 1) == '\n')) {
+                    i++;
+                }
+            } else if (c == '\n') {
+                sb.append('\n');
+                if (i + 1 < content.length() && (content.charAt(i + 1) == '\r')) {
+                    i++;
+                }
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     @TruffleBoundary
     private TruffleString unescapeLuaString(String rawString, Token token) {
-        StringBuilder sb = new StringBuilder(rawString.length());
+        // Lua 字符串字面量是字节序列。文件型 Source 以 Latin-1 (ISO-8859-1) 读入，
+        // 每个 Java 字符（码元）对应一个源字节；按 Latin-1 编码回字节可无损保留
+        // 所有 0-255 范围的字节，包括 \ddd 等转义产生的高位字节。
+        // 含真实 Unicode 字符的文本（-e / REPL / load 的 Java 字符串）按 UTF-8 取字节。
+        // 对 \ddd 等转义直接写入单字节（低 8 位），与标准 Lua 一致。
+        byte[] rawBytes = toLuaSourceBytes(rawString);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(rawBytes.length);
         int i = 0;
-        while (i < rawString.length()) {
-            char c = rawString.charAt(i);
-            if (c == '\\') {
+        while (i < rawBytes.length) {
+            byte b = rawBytes[i];
+            if (b == (byte) '\\') {
                 i++;
-                if (i >= rawString.length()) {
-                    sb.append('\\');
+                if (i >= rawBytes.length) {
+                    out.write('\\');
                     break;
                 }
-                char next = rawString.charAt(i);
+                byte next = rawBytes[i];
                 switch (next) {
-                    case 'a': sb.append('\u0007'); i++; break;
-                    case 'b': sb.append('\b'); i++; break;
-                    case 'f': sb.append('\f'); i++; break;
-                    case 'n', '\n': sb.append('\n'); i++; break;
-                    case 'r': sb.append('\r'); i++; break;
-                    case 't': sb.append('\t'); i++; break;
-                    case 'v': sb.append('\u000B'); i++; break;
-                    case '\\': sb.append('\\'); i++; break;
-                    case '"': sb.append('"'); i++; break;
-                    case '\'': sb.append('\''); i++; break;
-                    case '\r': sb.append('\n'); i++; if (i < rawString.length() && rawString.charAt(i) == '\n') i++; break;
+                    case 'a': out.write(0x07); i++; break;
+                    case 'b': out.write('\b'); i++; break;
+                    case 'f': out.write('\f'); i++; break;
+                    case 'n': out.write('\n'); i++; break;
+                    // 标准 Lua：\<LF> / \<CR>（含 \n\r、\r\n 配对）是"转义的换行"，
+                    // 经 inclinenumber 规范化，产生单个 LF 字节
+                    // （%q 以 \+LF 引用换行，load 回环依赖此语义）
+                    case '\n': out.write('\n'); i++; if (i < rawBytes.length && rawBytes[i] == '\r') i++; break;
+                    case 'r': out.write('\r'); i++; break;
+                    case '\r': out.write('\n'); i++; if (i < rawBytes.length && rawBytes[i] == '\n') i++; break;
+                    case 't': out.write('\t'); i++; break;
+                    case 'v': out.write(0x0B); i++; break;
+                    case '\\': out.write('\\'); i++; break;
+                    case '"': out.write('"'); i++; break;
+                    case '\'': out.write('\''); i++; break;
                     case 'z':
                         do {
                             i++;
-                        } while (i < rawString.length() && isLuaWhitespace(rawString.charAt(i)));
+                        } while (i < rawBytes.length && isLuaWhitespace((char) rawBytes[i]));
                         break;
                     case 'x': {
                         i++;
                         int hexVal = 0;
                         int digits = 0;
-                        while (i < rawString.length() && digits < 2) {
-                            int d = hexDigit(rawString.charAt(i));
+                        while (i < rawBytes.length && digits < 2) {
+                            int d = hexDigit((char) rawBytes[i]);
                             if (d < 0) break;
                             hexVal = hexVal * 16 + d;
                             digits++;
                             i++;
                         }
                         if (digits == 0) {
-                            throwInvalidEscape(token, "invalid escape sequence near '\\x'");
+                            throwInvalidEscape(token, "invalid escape sequence");
                         }
-                        sb.append((char) hexVal);
+                        // 标准 Lua：\xHH 产生单字节（低 8 位），与 string.char 一致。
+                        // 官方测试套件 literals.lua 据此比较 \xHH 与 string.char/UTF-8 字节序列。
+                        out.write(hexVal & 0xFF);
                         break;
                     }
                     case 'u': {
                         i++;
-                        if (i >= rawString.length() || rawString.charAt(i) != '{') {
-                            throwInvalidEscape(token, "invalid escape sequence near '\\u'");
+                        if (i >= rawBytes.length || (char) rawBytes[i] != '{') {
+                            throwInvalidEscape(token, "invalid escape sequence");
                         }
                         i++;
                         int uniVal = 0;
                         int uniDigits = 0;
-                        while (i < rawString.length() && rawString.charAt(i) != '}') {
-                            int d = hexDigit(rawString.charAt(i));
+                        while (i < rawBytes.length && (char) rawBytes[i] != '}') {
+                            int d = hexDigit((char) rawBytes[i]);
                             if (d < 0) {
-                                throwInvalidEscape(token, "invalid escape sequence near '\\u{'");
+                                throwInvalidEscape(token, "invalid escape sequence");
                             }
                             uniVal = uniVal * 16 + d;
                             uniDigits++;
                             i++;
                         }
-                        if (i >= rawString.length() || uniDigits == 0) {
-                            throwInvalidEscape(token, "invalid escape sequence near '\\u{'");
+                        if (i >= rawBytes.length || uniDigits == 0) {
+                            throwInvalidEscape(token, "invalid escape sequence");
                         }
                         i++; // skip '}'
                         if (!Character.isValidCodePoint(uniVal)) {
-                            throwInvalidEscape(token, "UTF-8 value too large near '\\u{'");
+                            // 标准 Lua readutf8esc：数值超限错误在数字累积处触发，
+                            // 词法缓冲区内容止于数字（不含 '}' 与闭引号），
+                            // near 文本须截断到数字末尾（i-1 为 '}' 的位置）
+                            throwInvalidEscape(token, "UTF-8 value too large", rawBytes, i - 1);
                         }
-                        sb.appendCodePoint(uniVal);
+                        // 将 Unicode 码点按 UTF-8 编码写入字节流
+                        byte[] u8 = new String(Character.toChars(uniVal)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        out.write(u8, 0, u8.length);
                         break;
                     }
                     default:
                         if (next >= '0' && next <= '9') {
                             int decVal = 0;
                             int decDigits = 0;
-                            while (i < rawString.length() && decDigits < 3) {
-                                char dc = rawString.charAt(i);
+                            while (i < rawBytes.length && decDigits < 3) {
+                                byte dc = rawBytes[i];
                                 if (dc < '0' || dc > '9') break;
                                 decVal = decVal * 10 + (dc - '0');
                                 decDigits++;
                                 i++;
                             }
                             if (decVal > 255) {
-                                throwInvalidEscape(token, "decimal escape too large near '\\" + decVal + "'");
+                                throwInvalidEscape(token, "decimal escape too large");
                             }
-                            sb.append((char) decVal);
+                            // 标准 Lua：\ddd 产生单字节（低 8 位）。
+                            out.write(decVal & 0xFF);
                         } else {
-                            sb.append(next);
+                            // 未知转义：保留反斜杠和字符（按字节）
+                            out.write('\\');
+                            out.write(next);
                             i++;
                         }
                         break;
                 }
             } else {
-                sb.append(c);
+                out.write(b);
                 i++;
             }
         }
-        return toTruffleString(sb.toString());
+        return TruffleString.fromByteArrayUncached(out.toByteArray(), LuaLanguage.STRING_ENCODING, true);
     }
 
     private void throwInvalidEscape(Token token, String message) {
+        // 标准 Lua：词法错误消息末尾附 "near '<token-text>'"，其中 token-text 为
+        // 含分隔符的完整字符串字面量文本（与官方测试套件 literals.lua 的 lexerror 正则
+        // string.find(msg, "near .-" .. err) 兼容，err 含到字符串尾的内容）。
+        String tokenText = token.getText();
+        if (tokenText != null) {
+            message = message + " near '" + tokenText + "'";
+        }
         throw parseError(token, message);
+    }
+
+    /**
+     * 标准 Lua 的词法错误 near 文本是词法缓冲区内容（开引号 + 到出错点为止的字节，
+     * 可能含 esccheck 额外保存的一个字符），而非完整 token。此重载允许调用方
+     * 按标准语义截断：near = 开引号 + rawBytes[0..end)。
+     */
+    private void throwInvalidEscape(Token token, String message, byte[] rawBytes, int end) {
+        String tokenText = token.getText();
+        char openDelimiter = tokenText != null && !tokenText.isEmpty() ? tokenText.charAt(0) : '"';
+        StringBuilder near = new StringBuilder(end + 1);
+        near.append(openDelimiter);
+        for (int k = 0; k < end && k < rawBytes.length; k++) {
+            near.append((char) (rawBytes[k] & 0xFF));
+        }
+        throw parseError(token, message + " near '" + near + "'");
     }
 
     private static boolean isLuaWhitespace(char c) {

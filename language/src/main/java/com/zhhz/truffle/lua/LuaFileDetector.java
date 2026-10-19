@@ -44,6 +44,7 @@ import com.oracle.truffle.api.TruffleFile;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 public final class LuaFileDetector implements TruffleFile.FileTypeDetector {
 
@@ -58,6 +59,13 @@ public final class LuaFileDetector implements TruffleFile.FileTypeDetector {
 
     @Override
     public Charset findEncoding(TruffleFile file) throws IOException {
+        String name = file.getName();
+        if (name != null && name.endsWith(".lua")) {
+            // Lua 源码是 8-bit clean 的字节流（与标准 lua 一致，不做编码转换）：
+            // 以 Latin-1 读入使每个字符对应一个源字节，字符串字面量可无损保留
+            // 原始字节（UTF-8、GBK 等编码的源文件均原样保留）。
+            return StandardCharsets.ISO_8859_1;
+        }
         return null;
     }
 }

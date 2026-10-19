@@ -1,9 +1,11 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "table.pack")
 public abstract class LuaTablePackBuiltinNode extends LuaBuiltinNode {

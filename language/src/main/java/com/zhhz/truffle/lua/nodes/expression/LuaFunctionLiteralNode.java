@@ -42,13 +42,17 @@ package com.zhhz.truffle.lua.nodes.expression;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
+import com.zhhz.truffle.lua.nodes.LuaRootNode;
+import com.zhhz.truffle.lua.runtime.LuaCell;
 import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
 /**
  * 代表一个函数字面量 (e.g., "function() ... end") 的AST节点。
@@ -61,6 +65,12 @@ public class LuaFunctionLiteralNode extends LuaExpressionNode {
     private final RootCallTarget callTarget;
     // (可选) 可以在这里存储一个函数名，用于调试
     private final TruffleString name;
+
+    // Lua 5.3.0 的闭包缓存：每个函数原型保留最近一次创建的闭包，
+    // 若本次解析出的 upvalue cell 与缓存闭包完全一致，则复用同一闭包对象
+    // (lvm.c 中的 getcached/pushclosure)。这样循环中不捕获新鲜变量的闭包
+    // 会得到相同对象，从而 `a[3] == a[4]` 成立。
+    private LuaFunction cachedFunction;
 
     public LuaFunctionLiteralNode(RootCallTarget callTarget) {
         this.callTarget = callTarget;
@@ -87,8 +97,8 @@ public class LuaFunctionLiteralNode extends LuaExpressionNode {
     }
 
     /**
-     * 辅助方法：创建 LuaFunction 对象。
-     * 标记为 @TruffleBoundary 是为了“切断” JIT 对 Frame 对象的深度分析，
+     * 辅助方法：创建 LuaFunction 对象，并在创建时把被捕获的 upvalue cell 快照进闭包。
+     * 标记为 {@code @TruffleBoundary} 是为了“切断” JIT 对 Frame 对象的深度分析，
      * 防止出现 "FrameWithoutBoxing ... should not be materialized" 这样的 Bailout 异常。
      */
     @CompilerDirectives.TruffleBoundary
@@ -96,9 +106,83 @@ public class LuaFunctionLiteralNode extends LuaExpressionNode {
         // 获取当前的语言上下文，以便获取对象的 Shape（如果你使用了 Shape 系统）
         LuaContext context = LuaContext.get(this);
 
+        // 【关键】快照 upvalue cell：闭包创建后，其捕获的变量单元即固定，
+        // 从而保证循环体每次迭代创建的闭包持有各自独立的 cell。
+        Object[] cells = null;
+        if (callTarget instanceof RootCallTarget rootCallTarget
+                && rootCallTarget.getRootNode() instanceof LuaRootNode root) {
+            LuaRootNode.UpvalueDescriptor[] descriptors = root.getUpvalueDescriptors();
+            if (descriptors.length > 0) {
+                cells = new Object[descriptors.length];
+                for (int i = 0; i < descriptors.length; i++) {
+                    cells[i] = resolveUpvalueCell(parentFrame, descriptors[i]);
+                }
+            }
+        }
+
+        // 复用一个已缓存的、upvalue cell 完全相同的闭包（Lua 5.3.0 语义）。
+        LuaFunction cached = this.cachedFunction;
+        if (cached != null && sameUpvalueCells(cached.getUpvalues(), cells)) {
+            return cached;
+        }
+
         // 创建并返回运行时对象
-        // 传入：Shape, 代码入口(CallTarget), 闭包环境(parentFrame)
-        return new LuaFunction(context.getFunctionShape(), this.callTarget, parentFrame,name);
+        LuaFunction function = new LuaFunction(context.getFunctionShape(), this.callTarget, parentFrame, name);
+        if (cells != null) {
+            function.setUpvalues(cells);
+        }
+        this.cachedFunction = function;
+        return function;
+    }
+
+    /** 逐元素按对象身份比较两个 upvalue 数组（空/空视为相同）。 */
+    private static boolean sameUpvalueCells(Object[] cached, Object[] current) {
+        if (cached.length == 0 && current == null) {
+            return true;
+        }
+        if (current == null || cached.length != current.length) {
+            return false;
+        }
+        for (int i = 0; i < cached.length; i++) {
+            if (cached[i] != current[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 沿静态链定位 upvalue 声明所在的帧，并取出该槽位中的 {@link LuaCell}。
+     * 若槽位尚未以 cell 形式存放（理论上不应发生），则以当前值包装一个 cell。
+     */
+    private static Object resolveUpvalueCell(Frame frame, LuaRootNode.UpvalueDescriptor descriptor) {
+        Frame declaringFrame = frame;
+        for (int i = 1; i < descriptor.depth(); i++) {
+            Object[] args = declaringFrame.getArguments();
+            Object caller = args.length > 0 ? args[0] : null;
+            if (!(caller instanceof LuaFunction parentFunction)) {
+                return new LuaCell(LuaNil.SINGLETON);
+            }
+            MaterializedFrame parentFrame = parentFunction.getParentFrame();
+            if (parentFrame == null) {
+                return new LuaCell(LuaNil.SINGLETON);
+            }
+            declaringFrame = parentFrame;
+        }
+        int slot = descriptor.slot();
+        if (slot < 0) {
+            return new LuaCell(LuaNil.SINGLETON);
+        }
+        Object value;
+        try {
+            value = declaringFrame.getValue(slot);
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            return new LuaCell(LuaNil.SINGLETON);
+        }
+        if (value instanceof LuaCell cell) {
+            return cell;
+        }
+        return new LuaCell(value == null ? LuaNil.SINGLETON : value);
     }
 
 }

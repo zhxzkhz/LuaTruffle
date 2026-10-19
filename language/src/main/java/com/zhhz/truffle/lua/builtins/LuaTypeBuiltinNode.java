@@ -3,6 +3,7 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
@@ -13,6 +14,7 @@ import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.*;
 /**
  * 实现 `type(v)` 内置函数。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "type")
 public abstract class LuaTypeBuiltinNode extends LuaBuiltinNode {
 
@@ -61,6 +63,10 @@ public abstract class LuaTypeBuiltinNode extends LuaBuiltinNode {
 
         if (value instanceof LuaFunction) {
             return T_FUNCTION;
+        }
+
+        if (value instanceof LuaThread) {
+            return T_THREAD;
         }
 
         // 【回退】所有其他类型 (例如，通过 Interop 传入的外部 Java 对象)

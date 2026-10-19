@@ -130,13 +130,13 @@ public final class LuaType implements TruffleObject {
     }
 
     @ExportMessage
-    boolean hasLanguage() {
+    boolean hasLanguageId() {
         return true;
     }
 
     @ExportMessage
-    Class<? extends TruffleLanguage<?>> getLanguage() {
-        return LuaLanguage.class;
+    String getLanguageId() {
+        return com.zhhz.truffle.lua.LuaLanguage.ID;
     }
 
     /*

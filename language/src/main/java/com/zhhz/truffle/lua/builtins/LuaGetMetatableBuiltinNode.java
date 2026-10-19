@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaNil;
@@ -11,6 +12,7 @@ import java.util.Objects;
 /**
  * 实现 `getmetatable(table)` 内置函数。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "getmetatable")
 public abstract class LuaGetMetatableBuiltinNode extends LuaBuiltinNode {
 
@@ -21,13 +23,9 @@ public abstract class LuaGetMetatableBuiltinNode extends LuaBuiltinNode {
             throw LuaException.create("bad argument #1 to 'getmetatable' (value expected)", this);
         }
 
-        if (arguments[0] == LuaNil.SINGLETON) {
-            return LuaNil.SINGLETON; // getmetatable(nil) -> nil
-        }
-
         Object value = arguments[0];
 
-        // 【核心修改】从上下文中获取这个值的有效元表
+        // 【核心修改】从上下文中获取这个值的有效元表（表自身或类型默认元表）
         LuaTable metatable = getContext().getEffectiveMetatable(value);
 
         if (metatable == null) {

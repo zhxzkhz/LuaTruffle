@@ -11,6 +11,7 @@ import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.NoSuchFileException;
 
@@ -22,16 +23,26 @@ final class LuaFileLoader {
     @TruffleBoundary
     static LuaFunction load(LuaContext context, Object[] arguments, String function) throws IOException {
         String filename = filename(arguments, function);
-        validateMode(arguments, function);
-        if (arguments.length > 2 && arguments[2] != null && arguments[2] != LuaNil.SINGLETON) {
-            throw LuaException.create(function + " does not support a custom environment", null);
-        }
+        String mode = mode(arguments, function);
 
         TruffleFile file = context.resolveScriptFile(filename);
+        boolean binary = isBinary(file);
+        checkMode(mode, binary);
+        if (binary) {
+            // 本实现不支持反序列化二进制块（等价于缺失 luaU_undump）。
+            throw LuaException.create(function + " cannot load a binary chunk", null);
+        }
+
         Source source = Source.newBuilder(LuaLanguage.ID, file)
                 .name("@" + file.getPath())
                 .build();
-        return new LuaFunction(context.getFunctionShape(), context.getEnv().parseInternal(source));
+        LuaFunction functionObject = new LuaFunction(context.getFunctionShape(),
+                context.getEnv().parseInternal(source));
+        // loadfile(filename, mode, env)：显式给出的环境（含显式 nil）作为 chunk 的 _ENV 初值。
+        if (arguments.length > 2) {
+            functionObject.setEnvironment(arguments[2]);
+        }
+        return functionObject;
     }
 
     static String errorMessage(Throwable exception) {
@@ -58,20 +69,37 @@ final class LuaFileLoader {
         throw LuaException.create("bad argument #1 to '" + function + "' (string expected)", null);
     }
 
-    private static void validateMode(Object[] arguments, String function) {
+    private static String mode(Object[] arguments, String function) {
         if (arguments.length < 2 || arguments[1] == null || arguments[1] == LuaNil.SINGLETON) {
+            return null;
+        }
+        if (arguments[1] instanceof TruffleString string) {
+            return string.toJavaStringUncached();
+        }
+        if (arguments[1] instanceof String string) {
+            return string;
+        }
+        throw LuaException.create("bad argument #2 to '" + function + "' (string expected)", null);
+    }
+
+    /**
+     * 对应 lua/src/ldo.c 的 {@code checkmode}：mode 中缺失对应字符时报错。
+     */
+    private static void checkMode(String mode, boolean binary) {
+        if (mode == null) {
             return;
         }
-        String mode;
-        if (arguments[1] instanceof TruffleString string) {
-            mode = string.toJavaStringUncached();
-        } else if (arguments[1] instanceof String string) {
-            mode = string;
-        } else {
-            throw LuaException.create("bad argument #2 to '" + function + "' (string expected)", null);
+        if (binary && mode.indexOf('b') < 0) {
+            throw LuaException.create("attempt to load a binary chunk (mode is '" + mode + "')", null);
         }
-        if (!mode.equals("t") && !mode.equals("bt")) {
+        if (!binary && mode.indexOf('t') < 0) {
             throw LuaException.create("attempt to load a text chunk (mode is '" + mode + "')", null);
+        }
+    }
+
+    private static boolean isBinary(TruffleFile file) throws IOException {
+        try (InputStream input = file.newInputStream()) {
+            return input.read() == 0x1b; // LUA_SIGNATURE[0] == '\x1b'
         }
     }
 }

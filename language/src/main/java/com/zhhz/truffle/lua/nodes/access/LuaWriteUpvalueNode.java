@@ -2,55 +2,41 @@ package com.zhhz.truffle.lua.nodes.access;
 
 import com.oracle.truffle.api.dsl.NodeField;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.frame.Frame;
-import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.zhhz.truffle.lua.runtime.LuaCell;
+import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
 /**
- * 负责将值写入从外部捕获的变量的节点
+ * 写入一个 upvalue（外层作用域被捕获的局部变量）。
+ *
+ * <p>通过当前闭包的 {@code upvalues} 数组（元素为 {@link LuaCell}）间接写入，
+ * 使共享同一 cell 的所有闭包都能观察到更新。
  */
 @NodeInfo(description = "用于从外部作用域（一个上值）写入变量的节点")
-@NodeField(name = "depth", type = int.class)
-@NodeField(name = "slotIndex", type = int.class)
+@NodeField(name = "index", type = int.class)
 public abstract class LuaWriteUpvalueNode extends LuaWriteVariableNode {
 
-    protected abstract int getDepth();
-    protected abstract int getSlotIndex();
+    /** 该 upvalue 在闭包 upvalue 数组中的下标。 */
+    protected abstract int getIndex();
 
     @Specialization
-    public void writeLong(VirtualFrame frame, long value) {
-        Frame parentFrame = getParentFrame(frame, getDepth());
-        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Long);
-        parentFrame.setLong(getSlotIndex(), value);
-    }
-
-    @Specialization
-    public void writeDouble(VirtualFrame frame, double value) {
-        Frame parentFrame = getParentFrame(frame, getDepth());
-        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Double);
-        parentFrame.setDouble(getSlotIndex(), value);
-    }
-
-    @Specialization
-    public void writeBoolean(VirtualFrame frame, boolean value) {
-        Frame parentFrame = getParentFrame(frame, getDepth());
-        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Boolean);
-        parentFrame.setBoolean(getSlotIndex(), value);
-    }
-
-    @Specialization
-    public void writeObject(VirtualFrame frame, Object value) {
-        Frame parentFrame = getParentFrame(frame, getDepth());
-        parentFrame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
-        parentFrame.setObject(getSlotIndex(), value);
-    }
-
-    private static Frame getParentFrame(VirtualFrame frame, int depth) {
-        Frame parentFrame = (Frame) frame.getArguments()[0];
-        for (int i = 1; i < depth; i++) {
-            parentFrame = (Frame) parentFrame.getArguments()[0];
+    public void writeUpvalue(VirtualFrame frame, Object value) {
+        Object normalized = value == null ? LuaNil.SINGLETON : value;
+        Object[] args = frame.getArguments();
+        if (args.length == 0 || !(args[0] instanceof LuaFunction function)) {
+            return;
         }
-        return parentFrame;
+        Object[] upvalues = function.getUpvalues();
+        int index = getIndex();
+        if (index < 0 || index >= upvalues.length) {
+            return;
+        }
+        if (upvalues[index] instanceof LuaCell cell) {
+            cell.value = normalized;
+        } else {
+            upvalues[index] = new LuaCell(normalized);
+        }
     }
 }

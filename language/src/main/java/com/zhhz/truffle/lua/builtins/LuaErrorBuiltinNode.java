@@ -3,20 +3,27 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.frame.FrameInstance;
+import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaMetatables;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
 import com.zhhz.truffle.lua.runtime.LuaString;
+import com.zhhz.truffle.lua.runtime.LuaTable;
 
 /**
  * 实现了Lua的 'error' 内置函数。
  */
+@GenerateInline(false)
 @NodeInfo(shortName = "error")
 public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
 
@@ -34,26 +41,85 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
             level = parseLevel(arguments[1]);
         }
 
-        // 2. 根据 'level' 参数查找错误位置
-        Node errorLocation = findErrorLocation(level);
-
-        // 3. 标准 Lua 行为：level >= 1 时为字符串消息添加 "source:line: " 位置前缀；
-        //    level 0 与非字符串消息不加前缀
-        Object errorObject = message;
-        if (level > 0) {
-            TruffleString messageString = asString(message);
-            if (messageString != null && errorLocation != null) {
+        // 2. 可字符串化的消息（字符串与数字——Lua 5.3.0 的 lua_isstring 语义）：
+        //    level >= 1 时添加 "source:line: " 位置前缀，前缀后的字符串成为错误对象
+        //    （与 5.3.0 的 lua_concat 行为一致，pcall 返回带前缀的字符串）；
+        //    level 0 不加前缀，原对象保持不变。
+        //    其余类型（表等）：无位置前缀，展示消息经 __tostring 格式化。
+        String messageText = coercibleString(message);
+        if (messageText != null) {
+            Node errorLocation = findErrorLocation(level);
+            Object errorObject = message;
+            if (level > 0 && errorLocation != null) {
                 SourceSection section = errorLocation.getEncapsulatingSourceSection();
                 if (section != null && section.isAvailable()) {
                     errorObject = LuaContext.toTruffleString(
                             section.getSource().getName() + ":" + section.getStartLine() + ": "
-                                    + messageString.toJavaStringUncached());
+                                    + messageText);
                 }
             }
+            throw LuaException.create(errorObject, errorLocation);
         }
 
-        // 4. 抛出统一的运行时异常，errorObject 直接传递给 pcall
-        throw LuaException.create(errorObject, errorLocation);
+        // 非字符串错误对象：在抛出前（此时调用栈仍然活着）经 tostring 内建格式化，
+        // 使 __tostring 内的 debug.getinfo 能看到原始调用栈。
+        // 帧链与标准 lua 的 message handler 一致：
+        //   [__tostring(1), tostring 内建(2/C), error 内建(3/C), 调用者(4)]
+        // 故 __tostring 内 getinfo(4).currentline == error() 调用行。
+        // pcall 语义不受影响：errorObject 原样返回，只有展示消息被格式化。
+        String display = formatErrorObject(message);
+        throw LuaException.create(message, display, null);
+    }
+
+    /**
+     * Lua 5.3.0 的 lua_isstring 语义：字符串与数字可强制转换为字符串（返回其文本），
+     * 其余类型返回 null。
+     */
+    private static String coercibleString(Object value) {
+        TruffleString ts = asString(value);
+        if (ts != null) {
+            return ts.toJavaStringUncached();
+        }
+        if (value instanceof Long number) {
+            return number.toString();
+        }
+        if (value instanceof Double number) {
+            return number.isInfinite() || number.isNaN()
+                    ? Double.toString(number)
+                    : (number == Math.rint(number) ? number.longValue() + ".0" : number.toString());
+        }
+        if (value instanceof LuaNumber number) {
+            double d = number.getValue();
+            return d == Math.rint(d) && !Double.isInfinite(d) ? (long) d + ".0" : Double.toString(d);
+        }
+        return null;
+    }
+
+    /**
+     * 模拟标准 lua CLI message handler 对非字符串错误对象的处理：
+     * 仅当对象有 __tostring 元方法时才（经 tostring 内建，保持帧深度）调用它，
+     * 元方法不可用或不返回字符串时退回 "(error object is a %s value)" 占位描述
+     * （与 lua.c msghandler 一致——注意不能直接对无元方法的对象调 tostring，
+     * 那会得到 "table: 0x..." 而非占位描述）。
+     */
+    @TruffleBoundary
+    private String formatErrorObject(Object errorObject) {
+        LuaContext context = getContext();
+        LuaTable metatable = context.getEffectiveMetatable(errorObject);
+        boolean hasTostring = metatable != null
+                && metatable.rawget(LuaMetatables.__TOSTRING) != LuaNil.SINGLETON;
+        if (hasTostring && context.getTostringFunction() != null) {
+            try {
+                Object result = InteropLibrary.getFactory().getUncached()
+                        .execute(context.getTostringFunction(), errorObject);
+                if (result instanceof TruffleString ts) {
+                    return ts.toJavaStringUncached();
+                }
+            } catch (Exception ignored) {
+                // __tostring 出错或不返回字符串：退回占位描述
+            }
+        }
+        return "(error object is a " + LuaTypesUtil.getTypeName(errorObject) + " value)";
     }
 
     /**

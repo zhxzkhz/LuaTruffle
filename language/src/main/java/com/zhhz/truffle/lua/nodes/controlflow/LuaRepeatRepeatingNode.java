@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.nodes.controlflow;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RepeatingNode;
@@ -27,10 +28,18 @@ public class LuaRepeatRepeatingNode extends Node implements RepeatingNode {
     private final BranchProfile continueTaken = BranchProfile.create();
     private final BranchProfile breakTaken = BranchProfile.create();
 
+    // debug 行钩子：until 行（每次条件检查触发；until 为真退出后不额外触发）
+    private final int untilLine;
+
     public LuaRepeatRepeatingNode(LuaStatementNode bodyNode, LuaExpressionNode conditionNode) {
+        this(bodyNode, conditionNode, 0);
+    }
+
+    public LuaRepeatRepeatingNode(LuaStatementNode bodyNode, LuaExpressionNode conditionNode, int untilLine) {
         this.bodyNode = bodyNode;
         this.conditionNode = LuaToBooleanNodeGen.create(conditionNode);
         this.conditionNode.setSourceSection(conditionNode.getSourceCharIndex(), conditionNode.getSourceLength());
+        this.untilLine = untilLine;
     }
 
     /**
@@ -42,6 +51,8 @@ public class LuaRepeatRepeatingNode extends Node implements RepeatingNode {
      */
     @Override
     public boolean executeRepeating(VirtualFrame frame) {
+        TruffleSafepoint.poll(this);
+        com.zhhz.truffle.lua.runtime.LuaInterrupt.check(this);
         try {
             bodyNode.executeVoid(frame);
         } catch (LuaContinueException e) {
@@ -51,6 +62,7 @@ public class LuaRepeatRepeatingNode extends Node implements RepeatingNode {
             return false;
         }
 
+        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, untilLine, false);
         boolean conditionMet = evaluateCondition(frame);
         return !conditionMet;
     }

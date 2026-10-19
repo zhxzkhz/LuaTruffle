@@ -44,7 +44,7 @@ public class LuaGenericForNode extends LuaStatementNode {
     private final int stateIndex;
     private final int controlVarIndex;
 
-    public LuaGenericForNode(LuaMultiValueNode expListNode,
+    public LuaGenericForNode(LuaMultiValueNode expListNode, int hookHeaderLine, int hookEndLine, int callLine,
                              int iteratorFuncIndex,
                              int stateIndex,
                              int controlVarIndex,
@@ -55,7 +55,7 @@ public class LuaGenericForNode extends LuaStatementNode {
         this.stateIndex = stateIndex;
         this.controlVarIndex = controlVarIndex;
         // 创建重复执行节点 (RepeatingNode)，并将其包装在 LoopNode 中
-        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaGenericForRepeatingNode(iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode));
+        this.loopNode = Truffle.getRuntime().createLoopNode(new LuaGenericForRepeatingNode(iteratorFuncIndex, stateIndex, controlVarIndex, writeNodes, bodyNode, hookHeaderLine, hookEndLine, callLine));
     }
 
     @Override
@@ -82,5 +82,13 @@ public class LuaGenericForNode extends LuaStatementNode {
         // 4. 【启动循环】执行 LoopNode
         // 这会不断调用 RepeatingNode.executeRepeating(frame) 直到其返回 false
         loopNode.execute(frame);
+
+        // 5. 【释放隐藏控制变量】循环结束后清除迭代器函数/状态/控制变量。
+        // Lua 中这些是 for 语句块作用域内的隐藏局部变量，块结束时即不可达；
+        // 此处若不清除，它们会一直占用当前帧槽，导致迭代器（以及其持有的
+        // 资源，例如文件句柄）无法被 GC 回收。
+        frame.setObject(iteratorFuncIndex, LuaNil.SINGLETON);
+        frame.setObject(stateIndex, LuaNil.SINGLETON);
+        frame.setObject(controlVarIndex, LuaNil.SINGLETON);
     }
 }

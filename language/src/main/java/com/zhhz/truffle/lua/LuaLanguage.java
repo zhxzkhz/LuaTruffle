@@ -143,7 +143,7 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
     public static final String MIME_TYPE = "application/x-lua";
     private static final Source BUILTIN_SOURCE = Source.newBuilder(LuaLanguage.ID, "", "Lua builtin").build();
 
-    public static final TruffleString.Encoding STRING_ENCODING = TruffleString.Encoding.UTF_8;
+    public static final TruffleString.Encoding STRING_ENCODING = TruffleString.Encoding.ISO_8859_1;
 
     private final Assumption singleContext = Truffle.getRuntime().createAssumption("Single Lua context.");
 
@@ -158,6 +158,19 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
     @Override
     protected LuaContext createContext(Env env) {
         return new LuaContext(this, env);
+    }
+
+    /**
+     * 允许多线程访问：协程（{@link com.zhhz.truffle.lua.runtime.LuaThread}）以独立
+     * Java 线程运行，经 {@link Env#createThread(Runnable)} 创建后需通过引擎的
+     * checkMultiThreadedAccess 检查。基类默认实现仅允许单线程（返回 singleThreaded），
+     * 会导致 coroutine.create/resume 抛出
+     * "Multi threaded access requested by thread ... but is not allowed for language(s) lua"。
+     * 协程与调用线程经 Exchanger 交接、实际串行执行，无并发访问共享状态。
+     */
+    @Override
+    protected boolean isThreadAccessAllowed(Thread thread, boolean singleThreaded) {
+        return true;
     }
 
     @Override

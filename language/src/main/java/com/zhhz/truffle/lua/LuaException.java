@@ -46,7 +46,9 @@ import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
+import com.zhhz.truffle.lua.nodes.LuaStatementNode;
 import com.zhhz.truffle.lua.runtime.LuaLanguageView;
 
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
@@ -75,9 +77,89 @@ public final class LuaException extends AbstractTruffleException {
         return new LuaException(message, location);
     }
 
+    /**
+     * 创建运行时错误，并按其所在源码位置加上标准 Lua 的位置前缀
+     * （{@code chunkid:line: message}，等价于 C 端的 {@code luaG_runerror} /
+     * {@code luaG_addinfo}）。pcall 捕获后返回的字符串因此带位置信息，
+     * 与标准 Lua 一致。
+     */
+    @TruffleBoundary
+    public static AbstractTruffleException runtimeError(String message, Node location) {
+        String full = withPosition(message, location);
+        return new LuaException(full, full, location);
+    }
+
+    /** 若 location 有可用的源码位置，则为 message 加上 {@code chunkid:line: } 前缀。 */
+    @TruffleBoundary
+    public static String withPosition(String message, Node location) {
+        if (location == null) {
+            return message;
+        }
+        SourceSection section = location.getEncapsulatingSourceSection();
+        if (section == null || !section.isAvailable()) {
+            return message;
+        }
+        Source source = section.getSource();
+        if (source == null) {
+            return message;
+        }
+        // 优先使用词法器报告的源码行号：标准 Lua 中部分指令（如二元运算）
+        // 的行号并非其源码片段的起始行。未设置时回退到片段的起始行。
+        int line = section.getStartLine();
+        if (location instanceof LuaStatementNode statementNode && statementNode.hasSourceLine()) {
+            line = statementNode.getSourceLine();
+        }
+        return chunkId(source.getName()) + ":" + line + ": " + message;
+    }
+
+    /**
+     * 复刻标准 Lua 的 {@code luaO_chunkid}：把源码名格式化为错误消息前缀。
+     */
+    @TruffleBoundary
+    public static String chunkId(String source) {
+        if (source == null) {
+            source = "?";
+        }
+        int bufflen = 60; // LUA_IDSIZE
+        if (!source.isEmpty() && source.charAt(0) == '=') {
+            String body = source.substring(1);
+            return body.length() <= bufflen - 1 ? body : body.substring(0, bufflen - 1);
+        }
+        if (!source.isEmpty() && source.charAt(0) == '@') {
+            String body = source.substring(1);
+            if (body.length() <= bufflen - 1) {
+                return body;
+            }
+            return "..." + body.substring(body.length() - (bufflen - 4));
+        }
+        StringBuilder out = new StringBuilder("[string \"");
+        int l = source.length();
+        int nl = source.indexOf('\n');
+        if (l < bufflen - 11) {
+            if (nl >= 0) {
+                out.append(source, 0, nl).append("...");
+            } else {
+                out.append(source);
+            }
+        } else {
+            out.append(source, 0, bufflen - 15).append("...");
+        }
+        out.append("\"]");
+        return out.toString();
+    }
+
     @TruffleBoundary
     public static AbstractTruffleException create(Object errorObject, Node location) {
         return new LuaException(String.valueOf(errorObject), errorObject, location);
+    }
+
+    /**
+     * 创建错误对象与展示消息分离的异常：pcall 返回 {@code errorObject}，
+     * 而 CLI/调试器显示 {@code displayMessage}（如经 __tostring 格式化的结果）。
+     */
+    @TruffleBoundary
+    public static AbstractTruffleException create(Object errorObject, String displayMessage, Node location) {
+        return new LuaException(displayMessage, errorObject, location);
     }
 
     public Object getErrorObject() {

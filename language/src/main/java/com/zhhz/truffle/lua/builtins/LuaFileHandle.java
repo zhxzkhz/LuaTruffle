@@ -20,39 +20,86 @@ public final class LuaFileHandle extends LuaValue {
     private final OutputStream output;
     private final Process process;
     private final boolean standard;
+    private final boolean readable;
+    private final boolean writable;
     private boolean closed;
 
+    // 模拟 C stdio 的写缓冲。默认直写（不缓冲）；setvbuf 可切换为 "no"/"line"/"full"。
+    private static final int MODE_NO = 0;
+    private static final int MODE_FULL = 1;
+    private static final int MODE_LINE = 2;
+    private int bufferMode = MODE_NO;
+    private int bufferCapacity = 8192;
+    private byte[] writeBuffer = new byte[8192];
+    private int writeBufferSize = 0;
+
     private LuaFileHandle(Shape shape, RandomAccessFile file, InputStream input, OutputStream output,
-                          Process process, boolean standard) {
+                          Process process, boolean standard, boolean readable, boolean writable) {
         super(shape);
         this.file = file;
         this.input = input == null ? null : new PushbackInputStream(input, 1);
         this.output = output;
         this.process = process;
         this.standard = standard;
+        this.readable = readable;
+        this.writable = writable;
     }
 
     static LuaFileHandle open(Shape shape, Path path, String mode) throws IOException {
         boolean append = mode.startsWith("a");
-        boolean writable = append || mode.startsWith("w") || mode.contains("+");
+        boolean updatable = mode.contains("+");
+        boolean readable = mode.startsWith("r") || updatable;
+        boolean writable = mode.startsWith("w") || append || updatable;
         RandomAccessFile file = new RandomAccessFile(path.toFile(), writable ? "rw" : "r");
         if (mode.startsWith("w")) file.setLength(0);
         if (append) file.seek(file.length());
-        return new LuaFileHandle(shape, file, null, null, null, false);
+        LuaFileHandle handle = new LuaFileHandle(shape, file, null, null, null, false, readable, writable);
+        handle.registerFinalizer();
+        return handle;
     }
 
     public static LuaFileHandle stream(Shape shape, InputStream input, OutputStream output, boolean standard) {
-        return new LuaFileHandle(shape, null, input, output, null, standard);
+        return new LuaFileHandle(shape, null, input, output, null, standard, input != null, output != null);
     }
 
     static LuaFileHandle process(Shape shape, Process process, InputStream input, OutputStream output) {
-        return new LuaFileHandle(shape, null, input, output, process, false);
+        LuaFileHandle handle = new LuaFileHandle(shape, null, input, output, process, false,
+                input != null, output != null);
+        handle.registerFinalizer();
+        return handle;
+    }
+
+    /**
+     * 注册一个终结动作：当本句柄不可达时由 collectgarbage() 关闭底层资源。
+     * 注意：动作只捕获底层资源（而非 this），以免强引用阻止本句柄被回收。
+     */
+    private void registerFinalizer() {
+        com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(null);
+        if (context == null) return;
+        RandomAccessFile fileResource = this.file;
+        InputStream inputResource = this.input;
+        OutputStream outputResource = this.output;
+        context.registerFileHandle(this, () -> {
+            closeQuietly(fileResource);
+            closeQuietly(inputResource);
+            closeQuietly(outputResource);
+        });
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+                // 忽略终结过程中的错误
+            }
+        }
     }
 
     int read() throws IOException {
         ensureOpen();
+        if (!readable) throw new IOException("Bad file descriptor");
         if (file != null) return file.read();
-        if (input == null) throw new IOException("file is not readable");
         return input.read();
     }
 
@@ -64,20 +111,58 @@ public final class LuaFileHandle extends LuaValue {
 
     void write(byte[] bytes) throws IOException {
         ensureOpen();
-        if (file != null) file.write(bytes);
-        else if (output != null) output.write(bytes);
-        else throw new IOException("file is not writable");
+        if (!writable) throw new IOException("Bad file descriptor");
+        if (file != null) {
+            if (bufferMode == MODE_NO) {
+                file.write(bytes);
+                return;
+            }
+            for (byte value : bytes) {
+                writeBuffer[writeBufferSize++] = value;
+                if (writeBufferSize >= bufferCapacity) {
+                    flushWriteBuffer();
+                } else if (bufferMode == MODE_LINE && value == '\n') {
+                    flushWriteBuffer();
+                }
+            }
+        } else if (output != null) {
+            output.write(bytes);
+            output.flush();
+        } else {
+            throw new IOException("file is not writable");
+        }
+    }
+
+    private void flushWriteBuffer() throws IOException {
+        if (writeBufferSize > 0) {
+            file.write(writeBuffer, 0, writeBufferSize);
+            writeBufferSize = 0;
+        }
     }
 
     void flush() throws IOException {
         ensureOpen();
+        // 对应 C 的 fflush：先把用户态缓冲写入操作系统，不做 fsync。
+        if (file != null) flushWriteBuffer();
         if (output != null) output.flush();
-        if (file != null) file.getFD().sync();
+    }
+
+    void setvbuf(String mode, int size) {
+        bufferMode = switch (mode) {
+            case "no" -> MODE_NO;
+            case "line" -> MODE_LINE;
+            default -> MODE_FULL;
+        };
+        if (size > 0) {
+            bufferCapacity = size;
+            if (writeBuffer.length < size) writeBuffer = new byte[size];
+        }
     }
 
     long seek(String whence, long offset) throws IOException {
         ensureOpen();
         if (file == null) throw new IOException("file is not seekable");
+        flushWriteBuffer(); // 与 C 的 fseek 一致：定位前先刷新输出缓冲
         long base = switch (whence) {
             case "set" -> 0;
             case "cur" -> file.getFilePointer();
@@ -94,7 +179,10 @@ public final class LuaFileHandle extends LuaValue {
         if (closed) throw new IOException("attempt to use a closed file");
         if (standard) return false;
         closed = true;
-        if (file != null) file.close();
+        if (file != null) {
+            flushWriteBuffer();
+            file.close();
+        }
         if (input != null) input.close();
         if (output != null) output.close();
         return process == null ? true : process.waitFor() == 0;
@@ -121,6 +209,17 @@ public final class LuaFileHandle extends LuaValue {
     @ExportMessage
     boolean hasMembers() {
         return true;
+    }
+
+    // 导出语言身份：标识此宿主对象归属 Lua 语言（工具与调试器依赖）
+    @ExportMessage
+    boolean hasLanguageId() {
+        return true;
+    }
+
+    @ExportMessage
+    String getLanguageId() {
+        return com.zhhz.truffle.lua.LuaLanguage.ID;
     }
 
     @ExportMessage

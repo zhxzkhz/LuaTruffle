@@ -40,14 +40,17 @@
  */
 package com.zhhz.truffle.lua.nodes;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.controlflow.LuaReturnException;
-import com.zhhz.truffle.lua.runtime.LuaNil;
-import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaTailCallException;
 
 public final class LuaAstRootNode extends LuaRootNode {
 
@@ -57,12 +60,29 @@ public final class LuaAstRootNode extends LuaRootNode {
 
     private final SourceSection sourceSection;
 
+    /**
+     * 是否为顶层入口（main chunk / dofile 等）。顶层 execute 自行处理尾调用循环，
+     * 因为其外层没有 {@link LuaFunction.Execute} 的循环来捕获冒泡的
+     * {@link LuaTailCallException}。非顶层函数（由 LuaFunction 调用）不在此捕获，
+     * 让异常冒泡到 {@link LuaFunction.Execute} 的循环。
+     */
+    private final boolean topLevel;
+
+    /** 顶层尾调用重试缓存。 */
+    @Child private DirectCallNode tailCallNode;
+
     public LuaAstRootNode(LuaLanguage language, FrameDescriptor frameDescriptor, LuaStatementNode bodyNode,
                           SourceSection sourceSection, TruffleString name) {
+        this(language, frameDescriptor, bodyNode, sourceSection, name, false);
+    }
+
+    public LuaAstRootNode(LuaLanguage language, FrameDescriptor frameDescriptor, LuaStatementNode bodyNode,
+                          SourceSection sourceSection, TruffleString name, boolean topLevel) {
         super(language, frameDescriptor, name);
         this.bodyNode = bodyNode;
         this.sourceSection = sourceSection;
         this.name = name;
+        this.topLevel = topLevel;
     }
 
     @Override
@@ -81,15 +101,54 @@ public final class LuaAstRootNode extends LuaRootNode {
 
     @Override
     public Object execute(VirtualFrame frame) {
-        // --- 2. 执行函数体 ---
-        try {
-            bodyNode.executeVoid(frame);
-        } catch (LuaReturnException e) {
-            return e.getResult();
+        com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+        if (context != null) {
+            context.enterLuaCall(this);
         }
-        // --- 3. 默认返回值 ---
-        return LuaNil.SINGLETON;
+        try {
+            try {
+                bodyNode.executeVoid(frame);
+            } catch (LuaReturnException e) {
+                return e.getResult();
+            } catch (LuaTailCallException e) {
+                if (topLevel) {
+                    return doTailCall(e);
+                }
+                // 非顶层：让异常冒泡到调用本 CallTarget 的 LuaFunction.Execute 循环
+                throw e;
+            }
+            return new LuaMultiValue(new Object[0]);
+        } finally {
+            if (context != null) {
+                context.exitLuaCall();
+            }
+        }
+    }
 
+    /**
+     * 顶层尾调用重试循环：在固定 Java 栈深度下反复执行尾递归目标，直到正常返回。
+     */
+    private Object doTailCall(LuaTailCallException initial) {
+        LuaTailCallException e = initial;
+        while (true) {
+            LuaFunction target = e.getFunction();
+            CallTarget callTarget = target.getCallTarget();
+            Object[] args = e.getArguments();
+            Object[] frameArguments = new Object[args.length + 1];
+            frameArguments[0] = target;
+            System.arraycopy(args, 0, frameArguments, 1, args.length);
+
+            if (tailCallNode == null) {
+                tailCallNode = DirectCallNode.create(callTarget);
+            } else if (tailCallNode.getCallTarget() != callTarget) {
+                tailCallNode = DirectCallNode.create(callTarget);
+            }
+            try {
+                return tailCallNode.call(frameArguments);
+            } catch (LuaTailCallException next) {
+                e = next;
+            }
+        }
     }
 
 }

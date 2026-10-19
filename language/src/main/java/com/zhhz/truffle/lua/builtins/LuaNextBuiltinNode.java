@@ -1,6 +1,7 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.object.DynamicObjectLibrary;
@@ -12,6 +13,8 @@ import com.zhhz.truffle.lua.runtime.LuaTable;
 /**
  * 实现了Lua的 'next' 内置函数。
  */
+@SuppressWarnings("deprecation")
+@GenerateInline(false)
 @NodeInfo(shortName = "next")
 public abstract class LuaNextBuiltinNode extends LuaBuiltinNode {
 

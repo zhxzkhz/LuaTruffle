@@ -1,4 +1,4 @@
-// Generated from LuaParser.g4 by ANTLR 4.13.2
+// Generated from D:/IdeaProjects/LuaTruffle/language/src/main/java/com/zhhz/truffle/lua/parser/LuaParser.g4 by ANTLR 4.13.2
 package com.zhhz.truffle.lua.parser;
 import org.antlr.v4.runtime.tree.ParseTreeVisitor;
 

@@ -41,7 +41,6 @@
 package com.zhhz.truffle.lua.runtime;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
@@ -75,18 +74,18 @@ public final class LuaLanguageView implements TruffleObject {
      * 这告诉 Truffle 框架（以及调试器等工具），这个对象现在应该被视为 Lua 语言的一部分。
      */
     @ExportMessage
-    boolean hasLanguage() {
+    boolean hasLanguageId() {
         return true;
     }
 
     /**
-     * 返回关联的语言类。
+     * 返回关联的语言 ID。
      * 语言视图必须始终与创建它们的语言相关联。这允许工具获取一个原生值或外部值，
      * 并将其视为本语言的值进行展示。
      */
     @ExportMessage
-    Class<? extends TruffleLanguage<?>> getLanguage() {
-        return LuaLanguage.class;
+    String getLanguageId() {
+        return LuaLanguage.ID;
     }
 
     /**

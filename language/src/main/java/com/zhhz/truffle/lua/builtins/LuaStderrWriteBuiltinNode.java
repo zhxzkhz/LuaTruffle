@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
@@ -9,6 +10,7 @@ import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import java.io.PrintWriter;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "io.stderr:write")
 public abstract class LuaStderrWriteBuiltinNode extends LuaBuiltinNode {

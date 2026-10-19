@@ -13,11 +13,13 @@ import com.oracle.truffle.api.object.DynamicObjectLibrary;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
+import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.util.LuaCoerceToIntegerNode;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.lang.ref.WeakReference;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
 
@@ -34,6 +36,17 @@ public final class LuaTable extends LuaValue {
     // --- 内部状态 ---
     private Object[] arrayPart;
     private int arraySize; // Lua's sequence length (#t)
+    private int arrayLimit; // 数组部分曾用到的最大 1-based 索引（近似 Lua 的 sizearray，用于 next 的键有效性判断）
+
+    /** 当元表的 {@code __mode} 含 'v' 时，值为弱引用（可被 JVM GC 回收）。 */
+    private boolean weakValues;
+
+    // 遍历缓存：缓存形状对应的哈希键数组及 (键 -> 位置) 索引，避免 next 每次
+    // 重建键数组并做 O(n) 线性查找，导致 pairs 遍历整体退化为 O(n^2)。
+    // 当 shape 身份改变（哈希部分结构变化）时失效重建。
+    private Shape cachedHashShape;
+    private Object[] cachedHashKeyArray;
+    private java.util.HashMap<Object, Integer> cachedHashKeyIndex;
 
     /**
      * 创建一个新的、空的 LuaTable。
@@ -78,7 +91,10 @@ public final class LuaTable extends LuaValue {
             if (index < this.arraySize) {
                 Object value = this.arrayPart[index];
                 if (value != null) {
-                    return value;
+                    Object unwrapped = unwrapWeak(value);
+                    if (unwrapped != LuaNil.SINGLETON) {
+                        return unwrapped;
+                    }
                 }
             }
             key = (long) arrayIndex;
@@ -89,13 +105,7 @@ public final class LuaTable extends LuaValue {
         // 如果键不是一个有效的数组索引，或者索引越界，
         // 我们就在内部的 DynamicObject (properties) 中查找它。
         // objLib.getOrDefault 是一个高性能的操作，它利用了 Truffle 的 Shape 优化。
-        Object ts;
-        if (key instanceof String string){
-            ts = toTruffleString(string);
-        } else {
-            ts = key;
-        }
-        return objLib.getOrDefault(this, ts, LuaNil.SINGLETON);
+        return unwrapWeak(objLib.getOrDefault(this, normalizeHashKey(key), LuaNil.SINGLETON));
     }
 
     public Object rawget(Object key) {
@@ -111,6 +121,13 @@ public final class LuaTable extends LuaValue {
     }
 
     public void rawset(Object key, Object value, DynamicObjectLibrary objLib) {
+        // 标准 Lua 语义：table 索引不能为 nil 或 NaN
+        if (key == null || key == LuaNil.SINGLETON) {
+            throw LuaException.create("table index is nil", null);
+        }
+        if (key instanceof Double doubleKey && doubleKey.isNaN()) {
+            throw LuaException.create("table index is NaN", null);
+        }
         int arrayIndex = toArrayIndex(key);
         Object normalizedKey = normalizePropertyKey(key, arrayIndex);
         if (arrayIndex > 0 && shouldUseArrayPart(arrayIndex)) {
@@ -119,9 +136,13 @@ public final class LuaTable extends LuaValue {
             return;
         }
         if (value == LuaNil.SINGLETON) {
-            objLib.removeKey(this, normalizedKey);
+            // 标准 Lua 在把已存在的键赋为 nil 时保留一个“死键”（dead key），
+            // 以便在遍历过程中删除当前键后 next 仍能定位后续键。若键不存在则不创建。
+            if (objLib.containsKey(this, normalizedKey)) {
+                objLib.put(this, normalizedKey, LuaNil.SINGLETON);
+            }
         } else {
-            objLib.put(this, normalizedKey, value);
+            objLib.put(this, normalizedKey, weakValues ? wrapWeakValue(value) : value);
         }
     }
 
@@ -142,9 +163,12 @@ public final class LuaTable extends LuaValue {
             }
         } else { // Write or update
             ensureArrayCapacity(index);
-            arrayPart[index] = value;
+            arrayPart[index] = weakValues ? wrapWeakValue(value) : value;
             if (index >= arraySize) {
                 arraySize = index + 1;
+            }
+            if (luaIndex > arrayLimit) {
+                arrayLimit = luaIndex;
             }
         }
     }
@@ -162,7 +186,7 @@ public final class LuaTable extends LuaValue {
 
         if (index >= 0 && index < this.arraySize) { // 2. 边界检查
             Object value = this.arrayPart[index];
-            return value == null ? LuaNil.SINGLETON : value; // 3. null -> nil 转换
+            return value == null ? LuaNil.SINGLETON : unwrapWeak(value); // 3. null -> nil 转换
         }
 
         // 如果数组部分越界，返回 nil
@@ -199,15 +223,15 @@ public final class LuaTable extends LuaValue {
 
     @ExportMessage
     boolean isMemberReadable(String member,
-                             @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                             @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                              @CachedLibrary("this") DynamicObjectLibrary objLib) {
         return objLib.containsKey(this, fromJavaStringNode.execute(member, LuaLanguage.STRING_ENCODING));
     }
 
     @ExportMessage
     Object readMember(String member,
-                      @Cached("create()") LuaCoerceToIntegerNode coerceNode,
-                      @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                      @Cached(value = "create()", neverDefault = true) LuaCoerceToIntegerNode coerceNode,
+                      @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                       @CachedLibrary("this") DynamicObjectLibrary objLib) throws UnknownIdentifierException {
         Object value = objLib.getOrDefault(this, fromJavaStringNode.execute(member, LuaLanguage.STRING_ENCODING), null);
         if (value == null) {
@@ -218,7 +242,7 @@ public final class LuaTable extends LuaValue {
 
     @ExportMessage
     void writeMember(String member, Object value,
-                     @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                     @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                      @CachedLibrary("this") DynamicObjectLibrary objLib) {
 
         // 2. 写入
@@ -242,7 +266,8 @@ public final class LuaTable extends LuaValue {
     @ExportMessage
     boolean isArrayElementReadable(long index) {
         long luaIndex = index + 1;
-        return luaIndex > 0 && luaIndex <= this.arraySize && this.arrayPart[(int) index] != null;
+        return luaIndex > 0 && luaIndex <= this.arraySize && this.arrayPart[(int) index] != null
+                && unwrapWeak(this.arrayPart[(int) index]) != LuaNil.SINGLETON;
     }
 
     @ExportMessage
@@ -250,7 +275,7 @@ public final class LuaTable extends LuaValue {
         if (!isArrayElementReadable(index)) {
             throw InvalidArrayIndexException.create(index);
         }
-        return this.arrayPart[(int) index];
+        return unwrapWeak(this.arrayPart[(int) index]);
     }
 
     // === 哈希表协议 (用于任意对象键) ===
@@ -263,7 +288,14 @@ public final class LuaTable extends LuaValue {
     @TruffleBoundary
     long getHashSize(@CachedLibrary("this") DynamicObjectLibrary objLib) {
         // A simplified version. A correct version would need to handle overlaps.
-        return this.arraySize + objLib.getKeyArray(this).length;
+        // 跳过“死键”（值为 nil 的保留键）。
+        long size = this.arraySize;
+        for (Object key : objLib.getKeyArray(this)) {
+            if (objLib.getOrDefault(this, key, LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+                size++;
+            }
+        }
+        return size;
     }
 
     @ExportMessage
@@ -280,19 +312,91 @@ public final class LuaTable extends LuaValue {
     @ExportMessage
     @TruffleBoundary
     Object getHashEntriesIterator(@CachedLibrary("this") DynamicObjectLibrary objLib) {
-        Object[] hashKeys = objLib.getKeyArray(this);
+        Object[] rawHashKeys = objLib.getKeyArray(this);
+        List<Object> liveHashKeys = new ArrayList<>(rawHashKeys.length);
+        for (Object key : rawHashKeys) {
+            if (objLib.getOrDefault(this, key, LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+                liveHashKeys.add(key);
+            }
+        }
         List<Object> arrayKeyList = new ArrayList<>();
         for (int i = 0; i < this.arraySize; i++) {
             if (this.arrayPart[i] != null) {
                 arrayKeyList.add((double) (i + 1));
             }
         }
-        return new LuaTableIterator(arrayKeyList.toArray(), hashKeys);
+        return new LuaTableIterator(arrayKeyList.toArray(), liveHashKeys.toArray());
     }
 
     // === 辅助方法 ===
     private static boolean isArrayIndex(double d) {
         return d > 0 && d <= Integer.MAX_VALUE && d == (int) d;
+    }
+
+    /**
+     * 当元表 {@code __mode} 含 'v' 时把值包成 {@link WeakReference}，
+     * 使 JVM GC 可以回收仅被弱表引用的对象（Lua 弱表语义）。
+     */
+    static Object wrapWeakValue(Object value) {
+        if (value instanceof LuaValue v && v != LuaNil.SINGLETON && !(v instanceof LuaBoolean)) {
+            return new WeakReference<>(value);
+        }
+        // 数字/字符串/布尔等立即值不由弱引用持有（Lua 中它们不会被回收）。
+        return value;
+    }
+
+    /** 读取时解开弱引用；引用已被 GC 清除则视为 nil。 */
+    static Object unwrapWeak(Object value) {
+        if (value instanceof WeakReference<?> ref) {
+            Object referent = ref.get();
+            return referent == null ? LuaNil.SINGLETON : referent;
+        }
+        return value;
+    }
+
+    /**
+     * 元表变更时更新弱值模式，并把既有条目在强引用与弱引用之间转换。
+     * （测试里 {@code setmetatable(x, {__mode='kv'})} 通常发生在元素写入之后。）
+     */
+    void updateWeakMode(LuaTable metatable) {
+        boolean weak = false;
+        if (metatable != null) {
+            Object mode = metatable.rawget(LuaMetatables.__MODE);
+            if (mode instanceof TruffleString modeString) {
+                weak = modeString.toJavaStringUncached().indexOf('v') >= 0;
+            }
+        }
+        if (weak == this.weakValues) {
+            return;
+        }
+        DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
+        if (weak) {
+            for (int i = 0; i < arrayPart.length; i++) {
+                if (arrayPart[i] != null && !(arrayPart[i] instanceof WeakReference)) {
+                    arrayPart[i] = wrapWeakValue(arrayPart[i]);
+                }
+            }
+            for (Object key : objLib.getKeyArray(this)) {
+                Object v = objLib.getOrDefault(this, key, LuaNil.SINGLETON);
+                if (v != LuaNil.SINGLETON && !(v instanceof WeakReference)) {
+                    objLib.put(this, key, wrapWeakValue(v));
+                }
+            }
+        } else {
+            for (int i = 0; i < arrayPart.length; i++) {
+                if (arrayPart[i] instanceof WeakReference<?> ref) {
+                    arrayPart[i] = ref.get();
+                }
+            }
+            for (Object key : objLib.getKeyArray(this)) {
+                Object v = objLib.getOrDefault(this, key, LuaNil.SINGLETON);
+                if (v instanceof WeakReference<?> ref) {
+                    Object referent = ref.get();
+                    objLib.put(this, key, referent == null ? LuaNil.SINGLETON : referent);
+                }
+            }
+        }
+        this.weakValues = weak;
     }
 
     private static boolean isArrayIndex(long value) {
@@ -320,10 +424,40 @@ public final class LuaTable extends LuaValue {
         if (arrayIndex > 0) {
             return (long) arrayIndex;
         }
+        return normalizeHashKey(key);
+    }
+
+    /**
+     * 规范化哈希键：
+     * <ul>
+     *   <li>字符串统一为 TruffleString；</li>
+     *   <li>布尔统一为 LuaBoolean 单例，使字面量 true/false 与比较运算产生的
+     *       java.lang.Boolean 指向同一键；</li>
+     *   <li>值等于整数的浮点键（如 2.0）转换为整数键，符合 Lua 的键等价规则。</li>
+     * </ul>
+     */
+    static Object normalizeHashKey(Object key) {
         if (key instanceof String string) {
             return toTruffleString(string);
         }
+        if (key instanceof Boolean bool) {
+            return LuaBoolean.valueOf(bool);
+        }
+        if (key instanceof Integer integer) {
+            return integer.longValue();
+        }
+        if (key instanceof Double number && isExactInteger(number)) {
+            return (long) (double) number;
+        }
         return key;
+    }
+
+    /** 判断浮点数是否为可精确表示为 Lua 整数的值（位于 [-2^63, 2^63)）。 */
+    private static boolean isExactInteger(double value) {
+        if (value != Math.rint(value)) {
+            return false;
+        }
+        return value >= -9.223372036854775808E18 && value < 9.223372036854775808E18;
     }
 
     private void ensureArrayCapacity(int index) {
@@ -355,7 +489,11 @@ public final class LuaTable extends LuaValue {
     private Object getMembersBoundary(DynamicObjectLibrary objLib) {
         Object[] hashKeys = objLib.getKeyArray(this);
         List<Object> allKeys = new ArrayList<>(hashKeys.length + this.arraySize);
-        allKeys.addAll(Arrays.asList(hashKeys));
+        for (Object key : hashKeys) {
+            if (objLib.getOrDefault(this, key, LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+                allKeys.add(key);
+            }
+        }
         for (int i = 0; i < this.arraySize; i++) {
             if (this.arrayPart[i] != null) {
                 allKeys.add((double) (i + 1));
@@ -378,69 +516,89 @@ public final class LuaTable extends LuaValue {
             // a. 先从数组部分开始找第一个非 nil 的元素
             for (int i = 0; i < this.arrayPart.length; i++) {
                 if (this.arrayPart[i] != null) {
-                    return i + 1; // Lua 索引是从 1 开始的
+                    return (long) (i + 1); // Lua 索引是从 1 开始的（Long 才是 Lua 数字，Integer 会退化成 userdata）
                 }
             }
-            // b. 如果数组部分是空的，再从哈希部分找第一个
-            Object[] propKeys = objLib.getKeyArray(this);
-            if (propKeys.length > 0) {
-                return propKeys[0];
-            }
-            // c. 如果都找不到，说明 table 是空的
-            return LuaNil.SINGLETON;
+            // b. 数组部分为空，从哈希部分找第一个“活键”
+            return nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
         }
 
-        // --- 状态 2: 当前 key 是一个数组索引 ---
+        // --- 状态 2: 当前 key 落在数组部分（1..arrayLimit 为合法数组索引） ---
         int arrayKey = toArrayIndex(key);
-        if (arrayKey > 0 && arrayRawGet(arrayKey) != LuaNil.SINGLETON) {
-            int longKey = arrayKey;
-            // 检查是否是一个有效的、我们正在处理的数组索引
-            if (longKey >= 1 && longKey <= this.arrayPart.length) {
-                int javaIndex = longKey - 1;
-
-                // a. 从当前位置的【下一个】开始，继续在数组部分查找
-                for (int i = javaIndex + 1; i < this.arrayPart.length; i++) {
-                    if (this.arrayPart[i] != null) {
-                        return i + 1;
-                    }
+        if (arrayKey > 0 && arrayKey <= this.arrayLimit) {
+            // 从当前索引的下一个开始继续扫描数组部分（当前键即使已被删除也能继续）
+            for (int i = arrayKey; i < this.arrayPart.length; i++) {
+                if (this.arrayPart[i] != null) {
+                    return (long) (i + 1);
                 }
-                // b. 数组部分已经遍历完毕，开始遍历哈希部分
-                Object[] propKeys = objLib.getKeyArray(this);
-                if (propKeys.length > 0) {
-                    return propKeys[0];
-                }
-                // c. 哈希部分也是空的
-                return LuaNil.SINGLETON;
             }
+            // 数组部分遍历完毕，转到哈希部分
+            return nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
         }
 
         // --- 状态 3: 当前 key 在哈希部分 ---
-        // 这个实现仍然是低效的，但在 @TruffleBoundary 中是可以接受的。
-        // 一个生产级的实现需要一个更高效的方式来找到“下一个”哈希键。
-        Object[] propKeys = objLib.getKeyArray(this);
-        // 将数组转为 List 以使用 indexOf
-        List<Object> propKeyList = Arrays.asList(propKeys);
-
-        int index = propKeyList.indexOf(key);
-
-        if (index != -1 && index + 1 < propKeyList.size()) {
-            // 找到了，并且不是最后一个，返回下一个
-            return propKeyList.get(index + 1);
+        Object[] propKeys = cachedHashKeys(objLib);
+        Integer index = hashKeyIndexMap(propKeys).get(normalizeHashKey(key));
+        if (index == null) {
+            // 键不存在：标准 Lua 抛出 "invalid key to 'next'"
+            throw LuaException.create("invalid key to 'next'", null);
         }
+        return nextLiveHashKey(propKeys, index + 1, objLib);
+    }
 
-        // 哈希部分也遍历完了
+    /**
+     * 返回当前 shape 对应的哈希键数组，按 shape 身份缓存，避免每次 next 都重建数组。
+     */
+    @TruffleBoundary
+    private Object[] cachedHashKeys(DynamicObjectLibrary objLib) {
+        Shape shape = this.getShape();
+        if (shape == this.cachedHashShape && this.cachedHashKeyArray != null) {
+            return this.cachedHashKeyArray;
+        }
+        Object[] propKeys = objLib.getKeyArray(this);
+        this.cachedHashShape = shape;
+        this.cachedHashKeyArray = propKeys;
+        this.cachedHashKeyIndex = null;
+        return propKeys;
+    }
+
+    /**
+     * 返回哈希键数组中每个键的位置索引。结果与键数组一同按 shape 缓存，
+     * 使 next 的查找降为 O(1)。
+     */
+    @TruffleBoundary
+    private java.util.HashMap<Object, Integer> hashKeyIndexMap(Object[] propKeys) {
+        if (this.cachedHashKeyIndex != null && this.cachedHashKeyArray == propKeys) {
+            return this.cachedHashKeyIndex;
+        }
+        java.util.HashMap<Object, Integer> map = new java.util.HashMap<>(Math.max(16, propKeys.length * 2));
+        for (int i = 0; i < propKeys.length; i++) {
+            map.putIfAbsent(propKeys[i], i);
+        }
+        this.cachedHashKeyIndex = map;
+        return map;
+    }
+
+    /**
+     * 从 {@code from} 起返回第一个值为非 nil 的哈希键，跳过“死键”（值为 nil 的保留键）。
+     * 死键仅用于在遍历中删除当前键后仍能定位后续键。
+     */
+    private Object nextLiveHashKey(Object[] propKeys, int from, DynamicObjectLibrary objLib) {
+        for (int i = from; i < propKeys.length; i++) {
+            if (objLib.getOrDefault(this, propKeys[i], LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+                return propKeys[i];
+            }
+        }
         return LuaNil.SINGLETON;
     }
 
 
-    // 检查 __metatable 字段
+    // 检查本表作为“被设置对象的元表”时是否带有 __metatable 保护字段
     @TruffleBoundary
     public Object getMetatableProtection() {
-        if (this.getMetatable() == null) {
-            return null;
-        }
-        // 使用非缓存库来读取 __metatable 字段
-        return DynamicObjectLibrary.getUncached().getOrDefault(this.getMetatable(), "__metatable", null);
+        // __metatable 是元表自身上的一个普通字段（TruffleString 键）。
+        Object protection = this.rawget(LuaMetatables.__METATABLE);
+        return protection == LuaNil.SINGLETON ? null : protection;
     }
 
 }

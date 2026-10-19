@@ -17,6 +17,7 @@ import com.zhhz.truffle.lua.runtime.LuaTable;
  * 它定义了抽象方法 {@code executeWithTable}，Truffle 注解处理器会自动生成该类的子类，
  * 并根据 {@code @Specialization} 提供的方法体填充具体的执行逻辑。
  */
+@SuppressWarnings("deprecation")
 public abstract class LuaTableFieldWithKeyNode extends LuaTableFieldInitializerNode {
 
     /**

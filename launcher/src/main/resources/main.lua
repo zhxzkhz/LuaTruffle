@@ -266,3 +266,22 @@ if fail_count == 0 then
 else
     print(">>> SOME TESTS FAILED. CHECK LOGS. <<<")
 end
+
+
+
+require("class")
+
+AA = class("AA")
+
+function AA:ctor()
+    self.listeners = {}
+    return self
+end
+
+function AA:aa()
+    self.listeners["aa"] = {}
+    print("self.listeners[\"aa\"]",self.listeners["aa"])
+end
+
+AA:new():aa()
+print("结束")

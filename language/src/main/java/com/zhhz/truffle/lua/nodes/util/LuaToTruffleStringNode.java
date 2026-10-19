@@ -54,6 +54,7 @@ import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaString;
+import com.zhhz.truffle.lua.runtime.LuaNumber;
 
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
 
@@ -107,6 +108,33 @@ public abstract class LuaToTruffleStringNode extends Node {
     }
 
     @Specialization
+    @TruffleBoundary
+    protected static TruffleString fromDouble(double value,
+                    @Shared("fromJava") @Cached(inline = false) TruffleString.FromJavaStringNode fromJavaStringNode) {
+        // Lua 浮点转字符串：保留 ".0" 后缀以区分整数
+        return fromJavaStringNode.execute(doubleToLuaString(value), LuaLanguage.STRING_ENCODING);
+    }
+
+    @Specialization
+    @TruffleBoundary
+    protected static TruffleString fromLuaNumber(LuaNumber value,
+                    @Shared("fromJava") @Cached(inline = false) TruffleString.FromJavaStringNode fromJavaStringNode) {
+        return fromJavaStringNode.execute(doubleToLuaString(value.getValue()), LuaLanguage.STRING_ENCODING);
+    }
+
+    @TruffleBoundary
+    private static String doubleToLuaString(double value) {
+        if (Double.isNaN(value)) return "nan";
+        if (Double.isInfinite(value)) return value > 0 ? "inf" : "-inf";
+        // 整数值加 ".0"（Lua 5.3 语义）
+        String s = Double.toString(value);
+        if (s.indexOf('.') < 0 && s.indexOf('E') < 0 && s.indexOf('N') < 0) {
+            s = s + ".0";
+        }
+        return s;
+    }
+
+    @Specialization
     public static TruffleString fromFunction(LuaFunction value) {
         return value.getName();
     }
@@ -117,6 +145,10 @@ public abstract class LuaToTruffleStringNode extends Node {
                     @Shared("fromLong") @Cached() TruffleString.FromLongNode fromLongNode,
                     @Shared("fromJava") @Cached() TruffleString.FromJavaStringNode fromJavaStringNode) {
         try {
+            // LuaNumber 是 float 类型：即使能 fit in long，也按 double 格式化（保留 .0）
+            if (value instanceof LuaNumber) {
+                return fromJavaStringNode.execute(doubleToLuaString(((LuaNumber) value).getValue()), LuaLanguage.STRING_ENCODING);
+            }
             if (interop.fitsInLong(value)) {
                 return fromLongNode.execute(interop.asLong(value), LuaLanguage.STRING_ENCODING, true);
             } else if (interop.isString(value)) {

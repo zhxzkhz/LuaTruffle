@@ -1,12 +1,14 @@
 package com.zhhz.truffle.lua.builtins.pack;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.builtins.LuaBuiltinNode;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "package.loadlib")
 public abstract class LoadLibBuiltinNode extends LuaBuiltinNode {

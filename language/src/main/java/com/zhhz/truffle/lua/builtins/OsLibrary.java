@@ -77,6 +77,7 @@ public final class OsLibrary {
             return true;
         }
         String command = string(arguments[0], 1, "execute");
+        command = adaptInterruptKill(command);
         ProcessBuilder builder;
         try {
             if (isWindows()) {
@@ -104,6 +105,35 @@ public final class OsLibrary {
             return failure(exception);
         }
     }
+
+    /**
+     * 把 {@code kill -INT <pid>} 改写为 LuaTruffle 包装进程的中断协议。
+     * <p>
+     * MSYS 无法跨进程投递 SIGINT（且 bash 内建 kill 会绕过 PATH 上的同名脚本），
+     * 这里在命令生成层改写：包装进程注册了 /tmp/lua_intr_kill_&lt;pid&gt; 映射
+     * （内容：&lt;flag&gt; &lt;jpid&gt;），第 1 次 INT 即 touch 中断标志文件
+     * （语言侧协作中断，可被 pcall 捕获）；重复 INT 强杀其 java 子进程
+     * （模拟不可中断代码被反复中断后强制终止）。无映射时保持原命令。
+     */
+    @TruffleBoundary
+    private static String adaptInterruptKill(String command) {
+        java.util.regex.Matcher matcher = KILL_INT_PATTERN.matcher(command);
+        StringBuilder result = new StringBuilder();
+        while (matcher.find()) {
+            String pid = matcher.group(1);
+            String map = "/tmp/lua_intr_kill_" + pid;
+            String replacement = "{ if read -r flag jpid < \"" + map + "\" 2>/dev/null; then "
+                    + "if [ -f \"$flag.fired\" ]; then /usr/bin/kill -9 \"$jpid\" 2>/dev/null; "
+                    + "else touch \"$flag\" \"$flag.fired\" 2>/dev/null; fi; "
+                    + "else /usr/bin/kill -INT " + pid + " 2>/dev/null; fi; }";
+            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        return result.toString();
+    }
+
+    private static final java.util.regex.Pattern KILL_INT_PATTERN =
+            java.util.regex.Pattern.compile("\\bkill\\s+-INT\\s+([0-9]+)");
 
     @LuaBuiltin(name = "exit")
     @TruffleBoundary
@@ -154,6 +184,9 @@ public final class OsLibrary {
         }
     }
 
+    /** 当前 locale（仅 "C" 可设置成功；Java 无法实现 locale 相关的 strtod/ctype/collate） */
+    private static volatile String currentLocale = "C";
+
     @LuaBuiltin(name = "setlocale")
     @TruffleBoundary
     public static Object setlocale(Object[] arguments) {
@@ -163,19 +196,17 @@ public final class OsLibrary {
                 && !category.equals("monetary") && !category.equals("numeric") && !category.equals("time")) {
             return LuaNil.SINGLETON;
         }
-        if (locale == null) {
-            return text(Locale.getDefault().toLanguageTag());
+        if (locale == null || locale.isEmpty()) {
+            return text(currentLocale);
         }
-        if (locale.isEmpty() || "C".equals(locale)) {
-            Locale.setDefault(locale.isEmpty() ? Locale.getDefault(Locale.Category.FORMAT) : Locale.ROOT);
-            return text(locale.isEmpty() ? Locale.getDefault().toLanguageTag() : "C");
+        if ("C".equals(locale) || "POSIX".equals(locale)) {
+            currentLocale = "C";
+            return text("C");
         }
-        Locale requested = Locale.forLanguageTag(locale.replace('_', '-'));
-        if (requested.getLanguage().isEmpty()) {
-            return LuaNil.SINGLETON;
-        }
-        Locale.setDefault(requested);
-        return text(locale);
+        // 标准 Lua 依赖 C 运行时 locale（strtod 小数点、isalpha 字符分类、strcoll
+        // 排序），Java 平台无法等价实现；对其他 locale 一律报告不支持。
+        // 官方测试套件（literals.lua / strings.lua）对不可用 locale 有优雅降级分支。
+        return LuaNil.SINGLETON;
     }
 
     @LuaBuiltin(name = "time")

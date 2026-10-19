@@ -7,6 +7,7 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaBinaryNode;
+import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.util.LuaCoerceToIntegerNode;
 import com.zhhz.truffle.lua.nodes.util.LuaMetatableNode;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
@@ -43,18 +44,19 @@ public abstract class LuaBitwiseXorNode extends LuaBinaryNode {
                 return lLeft ^ lRight; // 转换成功，计算
             } else {
                 // 转换失败（例如 1.5 & 1），直接报错！
-                throw LuaException.create("number has no integer representation",this);
+                LuaExpressionNode badNode = (lLeft == null) ? getLeftNode() : getRightNode();
+                throw LuaException.runtimeError("number" + operandSuffix(badNode) + " has no integer representation", this);
             }
         }
 
         // 3. 只有当【至少有一个】操作数不是数字/字符串时，才查找元方法
         Object metaResult = metatableNode.execute(left, right, LuaMetatables.__BXOR);
         if (metaResult != null) {
-            return metaResult;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(metaResult);
         }
 
         // 4. 元方法也没找到，抛出类型错误
-        throw LuaException.create("attempt to perform bitwise operation on a " + getTypeName(left) + " value",this);
+        throw bitwiseError(left, right, leftIsNum, rightIsNum);
 
     }
 

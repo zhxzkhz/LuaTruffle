@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -12,6 +13,7 @@ import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 import static com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "select")
 public abstract class LuaSelectBuiltinNode extends LuaBuiltinNode {
@@ -22,7 +24,7 @@ public abstract class LuaSelectBuiltinNode extends LuaBuiltinNode {
     @Specialization
     @CompilerDirectives.TruffleBoundary
     public Object doSelect(Object[] arguments,
-                           @Cached("create()") LuaCoerceToIntegerNode coerceValue) {
+                           @Cached(value = "create()", neverDefault = true) LuaCoerceToIntegerNode coerceValue) {
         if (arguments.length == 0) {
             throw LuaException.create("bad argument #1 to 'select' (value expected)", this);
         }

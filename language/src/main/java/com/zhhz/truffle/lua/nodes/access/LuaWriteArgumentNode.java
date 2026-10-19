@@ -5,22 +5,38 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
+import com.zhhz.truffle.lua.parser.LuaBaseParser.LocalSlot;
+import com.zhhz.truffle.lua.runtime.LuaCell;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
 @NodeField(name = "argumentIndex", type = int.class)
 @NodeField(name = "slotIndex", type = int.class)
+@NodeField(name = "slot", type = LocalSlot.class)
 public abstract class LuaWriteArgumentNode extends LuaStatementNode {
 
     protected abstract int getArgumentIndex();
     protected abstract int getSlotIndex();
+    protected abstract LocalSlot getSlot();
+
+    protected boolean isCaptured() {
+        LocalSlot slot = getSlot();
+        return slot != null && slot.captured;
+    }
 
     private Object getArg(VirtualFrame frame) {
         Object[] args = frame.getArguments();
         int userArgIndex = getArgumentIndex() + 1;
-        return userArgIndex < args.length ? args[userArgIndex] : null;
+        Object value = userArgIndex < args.length ? args[userArgIndex] : null;
+        return value == null ? LuaNil.SINGLETON : value;
     }
 
-    @Specialization(guards = "isLongOrIllegal(frame)")
+    @Specialization(guards = "isCaptured()")
+    protected void writeCell(VirtualFrame frame) {
+        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        frame.setObject(getSlotIndex(), new LuaCell(getArg(frame)));
+    }
+
+    @Specialization(guards = {"!isCaptured()", "isLongOrIllegal(frame)"})
     protected void writeLong(VirtualFrame frame) {
         Object value = getArg(frame);
         if (value instanceof Long l) {
@@ -31,7 +47,7 @@ public abstract class LuaWriteArgumentNode extends LuaStatementNode {
         }
     }
 
-    @Specialization(guards = "isDoubleOrIllegal(frame)")
+    @Specialization(guards = {"!isCaptured()", "isDoubleOrIllegal(frame)"})
     protected void writeDouble(VirtualFrame frame) {
         Object value = getArg(frame);
         if (value instanceof Double d) {
@@ -42,7 +58,7 @@ public abstract class LuaWriteArgumentNode extends LuaStatementNode {
         }
     }
 
-    @Specialization(guards = "isBooleanOrIllegal(frame)")
+    @Specialization(guards = {"!isCaptured()", "isBooleanOrIllegal(frame)"})
     protected void writeBoolean(VirtualFrame frame) {
         Object value = getArg(frame);
         if (value instanceof Boolean b) {
@@ -53,12 +69,9 @@ public abstract class LuaWriteArgumentNode extends LuaStatementNode {
         }
     }
 
-    @Specialization
+    @Specialization(guards = "!isCaptured()")
     protected void writeObject(VirtualFrame frame) {
-        Object value = getArg(frame);
-        if (value == null) value = LuaNil.SINGLETON;
-        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
-        frame.setObject(getSlotIndex(), value);
+        writeObjectSlow(frame, getArg(frame));
     }
 
     private void writeObjectSlow(VirtualFrame frame, Object value) {

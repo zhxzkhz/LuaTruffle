@@ -1,10 +1,12 @@
 package com.zhhz.truffle.lua.builtins;
 
 import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
+@GenerateInline(false)
 
 @NodeInfo(shortName = "ipairs_iterator")
 public abstract class IPairsIteratorBuiltinNode extends LuaBuiltinNode {
@@ -30,8 +32,8 @@ public abstract class IPairsIteratorBuiltinNode extends LuaBuiltinNode {
         int nextIndex = currentIndex + 1;
 
         // 2. 【读取下一个值】
-        //    这里我们直接调用 table 的【原始】读取方法，因为 ipairs 不涉及元方法
-        Object nextValue = table.arrayRawGet(nextIndex);
+        //    标准 ipairsaux 使用 lua_geti，会触发 __index 元方法。
+        Object nextValue = TableLibrary.getIndex(table, nextIndex);
 
         // 3. 【检查终止条件】
         if (nextValue == null || nextValue == LuaNil.SINGLETON) {

@@ -42,13 +42,16 @@ package com.zhhz.truffle.lua.nodes.expression.binary;
 
 import com.oracle.truffle.api.bytecode.OperationProxy;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.LuaBinaryNode;
 import com.zhhz.truffle.lua.nodes.util.LuaMetatableNode;
+import com.zhhz.truffle.lua.nodes.util.LuaMetatableNodeGen;
 import com.zhhz.truffle.lua.runtime.LuaBoolean;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
@@ -100,7 +103,7 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
     @Specialization
     protected static boolean doTruffleString(TruffleString left, TruffleString right,
                                       @Cached TruffleString.EqualNode equalNode) {
-        return equalNode.execute(left, right, TruffleString.Encoding.UTF_8);
+        return equalNode.execute(left, right, LuaLanguage.STRING_ENCODING);
     }
 
     @Specialization
@@ -126,7 +129,7 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
     protected static boolean doGeneric(Object left, Object right,
                                        @CachedLibrary("left") InteropLibrary leftInterop,
                                        @CachedLibrary("right") InteropLibrary rightInterop,
-                                        @Cached("create()") LuaMetatableNode metatableNode) {
+                                        @Cached("createMetatableNode()") LuaMetatableNode metatableNode) {
 
 
         // 1. 引用相等检查 (对于 Java 对象、LuaTable 等)
@@ -146,14 +149,10 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
             return false;
         }
 
-        Object leftEq = metatableNode.lookup(left, LuaMetatables.__EQ);
-        Object rightEq = metatableNode.lookup(right, LuaMetatables.__EQ);
-        if (leftEq == null || leftEq != rightEq) {
-            return false;
-        }
-        Object result = metatableNode.executeFrom(left, left, right, LuaMetatables.__EQ);
+        // Lua 5.3 luaV_equalobj：__eq 只需其一存在，用 (left, right) 调用。
+        Object result = metatableNode.execute(left, right, LuaMetatables.__EQ);
         if (result != null) {
-            return isTruthy(result);
+            return isTruthy(com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result));
         }
 
         // 4. 默认不相等
@@ -161,4 +160,9 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
     }
 
 
+    /** @NeverDefault：DSL 据此推断该缓存值恒非默认，无需（也不能）显式设置 neverDefault。 */
+    @NeverDefault
+    static LuaMetatableNode createMetatableNode() {
+        return LuaMetatableNodeGen.create();
+    }
 }

@@ -37,7 +37,7 @@ public class LuaRepeatNode extends LuaStatementNode {
      * @param bodyNode      循环体语句节点
      * @param conditionNode 终止条件表达式节点 (evaluate 为 true 时终止循环)
      */
-    public LuaRepeatNode(LuaStatementNode bodyNode, LuaExpressionNode conditionNode) {
+    public LuaRepeatNode(LuaStatementNode bodyNode, LuaExpressionNode conditionNode, int untilLine) {
         // 1. 创建重复执行逻辑 (RepeatingNode)
         // LuaRepeatRepeatingNode 负责定义 "先执行 body，再检查 condition" 的具体逻辑。
         // 这里的 conditionNode 通常返回 boolean。
@@ -45,7 +45,7 @@ public class LuaRepeatNode extends LuaStatementNode {
         // 2. 包装进 LoopNode
         // Truffle.getRuntime().createLoopNode(...) 是标准范式，用于启用编译器的循环优化。
         this.loopNode = Truffle.getRuntime().createLoopNode(
-                new LuaRepeatRepeatingNode(bodyNode, conditionNode)
+                new LuaRepeatRepeatingNode(bodyNode, conditionNode, untilLine)
         );
     }
 

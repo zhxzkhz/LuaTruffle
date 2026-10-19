@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.nodes.util;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
@@ -17,6 +18,7 @@ import java.math.BigInteger;
  * <p>
  * &#064;GenerateUncached  允许我们在慢路径中创建一个这个节点的“非缓存”版本。
  */
+@GenerateInline(false)
 @GenerateUncached
 public abstract class LuaCoerceToNumberNode extends Node {
 
@@ -82,6 +84,20 @@ public abstract class LuaCoerceToNumberNode extends Node {
     }
 
     /**
+     * 宿主互操作返回的装箱数字（Java 方法返回的 int/float/double 等会以
+     * Integer/Float/Double 形式流入 guest 值域），必须能参与算术运算。
+     */
+    @Specialization
+    @TruffleBoundary
+    public Object doHostNumber(Number value) {
+        if (value instanceof Long || value instanceof Integer
+                || value instanceof Short || value instanceof Byte) {
+            return value.longValue();
+        }
+        return value.doubleValue();
+    }
+
+    /**
      * 慢速路径: 处理所有其他无法转换的类型 (table, function, boolean, nil)。
      * 我们简单地返回 null。
      */
@@ -90,7 +106,11 @@ public abstract class LuaCoerceToNumberNode extends Node {
         return null; // 表示转换失败
     }
 
-    private static Object parseLuaNumber(String value) {
+    /**
+     * 解析一个完整的 Lua 数字字符串（等价于 C 的 {@code lua_stringtonumber}）：
+     * 成功返回 {@link Long} 或 {@link Double}，失败返回 {@code null}。
+     */
+    public static Object parseLuaNumber(String value) {
         int start = 0;
         int end = value.length();
         while (start < end && isLuaWhitespace(value.charAt(start))) {

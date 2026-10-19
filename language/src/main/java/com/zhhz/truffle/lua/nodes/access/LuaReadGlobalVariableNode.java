@@ -1,54 +1,44 @@
 package com.zhhz.truffle.lua.nodes.access;
 
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.object.DynamicObjectLibrary;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
-import com.zhhz.truffle.lua.runtime.LuaNil;
-import com.zhhz.truffle.lua.runtime.LuaTable;
+import com.zhhz.truffle.lua.nodes.expression.LuaStringLiteralNode;
 
 /**
  * 读取一个全局变量的值。
- * 它在执行时，从当前的 LuaContext 中获取全局表，并从中读取值。
+ *
+ * <p>Lua 5.3 中，读取全局 {@code x} 等价于读取 {@code _ENV.x}，因此本节点内部持有
+ * 一个 {@link LuaReadTableNode}，其表子节点求值为当前环境（{@code _ENV}），键为变量名。
+ * 这保证了 {@code __index} 元方法语义。保留独立的节点类型是为了让 {@code debug.getinfo}
+ * 仍能把该访问识别为 {@code global}。
  */
-public abstract class LuaReadGlobalVariableNode extends LuaExpressionNode {
+@NodeInfo(shortName = "read_global")
+public final class LuaReadGlobalVariableNode extends LuaExpressionNode {
 
     private final TruffleString name;
 
-    public LuaReadGlobalVariableNode(TruffleString name) {
+    @Child
+    private LuaReadTableNode tableReadNode;
+
+    public LuaReadGlobalVariableNode(LuaExpressionNode envNode, TruffleString name) {
         this.name = name;
+        this.tableReadNode = LuaReadTableNodeGen.create(envNode, new LuaStringLiteralNode(name));
     }
 
-    protected TruffleString getName() {
-        return name;
+    @Override
+    public Object executeGeneric(VirtualFrame frame) {
+        return tableReadNode.executeGeneric(frame);
     }
 
-    /**
-     * 这是此节点的唯一特化，也是它的快速路径。
-     *
-     * @param globals   通过 @Cached 缓存的对全局表的直接引用。这假设在单个上下文中全局表是不变的。
-     * @param tableLib  一个缓存的 DynamicObjectLibrary 实例，用于对全局表进行高性能的属性读取。
-     * @return The value of the global variable.
-     */
-    @Specialization
-    protected Object readGlobal(
-            @Cached(value = "getContext().getGlobals()", allowUncached = true) LuaTable globals,
-            @CachedLibrary(limit = "3") DynamicObjectLibrary tableLib
-    ) {
-        // 【核心逻辑】使用缓存的库，从缓存的全局表中，读取变量
-        // 我们委托给 LuaTable 的高性能 read 方法
-        var result = globals.rawget(getName(), tableLib);
-        if (result == null){
-            return LuaNil.SINGLETON;
-        }
-        return result;
-    }
-
-    // 【关键】实现描述接口
     @Override
     public TruffleString getUnresolvedVariableName() {
         return this.name;
+    }
+
+    @Override
+    public String getErrorSuffix() {
+        return " (global '" + name.toJavaStringUncached() + "')";
     }
 }

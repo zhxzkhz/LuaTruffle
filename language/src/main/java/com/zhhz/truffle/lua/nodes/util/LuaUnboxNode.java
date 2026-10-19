@@ -60,11 +60,24 @@ import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
  * 表达式节点需要期待。
  */
 @TypeSystemReference(LuaTypes.class)
-@NodeChild
+@NodeChild("operandNode")
 @OperationProxy.Proxyable(allowUncached = true)
 public abstract class LuaUnboxNode extends LuaExpressionNode {
 
     public static final int LIMIT = 5;
+
+    /** 被包裹的操作数表达式节点（供运行时错误消息透传变量来源）。 */
+    protected abstract LuaExpressionNode getOperandNode();
+
+    @Override
+    public TruffleString getUnresolvedVariableName() {
+        return getOperandNode().getUnresolvedVariableName();
+    }
+
+    @Override
+    public String getErrorSuffix() {
+        return getOperandNode().getErrorSuffix();
+    }
 
     @Specialization
     public static TruffleString fromString(String value,

@@ -134,9 +134,10 @@ public class StringLibraryTest extends AbstractLuaTest {
 
     @Test
     public void testFormatConversionsAndQuotedStrings() {
+        // 标准 Lua 5.3 的 %q 将换行引用为反斜杠 + 真实换行（不是两字符 \n）。
         assertTrue(eval("""
                 return string.format('%s:%04d:%x:%.2f', 'v', 7, 255, 1.25) == 'v:0007:ff:1.25'
-                    and string.format('%q', 'a\nb') == string.char(34, 97, 92, 110, 98, 34)
+                    and string.format('%q', 'a\\nb') == string.char(34, 97, 92, 10, 98, 34)
                     and string.format('%% %i %u', -2, 3) == '% -2 3'
                 """).asBoolean());
     }

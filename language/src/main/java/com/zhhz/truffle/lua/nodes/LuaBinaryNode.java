@@ -57,6 +57,56 @@ import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
 @NodeChild("rightNode")
 public abstract class LuaBinaryNode extends LuaExpressionNode {
 
+    /** 左操作数表达式节点（供运行时类型错误消息使用）。 */
+    protected abstract LuaExpressionNode getLeftNode();
+
+    /** 右操作数表达式节点（供运行时类型错误消息使用）。 */
+    protected abstract LuaExpressionNode getRightNode();
+
+    /** 变量来源后缀，如 {@code " (local 'x')"}。 */
+    protected static String operandSuffix(LuaExpressionNode node) {
+        return node == null ? "" : node.getErrorSuffix();
+    }
+
+    /**
+     * 算术类型错误：{@code attempt to perform arithmetic on a <type> value [ (kind 'name')]}，
+     * 命名第一个无法转换为数字的操作数（与标准 Lua 一致）。
+     */
+    @TruffleBoundary
+    protected com.oracle.truffle.api.exception.AbstractTruffleException arithmeticError(
+            Object left, Object right, Object numLeft, Object numRight) {
+        Object bad;
+        LuaExpressionNode badNode;
+        if (numLeft == null) {
+            bad = left;
+            badNode = getLeftNode();
+        } else {
+            bad = right;
+            badNode = getRightNode();
+        }
+        return LuaException.runtimeError("attempt to perform arithmetic on a " + getTypeName(bad)
+                + " value" + operandSuffix(badNode), this);
+    }
+
+    /**
+     * 位运算类型错误：{@code attempt to perform bitwise operation on a <type> value [ (kind 'name')]}。
+     */
+    @TruffleBoundary
+    protected com.oracle.truffle.api.exception.AbstractTruffleException bitwiseError(
+            Object left, Object right, boolean leftOk, boolean rightOk) {
+        Object bad;
+        LuaExpressionNode badNode;
+        if (!leftOk) {
+            bad = left;
+            badNode = getLeftNode();
+        } else {
+            bad = right;
+            badNode = getRightNode();
+        }
+        return LuaException.runtimeError("attempt to perform bitwise operation on a " + getTypeName(bad)
+                + " value" + operandSuffix(badNode), this);
+    }
+
     @TruffleBoundary
     protected static double toDouble(Object value) {
         if (value instanceof LuaNumber) {

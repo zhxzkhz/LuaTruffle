@@ -38,7 +38,6 @@ public abstract class LuaPowerNode extends LuaBinaryNode {
                                @Cached("create()") LuaCoerceToNumberNode coerceRight,
                                @Cached("create()") LuaMetatableNode metatableNode) {
 
-        assertNotNull(left,right,this);
 
         Object numLeft = coerceLeft.executeArithmetic(left);
         Object numRight = coerceRight.executeArithmetic(right);
@@ -52,9 +51,9 @@ public abstract class LuaPowerNode extends LuaBinaryNode {
         // 2. 尝试元方法 (逻辑不变)
         Object result = metatableNode.execute(left, right, LuaMetatables.__POW);
         if (result != null) {
-            return result;
+            return com.zhhz.truffle.lua.runtime.LuaMultiValue.firstValue(result);
         }
-        throw LuaException.typeError(this, "^", left, right);
+        throw arithmeticError(left, right, numLeft, numRight);
     }
 
 }

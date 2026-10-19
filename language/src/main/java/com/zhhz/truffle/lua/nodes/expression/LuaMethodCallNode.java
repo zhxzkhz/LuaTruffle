@@ -14,7 +14,9 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.access.LuaReadTableNode;
+import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaTailCallException;
 import com.zhhz.truffle.lua.runtime.LuaValue;
 
 @NodeInfo(shortName = "method_call")
@@ -25,11 +27,19 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
     @Children private final LuaExpressionNode[] argumentNodes;
     @Child private InteropLibrary library;
 
+    /** 是否处于尾调用位置（由 LuaReturnNode 在解析期标记）。 */
+    private boolean tailCall;
+
     public LuaMethodCallNode(LuaExpressionNode receiverNode, LuaExpressionNode methodKeyNode, LuaExpressionNode[] argumentNodes) {
         this.receiverNode = receiverNode;
         this.methodKeyNode = methodKeyNode;
         this.argumentNodes = argumentNodes;
         this.library = InteropLibrary.getFactory().createDispatched(3);
+    }
+
+    /** 标记此调用处于尾调用位置（return obj:method(...)）。 */
+    public void markTailCall() {
+        this.tailCall = true;
     }
 
     private Object unpackResult(Object result) {
@@ -47,21 +57,20 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
         Object receiverValue = receiverNode.executeGeneric(frame);
 
         Object methodKey = methodKeyNode.executeGeneric(frame);
-        Object functionValue = unpackResult(LuaReadTableNode.readUncached(this, receiverValue, methodKey));
+        // 方法调用读路径的 "attempt to index a ... value" 错误需要带上接收者表达式的
+        // 变量来源后缀（如 aaa.bbb:ddd() -> (field 'bbb')）。
+        Object functionValue = unpackResult(
+                LuaReadTableNode.readUncached(this, receiverValue, methodKey, receiverNode.getErrorSuffix()));
 
         if (!library.isExecutable(functionValue)) {
             String message = getMessage(functionValue);
-            throw LuaException.create(message, this);
+            throw LuaException.runtimeError(message, this);
         }
 
         int explicitArgCount = this.argumentNodes.length;
 
         if (explicitArgCount == 0) {
-            try {
-                return execReturn(functionValue, new Object[]{receiverValue});
-            } catch (UnsupportedTypeException | ArityException | UnsupportedMessageException e) {
-                throw LuaException.undefinedFunction(this, e);
-            }
+            return dispatchCall(functionValue, new Object[]{receiverValue});
         }
 
         final Object[] prefixArgs = new Object[explicitArgCount - 1 + 1];
@@ -80,10 +89,39 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
         }
         Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
 
+        return dispatchCall(functionValue, finalArguments);
+    }
+
+    /**
+     * 派发调用：若处于尾调用位置且目标为 Lua 函数，抛出 {@link LuaTailCallException}
+     * 由根节点循环重试，避免 Java 栈增长；否则走普通 InteropLibrary 调用路径。
+     * <p>
+     * 仅对真正的 Lua 函数（{@link com.zhhz.truffle.lua.nodes.LuaRootNode}）做 TCO；
+     * 内建函数（{@link com.zhhz.truffle.lua.builtins.BuiltinRootNode}，对应 C 函数）
+     * 不做尾调用优化——它们对应 Lua 语义中的 C 调用，不应替换栈帧（Lua 5.3 手册 3.4.10）。
+     */
+    private Object dispatchCall(Object functionValue, Object[] finalArguments) {
+        if (tailCall && functionValue instanceof LuaFunction luaFunction
+                && luaFunction.getCallTarget() instanceof com.oracle.truffle.api.RootCallTarget rct
+                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode) {
+            throw new LuaTailCallException(luaFunction, finalArguments);
+        }
+        // 记录调用点，供内建函数的参数错误消息解析方法名与 "bad self" 语义。
+        com.zhhz.truffle.lua.runtime.LuaContext callContext =
+                com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+        com.oracle.truffle.api.nodes.Node previousCallSite =
+                callContext != null ? callContext.getPendingCallSite() : null;
+        if (callContext != null) {
+            callContext.setPendingCallSite(this);
+        }
         try {
             return execReturn(functionValue, finalArguments);
         } catch (ArityException | UnsupportedTypeException | UnsupportedMessageException e) {
             throw LuaException.undefinedFunction(this, e);
+        } finally {
+            if (callContext != null) {
+                callContext.setPendingCallSite(previousCallSite);
+            }
         }
     }
 
@@ -93,10 +131,16 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
 
     @TruffleBoundary
     private String getMessage(Object functionValue) {
-        String typeName = (functionValue instanceof LuaValue)
-                ? ((LuaValue) functionValue).getTypeName()
-                : "java object";
-        return String.format("attempt to call a %s value", typeName);
+        String methodName = "?";
+        if (methodKeyNode instanceof com.zhhz.truffle.lua.nodes.expression.LuaStringLiteralNode literal) {
+            TruffleString name = literal.getUnresolvedVariableName();
+            if (name != null) {
+                methodName = name.toJavaStringUncached();
+            }
+        }
+        return "attempt to call a "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(functionValue)
+                + " value (method '" + methodName + "')";
     }
 
     @Override
@@ -105,5 +149,10 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
             return true;
         }
         return super.hasTag(tag);
+    }
+
+    /** 调试信息：方法名 key 节点（debug.getinfo 调用点分析）。 */
+    public LuaExpressionNode getDebugMethodKeyNode() {
+        return methodKeyNode;
     }
 }

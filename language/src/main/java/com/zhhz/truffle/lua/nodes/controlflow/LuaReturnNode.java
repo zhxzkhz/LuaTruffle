@@ -92,9 +92,9 @@ public final class LuaReturnNode extends LuaStatementNode {
 
         int argCount = this.returnExpressions.length;
 
-        // 优化：无参调用直接处理
+        // 优化：无参 return 直接处理（返回零个值）
         if (argCount == 0) {
-            throw LuaReturnException.withResult(LuaNil.SINGLETON);
+            throw LuaReturnException.withResult(new LuaMultiValue(new Object[0]));
         }
 
         // 快速路径：单返回值 (最常见情况，如 return fib(n-1) + fib(n-2))
@@ -106,8 +106,11 @@ public final class LuaReturnNode extends LuaStatementNode {
             }
             if (result instanceof LuaMultiValue multiValue) {
                 Object[] values = multiValue.values();
-                if (values.length <= 1) {
-                    throw LuaReturnException.withResult(values.length == 0 ? LuaNil.SINGLETON : values[0]);
+                if (values.length == 0) {
+                    throw LuaReturnException.withResult(new LuaMultiValue(new Object[0]));
+                }
+                if (values.length == 1) {
+                    throw LuaReturnException.withResult(values[0]);
                 }
                 throw LuaReturnException.withResult(multiValue);
             }
@@ -132,6 +135,9 @@ public final class LuaReturnNode extends LuaStatementNode {
         }
         Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
 
+        if (finalArguments.length == 0) {
+            throw LuaReturnException.withResult(new LuaMultiValue(new Object[0]));
+        }
         if (finalArguments.length == 1) {
             throw LuaReturnException.withResult(finalArguments[0]);
         }

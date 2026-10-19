@@ -46,7 +46,7 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.controlflow.LuaReturnException;
 import com.zhhz.truffle.lua.runtime.LuaContext;
-import com.zhhz.truffle.lua.runtime.LuaNil;
+import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 
 
 /**
@@ -110,7 +110,7 @@ public final class LuaEvalRootNode extends RootNode {
 
         // 如果脚本正常执行完毕，且没有顶层的 return 语句，
         // 则脚本的执行结果为空（在我们的模型中，是一个空的多值返回）。
-        return LuaNil.SINGLETON;
+        return new LuaMultiValue(new Object[0]);
     }
 
 

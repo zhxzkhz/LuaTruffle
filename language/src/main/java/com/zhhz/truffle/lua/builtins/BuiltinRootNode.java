@@ -85,7 +85,23 @@ public class BuiltinRootNode extends RootNode {
         }
 
         // 3. 将【纯净的】用户参数数组传递给业务逻辑节点
-        return builtinNode.execute(userArguments);
+        //    同时把「待消费的调用点」转成「活动调用点」，供参数错误消息解析函数名；
+        //    消费后清空 pending，避免 C 函数调用 C 函数（Java/interop）时误用外层调用点。
+        com.zhhz.truffle.lua.runtime.LuaContext context =
+                com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+        if (context == null) {
+            return builtinNode.execute(userArguments);
+        }
+        com.oracle.truffle.api.nodes.Node pending = context.takePendingCallSite();
+        com.oracle.truffle.api.nodes.Node previousActive = context.getActiveCallSite();
+        context.setActiveCallSite(pending);
+        context.enterBuiltin(this);
+        try {
+            return builtinNode.execute(userArguments);
+        } finally {
+            context.exitBuiltin();
+            context.setActiveCallSite(previousActive);
+        }
     }
 
 

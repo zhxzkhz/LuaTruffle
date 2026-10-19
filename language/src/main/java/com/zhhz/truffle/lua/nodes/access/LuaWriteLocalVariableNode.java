@@ -49,12 +49,21 @@ import com.oracle.truffle.api.instrumentation.Tag;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.interop.NodeObjectDescriptor;
+import com.zhhz.truffle.lua.parser.LuaBaseParser.LocalSlot;
+import com.zhhz.truffle.lua.runtime.LuaCell;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 
 /**
  * 将值写入一个局部变量 (通过其索引) 的语句节点。
- * 它实现了 LuaWriteVariableNode 的契约，被动地接收一个值来写入。
+ * <p>
+ * 该节点用于【声明】语义（{@code local x = v}、循环变量、参数、{@code _ENV} 序言）：
+ * 若该变量被内层闭包捕获，则每次执行都会创建一个新的 {@link LuaCell} 存入槽位，
+ * 从而保证每次进入声明（例如循环体每次迭代）都是一个独立变量；否则按类型化槽位直接写入。
+ * 普通赋值 {@code x = v} 请使用 {@link LuaWriteAssignedLocalVariableNode}。
  */
 @NodeField(name = "slotIndex", type = int.class)
+@NodeField(name = "slot", type = LocalSlot.class)
+@NodeField(name = "declare", type = boolean.class)
 public abstract class LuaWriteLocalVariableNode extends LuaWriteVariableNode {
 
     /**
@@ -62,17 +71,51 @@ public abstract class LuaWriteLocalVariableNode extends LuaWriteVariableNode {
      */
     protected abstract int getSlotIndex();
 
+    /** 该局部变量声明的可变句柄（用于判断是否被内层闭包捕获为 cell）。 */
+    protected abstract LocalSlot getSlot();
+
+    /**
+     * 是否为【声明】写入（{@code true}：每次执行创建新 cell；{@code false}：普通赋值，
+     * 写入已存在的 cell 或类型化槽位）。
+     */
+    protected abstract boolean isDeclare();
+
     public final TruffleString getSlotName() {
         return (TruffleString) getRootNode().getFrameDescriptor().getSlotName(getSlotIndex());
     }
 
-    @Specialization(guards = "isLongOrIllegal(frame)")
+    protected boolean isCaptured() {
+        LocalSlot slot = getSlot();
+        return slot != null && slot.captured;
+    }
+
+    @Specialization(guards = {"isCaptured()", "isDeclare()"})
+    protected void writeCellDeclare(VirtualFrame frame, Object value) {
+        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        frame.setObject(getSlotIndex(), new LuaCell(value == null ? LuaNil.SINGLETON : value));
+    }
+
+    @Specialization(guards = {"isCaptured()", "!isDeclare()"})
+    protected void writeCellAssign(VirtualFrame frame, Object value) {
+        Object normalized = value == null ? LuaNil.SINGLETON : value;
+        if (frame.isObject(getSlotIndex())) {
+            Object current = frame.getObject(getSlotIndex());
+            if (current instanceof LuaCell cell) {
+                cell.value = normalized;
+                return;
+            }
+        }
+        frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
+        frame.setObject(getSlotIndex(), new LuaCell(normalized));
+    }
+
+    @Specialization(guards = {"!isCaptured()", "isLongOrIllegal(frame)"})
     protected void writeLong(VirtualFrame frame, long value) {
         frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Long);
         frame.setLong(getSlotIndex(), value);
     }
 
-    @Specialization(guards = "isDoubleOrIllegal(frame)")
+    @Specialization(guards = {"!isCaptured()", "isDoubleOrIllegal(frame)"})
     protected void writeDouble(VirtualFrame frame, double value) {
         frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Double);
         frame.setDouble(getSlotIndex(), value);
@@ -82,7 +125,7 @@ public abstract class LuaWriteLocalVariableNode extends LuaWriteVariableNode {
     /**
      * 特化：写入 boolean 类型的值。
      */
-    @Specialization(guards = "isBooleanOrIllegal(frame)")
+    @Specialization(guards = {"!isCaptured()", "isBooleanOrIllegal(frame)"})
     protected void writeBoolean(VirtualFrame frame, boolean value) {
         frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Boolean);
         frame.setBoolean(getSlotIndex(), value);
@@ -91,7 +134,7 @@ public abstract class LuaWriteLocalVariableNode extends LuaWriteVariableNode {
     /**
      * 通用特化：写入任何 Object 类型的值。
      */
-    @Specialization()
+    @Specialization(guards = "!isCaptured()")
     protected void writeObject(VirtualFrame frame, Object value) {
         frame.getFrameDescriptor().setSlotKind(getSlotIndex(), FrameSlotKind.Object);
         frame.setObject(getSlotIndex(), value);

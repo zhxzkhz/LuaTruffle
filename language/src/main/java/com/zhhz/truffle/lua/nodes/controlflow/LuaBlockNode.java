@@ -85,6 +85,17 @@ public final class LuaBlockNode extends LuaStatementNode {
     }
 
 
+    /**
+     * 返回一个新的块节点，在最前面插入一条语句（保持原有的 close 节点与块路径）。
+     * 标签目标索引会基于新语句数组重建，因此 goto 语义不受影响。
+     */
+    public LuaBlockNode prependStatement(LuaStatementNode statement) {
+        LuaStatementNode[] prefixed = new LuaStatementNode[statements.length + 1];
+        prefixed[0] = statement;
+        System.arraycopy(statements, 0, prefixed, 1, statements.length);
+        return new LuaBlockNode(prefixed, closeNodes, blockPath);
+    }
+
     @Override
     @ExplodeLoop
     public void executeVoid(VirtualFrame frame) {

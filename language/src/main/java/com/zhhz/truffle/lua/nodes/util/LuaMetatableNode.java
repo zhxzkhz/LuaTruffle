@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.nodes.util;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
@@ -17,6 +18,8 @@ import com.zhhz.truffle.lua.runtime.LuaTable;
  * 一个辅助节点，封装了查找和调用【二元】元方法（如 __add, __concat）的逻辑。
  * 它应该在所有快速路径特化都失败后，在 @Fallback 方法中被调用。
  */
+@SuppressWarnings("deprecation")
+@GenerateInline(false)
 @GenerateUncached
 public abstract class LuaMetatableNode extends Node {
 
@@ -32,27 +35,6 @@ public abstract class LuaMetatableNode extends Node {
      * @return 元方法的执行结果，如果找不到或无法执行元方法，则返回 null。
      */
     public abstract Object execute(Object left, Object right, TruffleString eventName);
-
-    public Object executeFrom(Object receiver, Object left, Object right, TruffleString eventName) {
-        DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
-        Object metamethod = getMetamethod(receiver, eventName, objLib);
-        if (metamethod == null) {
-            return null;
-        }
-        InteropLibrary interop = InteropLibrary.getUncached();
-        if (!interop.isExecutable(metamethod)) {
-            return null;
-        }
-        try {
-            return right == null
-                    ? interop.execute(metamethod, left)
-                    : interop.execute(metamethod, left, right);
-        } catch (LuaException e) {
-            throw e;
-        } catch (Exception e) {
-            throw LuaException.create("error in metamethod '" + eventName + "'\n" + e.getMessage(), this);
-        }
-    }
 
     public Object lookup(Object receiver, TruffleString eventName) {
         return getMetamethod(receiver, eventName, DynamicObjectLibrary.getUncached());
