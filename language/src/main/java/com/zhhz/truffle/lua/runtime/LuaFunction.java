@@ -57,6 +57,34 @@ public final class LuaFunction extends LuaValue {
      */
     private Object retainedResource;
 
+    /**
+     * 该函数对应的字节码原型 (Proto)。
+     * <ul>
+     *   <li>{@link #vmClosure} 为真时：这是由字节码 VM 执行的闭包；</li>
+     *   <li>否则：这是由 AST 引擎执行的源码函数，此 Proto 仅用于 {@code string.dump}。</li>
+     * </ul>
+     */
+    private com.zhhz.truffle.lua.bytecode.Proto proto;
+
+    /** 该函数是否为由 {@code lvm.c} 移植的字节码 VM 执行的闭包。 */
+    private boolean vmClosure;
+
+    public com.zhhz.truffle.lua.bytecode.Proto getProto() {
+        return proto;
+    }
+
+    public void setProto(com.zhhz.truffle.lua.bytecode.Proto proto) {
+        this.proto = proto;
+    }
+
+    public boolean isVmClosure() {
+        return vmClosure;
+    }
+
+    public void setVmClosure(boolean vmClosure) {
+        this.vmClosure = vmClosure;
+    }
+
     public LuaFunction(Shape shape, CallTarget callTarget, MaterializedFrame parentFrame) {
         this(shape,callTarget, parentFrame, null);
     }

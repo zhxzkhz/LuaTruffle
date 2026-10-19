@@ -105,6 +105,20 @@ public abstract class LuaRootNode extends RootNode {
         this.chunk = chunk;
     }
 
+    /**
+     * 该函数对应的字节码原型 (Proto)，由 {@code LuaNodeParser} 在解析后附加，
+     * 仅用于 {@code string.dump} 序列化源码函数。VM 闭包不使用此字段。
+     */
+    private com.zhhz.truffle.lua.bytecode.Proto proto;
+
+    public com.zhhz.truffle.lua.bytecode.Proto getProto() {
+        return proto;
+    }
+
+    public void setProto(com.zhhz.truffle.lua.bytecode.Proto proto) {
+        this.proto = proto;
+    }
+
     public LuaRootNode(LuaLanguage language, FrameDescriptor frameDescriptor, TruffleString name) {
         super(language, frameDescriptor);
         this.name = name;

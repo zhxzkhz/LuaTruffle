@@ -328,12 +328,27 @@ public final class LuaContext {
 
     // --- 提供 Getter 以便外界可以访问这些 Shape ---
 
+    /**
+     * 共享的字节码 VM 入口 CallTarget。由字节码 {@code load} 产生的 VM 闭包统一使用它作为
+     * {@link LuaFunction#getCallTarget()}，从而无论从 VM 还是 AST 引擎调用都走同一条路径。
+     */
+    private CallTarget vmCallTarget;
+
     public Shape getTableShape() { return tableShape; }
     public Shape getFunctionShape() { return functionShape; }
     public Shape getBooleanShape() { return booleanShape; }
     public Shape getFileShape() { return fileShape; }
     public Shape getThreadShape() { return threadShape; }
     public LuaLanguage getLanguage() { return language; }
+
+    /** 惰性创建共享的字节码 VM 入口 CallTarget。 */
+    @TruffleBoundary
+    public CallTarget getVmCallTarget() {
+        if (vmCallTarget == null) {
+            vmCallTarget = new com.zhhz.truffle.lua.vm.LuaVmRootNode(language).getCallTarget();
+        }
+        return vmCallTarget;
+    }
 
     /** 查找内嵌 lua-hook instrument 暴露的 Instrumenter（debug.sethook 用）。 */
     @TruffleBoundary

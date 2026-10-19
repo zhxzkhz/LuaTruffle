@@ -82,6 +82,11 @@ public class LuaFunctionLiteralNode extends LuaExpressionNode {
         this.name = name;
     }
 
+    /** 该函数字面量对应的 CallTarget（其 RootNode 为 LuaRootNode）。 */
+    public RootCallTarget getCallTarget() {
+        return callTarget;
+    }
+
     @Override
     public Object executeGeneric(VirtualFrame frame) {
         // 1. 【关键步骤：闭包捕获】

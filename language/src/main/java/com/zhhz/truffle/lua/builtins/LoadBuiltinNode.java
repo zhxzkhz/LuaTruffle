@@ -50,6 +50,22 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
 
             // chunk 名在拿到文本后解析（默认名 = chunk 文本本身）
             String chunkName = getChunkName(arguments, sourceText);
+            String mode = getMode(arguments);
+
+            if (isBinaryChunk(sourceText)) {
+                if (!mode.contains("b")) {
+                    return failure("attempt to load a binary chunk (mode is '" + mode + "')");
+                }
+                byte[] data = sourceText.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+                com.zhhz.truffle.lua.bytecode.Proto proto =
+                        com.zhhz.truffle.lua.bytecode.LuaUndumper.undump(data, chunkName);
+                Object environment = arguments.length > 3 ? arguments[3] : null;
+                return com.zhhz.truffle.lua.vm.LuaVm.newClosure(getContext(), proto, environment);
+            }
+            if (!mode.contains("t")) {
+                return failure("attempt to load a text chunk (mode is '" + mode + "')");
+            }
+
             Source source = Source.newBuilder(LuaLanguage.ID, sourceText, chunkName).build();
             // 【核心】委托给 Truffle 框架进行解析
             // parseInternal 会返回一个 CallTarget
@@ -73,8 +89,25 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
             // 我们需要从异常中提取一个对用户友好的消息
             return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, getErrorMessage(e) });
         } catch (Exception e){
-            return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, e.getMessage() });
+            return new LuaMultiValue(new Object[]{LuaNil.SINGLETON,
+                    toTruffleString(String.valueOf(e.getMessage())) });
         }
+    }
+
+    private static boolean isBinaryChunk(String text) {
+        // 复刻 f_parser：首字符为 ESC (LUA_SIGNATURE[0]) 即视为二进制块。
+        return !text.isEmpty() && text.charAt(0) == '\u001b';
+    }
+
+    private static String getMode(Object[] arguments) {
+        if (arguments.length > 2 && arguments[2] instanceof TruffleString mode) {
+            return mode.toJavaStringUncached();
+        }
+        return "bt";
+    }
+
+    private static Object failure(String message) {
+        return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, toTruffleString(message)});
     }
 
     /**

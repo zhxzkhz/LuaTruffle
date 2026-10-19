@@ -301,11 +301,24 @@ public final class StringLibrary {
     }
 
     @LuaBuiltin(name = "dump")
+    @TruffleBoundary
     public static Object dump(Object[] arguments) {
-        if (arguments.length == 0 || !(arguments[0] instanceof LuaFunction)) {
+        if (arguments.length == 0 || !(arguments[0] instanceof LuaFunction function)) {
             throw LuaException.create("bad argument #1 to 'dump' (function expected)", null);
         }
-        throw LuaException.create("string.dump is not supported: binary chunk serialization is unavailable", null);
+        boolean strip = arguments.length > 1 && isTruthy(arguments[1]);
+        com.zhhz.truffle.lua.bytecode.Proto proto = function.getProto();
+        if (proto == null
+                && function.getCallTarget() instanceof com.oracle.truffle.api.RootCallTarget rct
+                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode root) {
+            proto = root.getProto();
+        }
+        if (proto == null) {
+            throw LuaException.create("unable to dump given function", null);
+        }
+        byte[] data = com.zhhz.truffle.lua.bytecode.LuaDumper.dump(proto, strip);
+        return TruffleString.fromByteArrayUncached(data, 0, data.length,
+                com.zhhz.truffle.lua.LuaLanguage.STRING_ENCODING, false);
     }
 
     private static void appendReplacement(ByteArrayOutputStream output, Object replacement,

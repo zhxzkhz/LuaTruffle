@@ -44,7 +44,72 @@ public class LuaNodeParser extends LuaBaseParser {
         rootNode.setChunk(true);
         rootNode.insert(rootBlock);
 
+        attachBytecodeProtos(source, rootNode, rootBlock);
+
         return rootNode.getCallTarget();
+    }
+
+    /**
+     * 为源码函数附加字节码 {@link Proto}，仅用于 {@code string.dump}。
+     *
+     * <p>做法：用与 CST 无关的 {@code LuaCompiler} 重新编译同一段源码，得到一棵 Proto 树；
+     * 再对 AST 做前序 DFS 收集 {@link LuaFunctionLiteralNode}（顺序与 Proto 树的前序一致，
+     * 因为函数字面量是嵌套的，前序即「外层先于内层、兄弟按源码顺序」）。若数量匹配，
+     * 逐个把对应子树 Proto 挂到其 RootNode 上；主 chunk 的 Proto 挂到根节点。
+     */
+    private static void attachBytecodeProtos(Source source, LuaRootNode rootNode, LuaStatementNode rootBlock) {
+        try {
+            String text = source.getCharacters().toString();
+            com.zhhz.truffle.lua.bytecode.Proto mainProto =
+                    com.zhhz.truffle.lua.bytecode.LuaCompiler.compile(text, source.getName());
+            rootNode.setProto(mainProto);
+
+            List<LuaFunctionLiteralNode> literals = new ArrayList<>();
+            collectFunctionLiterals(rootNode, literals);
+
+            List<com.zhhz.truffle.lua.bytecode.Proto> protos = new ArrayList<>();
+            collectProtos(mainProto, protos);
+
+            if (literals.size() != protos.size() - 1) {
+                return;
+            }
+            for (int i = 0; i < literals.size(); i++) {
+                RootCallTarget callTarget = literals.get(i).getCallTarget();
+                if (callTarget != null && callTarget.getRootNode() instanceof LuaRootNode literalRoot) {
+                    literalRoot.setProto(protos.get(i + 1));
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 附加 Proto 失败不影响正常执行；仅导致 string.dump 不可用。
+        }
+    }
+
+    private static void collectFunctionLiterals(com.oracle.truffle.api.nodes.Node node,
+                                                List<LuaFunctionLiteralNode> out) {
+        for (com.oracle.truffle.api.nodes.Node child : node.getChildren()) {
+            if (child instanceof LuaFunctionLiteralNode literal) {
+                out.add(literal);
+                // 函数体在其自身 RootNode 中，而不是字面量节点的子节点，需显式下探，
+                // 否则会漏掉嵌套在其他函数内部的函数（如 errors.lua 的匿名 aux）。
+                RootCallTarget callTarget = literal.getCallTarget();
+                if (callTarget != null) {
+                    com.oracle.truffle.api.nodes.RootNode literalRoot = callTarget.getRootNode();
+                    if (literalRoot != null) {
+                        collectFunctionLiterals(literalRoot, out);
+                    }
+                }
+            } else {
+                collectFunctionLiterals(child, out);
+            }
+        }
+    }
+
+    private static void collectProtos(com.zhhz.truffle.lua.bytecode.Proto proto,
+                                      List<com.zhhz.truffle.lua.bytecode.Proto> out) {
+        out.add(proto);
+        for (com.zhhz.truffle.lua.bytecode.Proto child : proto.p) {
+            collectProtos(child, out);
+        }
     }
 
 

@@ -118,7 +118,8 @@ public final class LuaException extends AbstractTruffleException {
     @TruffleBoundary
     public static String chunkId(String source) {
         if (source == null) {
-            source = "?";
+            // 对应 C 端 luaG_addinfo：无源码可用时直接用 "?"（而非 luaO_chunkid 的 [string ...]）
+            return "?";
         }
         int bufflen = 60; // LUA_IDSIZE
         if (!source.isEmpty() && source.charAt(0) == '=') {

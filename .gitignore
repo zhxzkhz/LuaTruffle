@@ -1,0 +1,24 @@
+# Build output
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# JVM crash dumps
+hs_err_pid*.log
+replay_pid*.log
+
+# Extracted reference source (Lua 5.3.0 sources are downloaded to a temp dir, not the repo)
+lua-5.3.0/
+
+# Agent / tooling artifacts
+.workbuddy/
+.zcode/
+
+# OS
+.DS_Store
+Thumbs.db

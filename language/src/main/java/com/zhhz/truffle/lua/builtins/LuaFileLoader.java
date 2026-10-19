@@ -26,11 +26,30 @@ final class LuaFileLoader {
         String mode = mode(arguments, function);
 
         TruffleFile file = context.resolveScriptFile(filename);
-        boolean binary = isBinary(file);
+        byte[] bytes = readAllBytes(file);
+
+        // 复刻 luaL_loadfilex：先跳过 BOM 与以 '#' 开头的首行（exec 文件/前置注释），
+        // 再据首字节判断是二进制还是文本块。
+        int offset = 0;
+        if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF) {
+            offset = 3;
+        }
+        if (offset < bytes.length && bytes[offset] == '#') {
+            while (offset < bytes.length && bytes[offset] != '\n') {
+                offset++;
+            }
+            if (offset < bytes.length) {
+                offset++;
+            }
+        }
+        boolean binary = isBinary(bytes, offset);
         checkMode(mode, binary);
         if (binary) {
-            // 本实现不支持反序列化二进制块（等价于缺失 luaU_undump）。
-            throw LuaException.create(function + " cannot load a binary chunk", null);
+            byte[] chunk = java.util.Arrays.copyOfRange(bytes, offset, bytes.length);
+            com.zhhz.truffle.lua.bytecode.Proto proto =
+                    com.zhhz.truffle.lua.bytecode.LuaUndumper.undump(chunk, "@" + file.getPath());
+            Object environment = arguments.length > 2 && arguments[2] != LuaNil.SINGLETON ? arguments[2] : null;
+            return com.zhhz.truffle.lua.vm.LuaVm.newClosure(context, proto, environment);
         }
 
         Source source = Source.newBuilder(LuaLanguage.ID, file)
@@ -97,9 +116,14 @@ final class LuaFileLoader {
         }
     }
 
-    private static boolean isBinary(TruffleFile file) throws IOException {
+    private static byte[] readAllBytes(TruffleFile file) throws IOException {
         try (InputStream input = file.newInputStream()) {
-            return input.read() == 0x1b; // LUA_SIGNATURE[0] == '\x1b'
+            return input.readAllBytes();
         }
+    }
+
+    /** 复刻 luaL_loadfilex / f_parser：首字节为 ESC ({@code LUA_SIGNATURE[0]}) 即视为二进制块。 */
+    private static boolean isBinary(byte[] bytes, int offset) {
+        return offset < bytes.length && bytes[offset] == 0x1b;
     }
 }
