@@ -55,6 +55,44 @@ public final class LuaThread extends LuaValue {
     /** 标记是否是主线程 */
     private final boolean main;
 
+    // =================================================================================
+    // 每线程调试钩子状态（对应标准 Lua 的 L->hook / L->hookmask / L->hookcount /
+    // L->oldpc / L->allowhook）。协程各有独立钩子；主线程使用 mainThread 实例。
+    // =================================================================================
+    private Object hookFunction;
+    private String hookMask = "";
+    private int hookCount;
+    private int lastHookLine = -1;
+    private boolean inHook;
+    private int instructionCount;
+
+    public Object getHookFunction() { return hookFunction; }
+    public void setHookFunction(Object function) { this.hookFunction = function; }
+    public String getHookMask() { return hookMask; }
+    public void setHookMask(String mask) { this.hookMask = mask; }
+    public int getHookCount() { return hookCount; }
+    public void setHookCount(int count) { this.hookCount = count; }
+    public boolean isHookMask(char c) { return hookMask.indexOf(c) >= 0; }
+    public int getLastHookLine() { return lastHookLine; }
+    public void setLastHookLine(int line) { this.lastHookLine = line; }
+    public boolean isInHook() { return inHook; }
+    public void setInHook(boolean value) { this.inHook = value; }
+    public int getInstructionCount() { return instructionCount; }
+    public void setInstructionCount(int count) { this.instructionCount = count; }
+
+    /** 该线程是否设置了任意钩子（函数非空）。 */
+    public boolean hasHook() { return hookFunction != null; }
+
+    /** 清空该线程的钩子状态。 */
+    public void clearHook() {
+        hookFunction = null;
+        hookMask = "";
+        hookCount = 0;
+        lastHookLine = -1;
+        inHook = false;
+        instructionCount = 0;
+    }
+
     public LuaThread(Shape shape, CallTarget callTarget, Object parentFrame, TruffleString name,
                      LuaFunction function, Env env, boolean main) {
         super(shape);

@@ -620,22 +620,34 @@ public final class DebugLibrary {
      *   <li>count 计数钩子：instrumentation 监听 StatementTag，每次语句执行
      *       计数 +1，达阈值触发 "count" 事件并重置计数。</li>
      * </ul>
-     * 仅支持主线程钩子；协程级 sethook/gethook 暂不支持（首参数为 thread 时忽略）。
+     * 钩子状态是【每线程】的（见 {@link LuaThread}），因此支持协程级 sethook/gethook：
+     * {@code debug.sethook(co, f, "lcr")} 设置协程 co 的钩子，仅在 co 运行时触发。
+     * instrumentation 绑定是上下文级的：只要有任意线程有钩子即附加对应监听器，
+     * 监听器在触发时按当前线程的钩子状态过滤（无钩子的线程自动跳过）。
      */
     @LuaBuiltin(name = "sethook")
     @TruffleBoundary
     public static Object setHook(Object[] arguments) {
         LuaContext context = context();
-        // 解除现有钩子
-        detachHook(context);
-        // 标准 Lua：可选的第一参数为 thread（协程），此处不支持，从下一参数开始取
+        // 可选首参数：目标线程（协程或主线程）
         int base = 0;
-        if (arguments.length > 0 && arguments[0] instanceof LuaTable) {
-            // 协程级 sethook 未实现：忽略 thread 参数
+        LuaThread target = null;
+        if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
+            target = thread;
             base = 1;
+        }
+        if (target == null) {
+            target = context.currentThread();
+        }
+        if (target == null) {
+            return LuaNil.SINGLETON;
         }
         Object hookArg = arguments.length > base ? arguments[base] : null;
         if (hookArg == null || hookArg == LuaNil.SINGLETON) {
+            // 解除该线程的钩子
+            target.clearHook();
+            context.getHookedThreads().remove(target);
+            refreshHookBindings(context);
             return LuaNil.SINGLETON;
         }
         String mask = "";
@@ -646,106 +658,34 @@ public final class DebugLibrary {
         if (arguments.length > base + 2) {
             count = integerArgument(arguments, base + 2, "sethook");
         }
-        // 计数上界与标准 Lua 5.3 一致（2^24 - 1）
         if (count < 0) {
             count = 0;
         }
-        Instrumenter instrumenter = context.lookupHookInstrumenter();
-        if (instrumenter == null) {
-            // 无 instrumenter 环境（受限嵌入）：仅记录函数
-            context.setHookFunction(hookArg);
-            context.setHookMask(mask);
-            context.setHookCount((int) count);
-            return LuaNil.SINGLETON;
+        // 计数上界与标准 Lua 5.3 一致（2^24 - 1）
+        if (count > 0xFFFFFFL) {
+            count = 0xFFFFFFL;
         }
-        boolean needLine = mask.indexOf('l') >= 0;
-        boolean needCount = count > 0;
-        // 行钩子与计数钩子都监听 StatementTag，可共用同一监听器
-        if (needLine || needCount) {
-            EventBinding<ExecutionEventListener> stmtBinding = instrumenter.attachExecutionEventListener(
-                    SourceSectionFilter.newBuilder().tagIs(StandardTags.StatementTag.class).build(),
-                    new ExecutionEventListener() {
-                        @Override
-                        public void onEnter(EventContext eventContext, VirtualFrame frame) {
-                            if (needCount) {
-                                LuaLineHook.fireCount(eventContext.getInstrumentedNode());
-                            }
-                            if (needLine) {
-                                SourceSection section = eventContext.getInstrumentedSourceSection();
-                                LuaLineHook.fireLine(eventContext.getInstrumentedNode(),
-                                        section != null ? section.getStartLine() : -1, false);
-                            }
-                        }
+        target.setHookFunction(hookArg);
+        target.setHookMask(mask);
+        target.setHookCount((int) count);
+        target.setInHook(false);
+        target.setInstructionCount(0);
+        context.getHookedThreads().add(target);
+        refreshHookBindings(context);
+        anchorLastHookLine(context, target);
+        return LuaNil.SINGLETON;
+    }
 
-                        @Override
-                        public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
-                        }
-
-                        @Override
-                        public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
-                                                         Throwable exception) {
-                        }
-                    });
-            context.setHookBinding(stmtBinding);
+    /**
+     * 模拟标准 Lua lua_sethook 的 {@code L->oldpc = L->ci->u.l.savedpc}：把目标线程的
+     * lastHookLine 锚定到 sethook 调用语句所在行，使同行的后续语句被去重。
+     * 仅当目标是当前运行线程时才能取到调用者行；给挂起的协程设钩子时置 -1（首个事件必触发）。
+     */
+    private static void anchorLastHookLine(LuaContext context, LuaThread target) {
+        if (target != context.currentThread()) {
+            target.setLastHookLine(-1);
+            return;
         }
-        // 调用/返回钩子监听 CallTag；行钩子也需 CallTag 以在函数返回时更新 lastHookLine
-        // （模拟标准 Lua luaD_poscall 的 L->oldpc = ci->previous->u.l.savedpc）
-        boolean needCall = mask.indexOf('c') >= 0;
-        boolean needReturn = mask.indexOf('r') >= 0;
-        if (needLine || needCall || needReturn) {
-            EventBinding<ExecutionEventListener> callBinding = instrumenter.attachExecutionEventListener(
-                    SourceSectionFilter.newBuilder().tagIs(StandardTags.CallTag.class).build(),
-                    new ExecutionEventListener() {
-                        @Override
-                        public void onEnter(EventContext eventContext, VirtualFrame frame) {
-                            if (needCall) {
-                                LuaLineHook.fireCall(eventContext.getInstrumentedNode());
-                            }
-                        }
-
-                        @Override
-                        public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
-                            if (needReturn) {
-                                LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
-                            }
-                            if (needLine) {
-                                // 函数返回时，将 lastHookLine 锚定到调用语句行，
-                                // 使调用者中同行的后续语句被去重
-                                SourceSection section = eventContext.getInstrumentedSourceSection();
-                                if (section != null) {
-                                    LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
-                                            section.getStartLine());
-                                }
-                            }
-                        }
-
-                        @Override
-                        public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
-                                                         Throwable exception) {
-                            if (needReturn) {
-                                LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
-                            }
-                            if (needLine) {
-                                SourceSection section = eventContext.getInstrumentedSourceSection();
-                                if (section != null) {
-                                    LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
-                                            section.getStartLine());
-                                }
-                            }
-                        }
-                    });
-            if (context.getHookBinding() != null) {
-                // 已存在 StatementTag 监听器：将 CallTag 监听器记入副绑定列表
-                context.addExtraHookBinding(callBinding);
-            } else {
-                context.setHookBinding(callBinding);
-            }
-        }
-        context.setHookFunction(hookArg);
-        context.setHookMask(mask);
-        context.setHookCount((int) count);
-        // 模拟标准 Lua lua_sethook 的 L->oldpc = L->ci->u.l.savedpc：
-        // 将 lastHookLine 锚定到 sethook 调用语句所在行，使同行的后续语句被去重
         LuaFrameInfo caller = frameAtLevel(1);
         int callerLine = -1;
         if (caller != null) {
@@ -759,43 +699,146 @@ public final class DebugLibrary {
                 }
             }
         }
-        context.setLastHookLine(callerLine);
-        context.setInHook(false);
-        context.setInstructionCount(0);
-        return LuaNil.SINGLETON;
+        target.setLastHookLine(callerLine);
     }
 
-    private static void detachHook(LuaContext context) {
-        com.oracle.truffle.api.instrumentation.EventBinding<?> binding = context.getHookBinding();
+    /**
+     * 按所有已设钩子线程的掩码重新计算并附加/拆卸 instrumentation 绑定。
+     * 仅在所需监听器种类发生变化时才重建，避免在钩子内部调用 sethook 时频繁拆卸。
+     */
+    private static void refreshHookBindings(LuaContext context) {
+        boolean needStatement = false;
+        boolean needCall = false;
+        for (LuaThread t : context.getHookedThreads()) {
+            if (!t.hasHook()) {
+                continue;
+            }
+            String mask = t.getHookMask();
+            if (mask.indexOf('l') >= 0) {
+                needStatement = true;
+                needCall = true;
+            }
+            if (t.getHookCount() > 0) {
+                needStatement = true;
+            }
+            if (mask.indexOf('c') >= 0 || mask.indexOf('r') >= 0) {
+                needCall = true;
+            }
+        }
+        boolean active = needStatement || needCall;
+        context.setAnyHookActive(active);
+        if (needStatement == context.isHookBindingStatement() && needCall == context.isHookBindingCall()) {
+            return;
+        }
+        disposeHookBindings(context);
+        context.setHookBindingStatement(false);
+        context.setHookBindingCall(false);
+        if (!active) {
+            return;
+        }
+        Instrumenter instrumenter = context.lookupHookInstrumenter();
+        if (instrumenter == null) {
+            // 无 instrumenter 环境（受限嵌入）：仅记录状态，不做 instrumentation
+            return;
+        }
+        if (needStatement) {
+            EventBinding<ExecutionEventListener> stmtBinding = instrumenter.attachExecutionEventListener(
+                    SourceSectionFilter.newBuilder().tagIs(StandardTags.StatementTag.class).build(),
+                    new ExecutionEventListener() {
+                        @Override
+                        public void onEnter(EventContext eventContext, VirtualFrame frame) {
+                            LuaLineHook.fireCount(eventContext.getInstrumentedNode());
+                            SourceSection section = eventContext.getInstrumentedSourceSection();
+                            LuaLineHook.fireLine(eventContext.getInstrumentedNode(),
+                                    section != null ? section.getStartLine() : -1, false);
+                        }
+
+                        @Override
+                        public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
+                        }
+
+                        @Override
+                        public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
+                                                         Throwable exception) {
+                        }
+                    });
+            context.setHookBinding(stmtBinding);
+            context.setHookBindingStatement(true);
+        }
+        if (needCall) {
+            // 调用/返回钩子监听 CallTag；行钩子也需 CallTag 以在函数返回时更新 lastHookLine
+            // （模拟标准 Lua luaD_poscall 的 L->oldpc = ci->previous->u.l.savedpc）
+            EventBinding<ExecutionEventListener> callBinding = instrumenter.attachExecutionEventListener(
+                    SourceSectionFilter.newBuilder().tagIs(StandardTags.CallTag.class).build(),
+                    new ExecutionEventListener() {
+                        @Override
+                        public void onEnter(EventContext eventContext, VirtualFrame frame) {
+                            LuaLineHook.fireCall(eventContext.getInstrumentedNode());
+                        }
+
+                        @Override
+                        public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
+                            LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
+                            SourceSection section = eventContext.getInstrumentedSourceSection();
+                            if (section != null) {
+                                LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
+                                        section.getStartLine());
+                            }
+                        }
+
+                        @Override
+                        public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
+                                                         Throwable exception) {
+                            LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
+                            SourceSection section = eventContext.getInstrumentedSourceSection();
+                            if (section != null) {
+                                LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
+                                        section.getStartLine());
+                            }
+                        }
+                    });
+            if (context.getHookBinding() != null) {
+                context.addExtraHookBinding(callBinding);
+            } else {
+                context.setHookBinding(callBinding);
+            }
+            context.setHookBindingCall(true);
+        }
+    }
+
+    private static void disposeHookBindings(LuaContext context) {
+        EventBinding<?> binding = context.getHookBinding();
         if (binding != null) {
             binding.dispose();
             context.setHookBinding(null);
         }
-        for (com.oracle.truffle.api.instrumentation.EventBinding<?> extra : context.getExtraHookBindings()) {
+        for (EventBinding<?> extra : context.getExtraHookBindings()) {
             extra.dispose();
         }
         context.clearExtraHookBindings();
-        context.setHookFunction(null);
-        context.setHookMask("");
-        context.setHookCount(0);
-        context.setInstructionCount(0);
-        context.setLastHookLine(-1);
-        context.setInHook(false);
     }
 
     @LuaBuiltin(name = "gethook")
     @TruffleBoundary
     public static Object getHook(Object[] arguments) {
         LuaContext context = context();
-        // 标准 Lua：可选第一参数为 thread，此处不支持；忽略
-        Object hook = context.getHookFunction();
-        TruffleString mask = LuaContext.toTruffleString(context.getHookMask());
-        long count = context.getHookCount();
+        // 可选首参数：目标线程（协程或主线程）
+        LuaThread target = null;
+        if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
+            target = thread;
+        }
+        if (target == null) {
+            target = context.currentThread();
+        }
+        Object hook = target != null ? target.getHookFunction() : null;
+        String mask = target != null ? target.getHookMask() : "";
+        long count = target != null ? target.getHookCount() : 0;
+        TruffleString maskStr = LuaContext.toTruffleString(mask);
         if (hook == null) {
             // 标准 Lua：无钩子时返回 nil（多值形式的第一项）
-            return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, mask, count});
+            return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, maskStr, count});
         }
-        return new LuaMultiValue(new Object[]{hook, mask, count});
+        return new LuaMultiValue(new Object[]{hook, maskStr, count});
     }
 
     @LuaBuiltin(name = "debug")

@@ -172,15 +172,20 @@ public final class LuaContext {
         this.gcStepMul = stepMul;
     }
 
-    // debug.sethook 钩子状态（见 LuaLineHook 与 DebugLibrary.sethook）
-    private Object hookFunction;
-    private String hookMask = "";
-    private int hookCount;
+    // debug.sethook 钩子（见 LuaLineHook 与 DebugLibrary.sethook）。
+    // 钩子函数/掩码/计数/去重行/重入标志等状态是【每线程】的，存放于 LuaThread
+    // （主线程使用 mainThread 实例），以支持协程级 sethook/gethook；
+    // 此处仅保留上下文级的 instrumentation 绑定状态。
     private com.oracle.truffle.api.instrumentation.EventBinding<?> hookBinding;
     private final java.util.List<com.oracle.truffle.api.instrumentation.EventBinding<?>> extraHookBindings = new java.util.ArrayList<>();
-    private int lastHookLine = -1;
-    private boolean inHook;
-    private int instructionCount;
+    /** 已附加的监听器种类标记，避免重复附加/拆卸。 */
+    private boolean hookBindingStatement;
+    private boolean hookBindingCall;
+    /** 已设置钩子的线程集合（用于绑定生命周期管理）。 */
+    private final java.util.Set<LuaThread> hookedThreads =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    /** 是否存在任意活跃钩子：VM 解释循环据此快速跳过每指令的线程状态查询。 */
+    private volatile boolean anyHookActive;
 
     // coroutine 当前线程跟踪：每个 Java 线程对应一个 LuaThread（协程）或 null（主线程）。
     // 主线程的 LuaThread 也存入此 ThreadLocal，以便 coroutine.running() 能正确返回。
@@ -188,25 +193,41 @@ public final class LuaContext {
     /** 主线程对象 */
     private LuaThread mainThread;
 
-    public Object getHookFunction() { return hookFunction; }
-    public void setHookFunction(Object hook) { this.hookFunction = hook; }
-    public String getHookMask() { return hookMask; }
-    public void setHookMask(String mask) { this.hookMask = mask; }
-    public int getHookCount() { return hookCount; }
-    public void setHookCount(int count) { this.hookCount = count; }
+    /** 当前执行线程对应的 LuaThread（协程或主线程）。 */
+    public LuaThread currentThread() {
+        LuaThread thread = currentCoroutine.get();
+        return thread != null ? thread : mainThread;
+    }
+
+    // ---- 钩子状态：委托到当前线程 ----
+    public Object getHookFunction() { LuaThread t = currentThread(); return t == null ? null : t.getHookFunction(); }
+    public void setHookFunction(Object hook) { LuaThread t = currentThread(); if (t != null) t.setHookFunction(hook); }
+    public String getHookMask() { LuaThread t = currentThread(); return t == null ? "" : t.getHookMask(); }
+    public void setHookMask(String mask) { LuaThread t = currentThread(); if (t != null) t.setHookMask(mask); }
+    public int getHookCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getHookCount(); }
+    public void setHookCount(int count) { LuaThread t = currentThread(); if (t != null) t.setHookCount(count); }
     /** 判断掩码中是否包含指定字符（'l'/'c'/'r'）。 */
-    public boolean isHookMask(char c) { return hookMask.indexOf(c) >= 0; }
+    public boolean isHookMask(char c) { LuaThread t = currentThread(); return t != null && t.isHookMask(c); }
+    public int getLastHookLine() { LuaThread t = currentThread(); return t == null ? -1 : t.getLastHookLine(); }
+    public void setLastHookLine(int line) { LuaThread t = currentThread(); if (t != null) t.setLastHookLine(line); }
+    public boolean isInHook() { LuaThread t = currentThread(); return t != null && t.isInHook(); }
+    public void setInHook(boolean value) { LuaThread t = currentThread(); if (t != null) t.setInHook(value); }
+    public int getInstructionCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getInstructionCount(); }
+    public void setInstructionCount(int count) { LuaThread t = currentThread(); if (t != null) t.setInstructionCount(count); }
+
+    // ---- 上下文级绑定状态 ----
     public com.oracle.truffle.api.instrumentation.EventBinding<?> getHookBinding() { return hookBinding; }
     public void setHookBinding(com.oracle.truffle.api.instrumentation.EventBinding<?> binding) { this.hookBinding = binding; }
     public java.util.List<com.oracle.truffle.api.instrumentation.EventBinding<?>> getExtraHookBindings() { return extraHookBindings; }
     public void addExtraHookBinding(com.oracle.truffle.api.instrumentation.EventBinding<?> binding) { extraHookBindings.add(binding); }
     public void clearExtraHookBindings() { extraHookBindings.clear(); }
-    public int getLastHookLine() { return lastHookLine; }
-    public void setLastHookLine(int line) { this.lastHookLine = line; }
-    public boolean isInHook() { return inHook; }
-    public void setInHook(boolean inHook) { this.inHook = inHook; }
-    public int getInstructionCount() { return instructionCount; }
-    public void setInstructionCount(int count) { this.instructionCount = count; }
+    public boolean isHookBindingStatement() { return hookBindingStatement; }
+    public void setHookBindingStatement(boolean value) { this.hookBindingStatement = value; }
+    public boolean isHookBindingCall() { return hookBindingCall; }
+    public void setHookBindingCall(boolean value) { this.hookBindingCall = value; }
+    public java.util.Set<LuaThread> getHookedThreads() { return hookedThreads; }
+    public boolean isAnyHookActive() { return anyHookActive; }
+    public void setAnyHookActive(boolean value) { this.anyHookActive = value; }
 
     // 字节码 VM 的逻辑调用栈（见 com.zhhz.truffle.lua.vm.VmFrame）。
     // VM 整条调用栈运行在单个 Truffle 帧内，因此显式维护此列表供 debug 库做层级查询。

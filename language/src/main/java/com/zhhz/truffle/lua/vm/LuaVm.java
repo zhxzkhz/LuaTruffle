@@ -46,8 +46,8 @@ public final class LuaVm {
 
     private final LuaContext context;
 
-    private Proto curProto;
-    private int curPc;
+    /** 当前正在解释的帧（用于错误位置信息）。进入 runFrame 时设置，退出时恢复。 */
+    private Frame curFrame;
 
     public LuaVm(LuaContext context) {
         this.context = context;
@@ -122,8 +122,6 @@ public final class LuaVm {
             java.util.List<VmFrame> stack = context.getVmFrames();
             stack.add(dbg);
             try {
-                curProto = p;
-                curPc = 0;
                 return runFrame(f);
             } finally {
                 stack.remove(stack.size() - 1);
@@ -176,10 +174,15 @@ public final class LuaVm {
     }
 
     private Object[] materializeConstants(Proto p) {
+        Object[] cached = p.materializedConstants;
+        if (cached != null) {
+            return cached;
+        }
         Object[] k = new Object[p.k.length];
         for (int i = 0; i < k.length; i++) {
             k[i] = materialize(p.k[i]);
         }
+        p.materializedConstants = k;
         return k;
     }
 
@@ -206,6 +209,16 @@ public final class LuaVm {
 
     @TruffleBoundary
     private Object[] runFrame(Frame f) {
+        Frame previous = curFrame;
+        curFrame = f;
+        try {
+            return runLoop(f);
+        } finally {
+            curFrame = previous;
+        }
+    }
+
+    private Object[] runLoop(Frame f) {
         int[] code = f.p.code;
         Object[] k = f.k;
         while (true) {
@@ -213,8 +226,6 @@ public final class LuaVm {
             dispatchHooks(f, idx);
             int i = code[idx];
             f.pc = idx + 1;
-            curProto = f.p;
-            curPc = idx;
             if (f.dbg != null) {
                 f.dbg.pc = idx;
             }
@@ -501,20 +512,22 @@ public final class LuaVm {
      * 把 {@code oldpc} 重置为调用者的 savedpc），从而抑制同行事件的重复触发。
      */
     private void dispatchHooks(Frame f, int idx) {
-        boolean active = !context.isInHook();
-        boolean needLine = active && context.isHookMask('l');
-        boolean needCount = active && context.getHookCount() > 0;
-        if (needCount) {
-            LuaLineHook.fireCount(context);
-        }
-        if (needLine && f.dbg != null) {
-            int[] lineinfo = f.p.lineinfo;
-            if (lineinfo != null && idx >= 0 && idx < lineinfo.length) {
-                int prevIdx = f.dbg.lastHookPc;
-                int line = lineinfo[idx];
-                int prevLine = (prevIdx >= 0 && prevIdx < lineinfo.length) ? lineinfo[prevIdx] : -1;
-                if (line > 0 && (prevIdx < 0 || idx <= prevIdx || line != prevLine)) {
-                    LuaLineHook.fireLine(context, line, true);
+        if (context.isAnyHookActive()) {
+            boolean active = !context.isInHook();
+            boolean needLine = active && context.isHookMask('l');
+            boolean needCount = active && context.getHookCount() > 0;
+            if (needCount) {
+                LuaLineHook.fireCount(context);
+            }
+            if (needLine && f.dbg != null) {
+                int[] lineinfo = f.p.lineinfo;
+                if (lineinfo != null && idx >= 0 && idx < lineinfo.length) {
+                    int prevIdx = f.dbg.lastHookPc;
+                    int line = lineinfo[idx];
+                    int prevLine = (prevIdx >= 0 && prevIdx < lineinfo.length) ? lineinfo[prevIdx] : -1;
+                    if (line > 0 && (prevIdx < 0 || idx <= prevIdx || line != prevLine)) {
+                        LuaLineHook.fireLine(context, line, true);
+                    }
                 }
             }
         }
@@ -1177,11 +1190,30 @@ public final class LuaVm {
         if (!(function instanceof LuaFunction fn) || !fn.isVmClosure()) {
             return NO_NAME;
         }
-        String local = localNameAt(p, funcReg + 1, callPc);
-        if (local != null) {
-            return new String[]{local, "local"};
+        // 结果只依赖 (code, k, locvars) 与调用点 pc（同一 pc 的 CALL 指令寄存器固定），
+        // 故可按 pc 缓存，避免每次调用都做 O(sizecode) 的 findSetReg 扫描。
+        String[][] cache = p.cachedCallNames;
+        if (cache != null && callPc >= 0 && callPc < cache.length) {
+            String[] hit = cache[callPc];
+            if (hit != null) {
+                return hit;
+            }
         }
-        return decodeObjName(p, findSetReg(p, callPc, funcReg), funcReg);
+        String local = localNameAt(p, funcReg + 1, callPc);
+        String[] result;
+        if (local != null) {
+            result = new String[]{local, "local"};
+        } else {
+            result = decodeObjName(p, findSetReg(p, callPc, funcReg), funcReg);
+        }
+        if (cache == null) {
+            cache = new String[p.code.length][];
+            p.cachedCallNames = cache;
+        }
+        if (callPc >= 0 && callPc < cache.length) {
+            cache[callPc] = result;
+        }
+        return result;
     }
 
     /** 复刻 luaF_getlocalname：第 n 个（1-based）活跃局部变量名，无则 null。 */
@@ -1480,19 +1512,21 @@ public final class LuaVm {
     }
 
     private String withPosition(String message) {
-        if (curProto == null) {
+        Frame f = curFrame;
+        if (f == null) {
             return message;
         }
+        Proto p = f.p;
         int line = -1;
-        int[] li = curProto.lineinfo;
+        int[] li = p.lineinfo;
         if (li != null && li.length > 0) {
-            int pc = curPc;
+            int pc = f.dbg != null ? f.dbg.pc : f.pc - 1;
             if (pc < 0 || pc >= li.length) {
                 pc = li.length - 1;
             }
             line = li[pc];
         }
-        String chunkId = LuaException.chunkId(curProto.source);
+        String chunkId = LuaException.chunkId(p.source);
         return chunkId + ":" + line + ": " + message;
     }
 }

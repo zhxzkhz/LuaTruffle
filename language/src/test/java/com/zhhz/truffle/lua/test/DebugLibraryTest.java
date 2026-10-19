@@ -306,6 +306,75 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void setHookOnCoroutineFiresForThatCoroutineOnly() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local events = {}
+                    local lines = {}
+                    local function hook(e, l)
+                        events[#events + 1] = e
+                        if l then lines[#lines + 1] = l end
+                    end
+
+                    local co = coroutine.create(function (x)
+                        local a = x + 1
+                        coroutine.yield(a)
+                        return a + 1
+                    end)
+
+                    local mainBefore = debug.gethook()
+                    debug.sethook(co, hook, 'lcr')
+                    local coHook = debug.gethook(co)
+                    local mainAfter = debug.gethook()
+
+                    local ok, v = coroutine.resume(co, 10)
+                    local status = coroutine.status(co)
+                    local ok2, v2 = coroutine.resume(co)
+
+                    return mainBefore == nil, coHook == hook, mainAfter == nil,
+                        ok, v, status, ok2, v2, #events > 0, #lines > 0
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean(), "main had no hook before");
+            assertTrue(result.getArrayElement(1).asBoolean(), "gethook(co) returns the hook");
+            assertTrue(result.getArrayElement(2).asBoolean(), "main unaffected by coroutine hook");
+            assertTrue(result.getArrayElement(3).asBoolean(), "first resume ok");
+            assertEquals(11L, result.getArrayElement(4).asLong());
+            assertEquals("suspended", result.getArrayElement(5).asString());
+            assertTrue(result.getArrayElement(6).asBoolean(), "second resume ok");
+            assertEquals(12L, result.getArrayElement(7).asLong());
+            assertTrue(result.getArrayElement(8).asBoolean(), "coroutine hook emitted events");
+            assertTrue(result.getArrayElement(9).asBoolean(), "coroutine hook emitted line events");
+        }
+    }
+
+    @Test
+    void setHookOnCoroutineFiresForVmClosure() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local events = {}
+                    local function hook(e) events[#events + 1] = e end
+                    local body = [[
+                        local x = ...
+                        local a = x + 1
+                        coroutine.yield(a)
+                        return a + 1
+                    ]]
+                    local f = assert(load(string.dump(assert(load(body)))))
+                    local co = coroutine.create(f)
+                    debug.sethook(co, hook, 'lcr')
+                    local ok, v = coroutine.resume(co, 20)
+                    local ok2, v2 = coroutine.resume(co)
+                    return ok, v, ok2, v2, #events > 0
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean(), "first resume ok");
+            assertEquals(21L, result.getArrayElement(1).asLong());
+            assertTrue(result.getArrayElement(2).asBoolean(), "second resume ok");
+            assertEquals(22L, result.getArrayElement(3).asLong());
+            assertTrue(result.getArrayElement(4).asBoolean(), "VM coroutine hook emitted events");
+        }
+    }
+
+    @Test
     void getinfoReportsCFunctionAtBuiltinLevel() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """

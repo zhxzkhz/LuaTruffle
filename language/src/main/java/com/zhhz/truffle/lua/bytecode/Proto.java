@@ -41,6 +41,18 @@ public final class Proto {
      */
     public Object cachedClosure;
 
+    /**
+     * VM 运行期缓存：已「物化」为运行时值的常量数组（{@link LuaConstant} → Long/Double/
+     * Boolean/TruffleString 等）。常量表在解释执行期间不变，故只需计算一次。
+     */
+    public transient Object[] materializedConstants;
+
+    /**
+     * VM 运行期缓存：以指令 pc 为索引的调用点 name/namewhat 解析结果
+     * （{@code callName} 的纯函数结果，仅依赖代码/常量/局部变量信息，可按 pc 缓存）。
+     */
+    public transient String[][] cachedCallNames;
+
     public int sizecode() {
         return code.length;
     }
