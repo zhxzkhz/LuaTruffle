@@ -147,7 +147,7 @@ public class StringLibraryTest extends AbstractLuaTest {
         assertFalse(eval("local ok = pcall(function() string.char(256) end); return ok").asBoolean());
         assertFalse(eval("local ok = pcall(function() string.match('a', '[') end); return ok").asBoolean());
         assertFalse(eval("local ok = pcall(function() string.gsub('a', 'a', true) end); return ok").asBoolean());
-        assertFalse(eval("local ok = pcall(function() string.dump(function() return 1 end) end); return ok").asBoolean());
+        assertFalse(eval("local ok = pcall(function() string.dump(print) end); return ok").asBoolean());
     }
 
     @Test

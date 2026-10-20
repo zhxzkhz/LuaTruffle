@@ -97,7 +97,7 @@ public class TableLibraryTest extends AbstractLuaTest {
     }
 
     @Test
-    public void testMoveHandlesOverlapDestinationAndNegativeIndices() {
+    public void testMoveHandlesOverlapDestinationAndNegativeTargetIndices() {
         assertTrue(eval("""
                 local right = {1, 2, 3, 4, 5}
                 local returned = table.move(right, 1, 3, 2)
@@ -105,12 +105,15 @@ public class TableLibraryTest extends AbstractLuaTest {
                 local left = {1, 2, 3, 4, 5}
                 table.move(left, 2, 4, 1)
 
-                local source = {[-2] = 'a', [-1] = 'b', [0] = 'c'}
+                local source = {'a', 'b', 'c'}
                 local destination = {}
-                local destinationReturned = table.move(source, -2, 0, 5, destination)
+                local destinationReturned = table.move(source, 1, 3, 5, destination)
 
                 local negativeDestination = {}
                 table.move({'x', 'y'}, 1, 2, -1, negativeDestination)
+
+                -- 5.3.0 要求起始位置为正
+                local negativeFromOk = pcall(table.move, {}, -1, 1, 1)
 
                 return returned == right
                     and right[1] == 1 and right[2] == 1 and right[3] == 2 and right[4] == 3 and right[5] == 5
@@ -118,6 +121,7 @@ public class TableLibraryTest extends AbstractLuaTest {
                     and destinationReturned == destination
                     and destination[5] == 'a' and destination[6] == 'b' and destination[7] == 'c'
                     and negativeDestination[-1] == 'x' and negativeDestination[0] == 'y'
+                    and not negativeFromOk
                 """).asBoolean());
     }
 

@@ -977,7 +977,7 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
                 end
                 """;
         PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
-        assertTrue(ex.getMessage().contains("jumps into a block"));
+        assertTrue(ex.getMessage().contains("no visible label"));
     }
 
     @Test
@@ -989,7 +989,7 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
                 return 0
                 """;
         PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
-        assertTrue(ex.getMessage().contains("local variable"));
+        assertTrue(ex.getMessage().contains("jumps into the scope of local"));
     }
 
     @Test
@@ -1143,10 +1143,16 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
     }
 
     @Test
-    public void testEqualityRequiresSharedMetamethod() {
-        assertFalse(eval("""
+    public void testEqualityUsesEitherMetamethod() {
+        // Lua 5.3 luaV_equalobj：优先取左值的 __eq，缺失时再取右值的 __eq。
+        assertTrue(eval("""
                 local a = setmetatable({}, {__eq = function() return true end})
                 local b = setmetatable({}, {__eq = function() return false end})
+                return a == b
+                """).asBoolean());
+        assertTrue(eval("""
+                local a = {}
+                local b = setmetatable({}, {__eq = function() return true end})
                 return a == b
                 """).asBoolean());
     }

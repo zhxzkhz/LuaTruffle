@@ -1599,7 +1599,7 @@ public class LuaNodeParser extends LuaBaseParser {
             LabelInfo label = findLabel(info, pendingGoto);
             if (label == null) {
                 Token token = pendingGoto.token();
-                throw parseError(token, "no visible label '" + token.getText() + "' for goto");
+                throw parseError(token, "no visible label '" + token.getText() + "' for <goto> at line " + token.getLine());
             }
             validateGotoTarget(pendingGoto, label, info);
             pendingGoto.node().setTargetBlockPath(label.blockPath());
@@ -1645,7 +1645,7 @@ public class LuaNodeParser extends LuaBaseParser {
     private void validateGotoTarget(PendingGoto pendingGoto, LabelInfo label, FunctionControlInfo info) {
         Token token = pendingGoto.token();
         if (!isPrefix(label.blockPath(), pendingGoto.blockPath())) {
-            throw parseError(token, "no visible label '" + token.getText() + "' for goto");
+            throw parseError(token, "no visible label '" + token.getText() + "' for <goto> at line " + token.getLine());
         }
         BitSet targetOnlyLocals = (BitSet) label.visibleLocalIds().clone();
         targetOnlyLocals.andNot(pendingGoto.visibleLocalIds());
@@ -1653,7 +1653,8 @@ public class LuaNodeParser extends LuaBaseParser {
             int declarationId = targetOnlyLocals.nextSetBit(0);
             TruffleString localName = info.localNames.get(declarationId);
             String nameText = localName != null ? localName.toJavaStringUncached() : token.getText();
-            throw parseError(token, "goto '" + token.getText() + "' jumps into the scope of local '" + nameText + "'");
+            throw parseError(token, "<goto " + token.getText() + "> at line " + token.getLine()
+                    + " jumps into the scope of local '" + nameText + "'");
         }
     }
 

@@ -108,7 +108,7 @@ public final class TableLibrary {
         long from = toInteger(args[1], 2, "move");
         long end = toInteger(args[2], 3, "move");
         long target = toInteger(args[3], 4, "move");
-        // 标准 tmove：起始位置必须为正，以避免若干溢出问题
+        // 标准 5.3.0 tmove：起始位置必须为正，以避免若干溢出问题
         if (from <= 0) {
             throw LuaTypesUtil.argumentError("move", 2, "initial position must be positive");
         }

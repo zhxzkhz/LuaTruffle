@@ -50,6 +50,7 @@ import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.controlflow.LuaReturnException;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
+import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTailCallException;
 
 public final class LuaAstRootNode extends LuaRootNode {
@@ -116,6 +117,11 @@ public final class LuaAstRootNode extends LuaRootNode {
                 }
                 // 非顶层：让异常冒泡到调用本 CallTarget 的 LuaFunction.Execute 循环
                 throw e;
+            }
+            // Lua 函数体正常结束且无 return：对 Lua 调用方意味着 0 个返回值；
+            // 而 host 直接 eval 一个 chunk 时（调用参数为空），约定映射为 nil。
+            if (topLevel && frame.getArguments().length == 0) {
+                return LuaNil.SINGLETON;
             }
             return new LuaMultiValue(new Object[0]);
         } finally {
