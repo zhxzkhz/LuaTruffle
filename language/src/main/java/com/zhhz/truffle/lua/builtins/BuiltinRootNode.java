@@ -44,6 +44,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.zhhz.truffle.lua.LuaLanguage;
+import com.zhhz.truffle.lua.runtime.LuaLineHook;
 
 import java.util.function.Supplier;
 
@@ -97,10 +98,21 @@ public class BuiltinRootNode extends RootNode {
         context.setActiveCallSite(pending);
         context.enterBuiltin(this);
         try {
+            // 参考实现 ldo.c:luaD_precall 在调用 C 函数体之前触发 call 钩子。
+            if (context.isAnyHookActive()) {
+                LuaLineHook.fireCall(context);
+            }
             return builtinNode.execute(userArguments);
         } finally {
-            context.exitBuiltin();
-            context.setActiveCallSite(previousActive);
+            try {
+                // 参考实现 luaD_poscall 在返回前触发 return 钩子（钩子已在体内清除时不再触发）。
+                if (context.isAnyHookActive()) {
+                    LuaLineHook.fireReturn(context);
+                }
+            } finally {
+                context.exitBuiltin();
+                context.setActiveCallSite(previousActive);
+            }
         }
     }
 

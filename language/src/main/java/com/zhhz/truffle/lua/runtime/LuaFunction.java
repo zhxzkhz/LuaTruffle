@@ -106,6 +106,38 @@ public final class LuaFunction extends LuaValue {
         return callTarget;
     }
 
+    /**
+     * 从宿主/解释器内部直接调用本函数，不经过 interop 分发。
+     * <p>
+     * 与 {@link com.oracle.truffle.api.interop.InteropLibrary#execute} 的区别：interop 调用
+     * 会在调用栈上插入一个 host→guest 包装帧，导致 {@code debug.getinfo} 的层级多出一层
+     * 伪 C 帧（钩子内 {@code getinfo(2)} 因此看不到被调函数）。钩子调用需要精确的层级，
+     * 故这里直接使用 CallTarget。
+     */
+    public Object callFromHook(Object... arguments) {
+        Object[] frameArguments = new Object[arguments.length + 1];
+        frameArguments[0] = this;
+        System.arraycopy(arguments, 0, frameArguments, 1, arguments.length);
+        try {
+            return getCallTarget().call(frameArguments);
+        } catch (LuaTailCallException tce) {
+            // 钩子内发生尾调用：在固定 Java 栈深度下重复派发，直到正常返回。
+            LuaTailCallException e = tce;
+            while (true) {
+                LuaFunction target = e.getFunction();
+                Object[] args = e.getArguments();
+                Object[] frameArgs = new Object[args.length + 1];
+                frameArgs[0] = target;
+                System.arraycopy(args, 0, frameArgs, 1, args.length);
+                try {
+                    return target.getCallTarget().call(frameArgs);
+                } catch (LuaTailCallException next) {
+                    e = next;
+                }
+            }
+        }
+    }
+
     public MaterializedFrame getParentFrame() {
         return parentFrame;
     }

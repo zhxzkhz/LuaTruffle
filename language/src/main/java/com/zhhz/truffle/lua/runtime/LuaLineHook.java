@@ -17,9 +17,11 @@ import com.oracle.truffle.api.strings.TruffleString;
  *       （if/while/repeat/for）在 AST 分支点显式触发，以复刻真实 Lua 字节码的
  *       行归属（then/else/end 关键字行、循环回边强制重触发、then 分支收尾跳
  *       end 行而 else 不跳、break 退出不触发 end 行等）。</li>
- *   <li>{@code "call"} / {@code "return"}：调用 / 返回钩子（'c'/'r' 掩码）。
- *       由 {@link #fireCall} / {@link #fireReturn} 在函数调用边界显式触发
- *       （见 LuaInvokeNode/LuaMethodCallNode）。</li>
+ *   <li>{@code "call"} / {@code "return"} / {@code "tail call"}：调用 / 返回钩子
+ *       （'c'/'r' 掩码）。由被调函数的执行入口触发（AST 函数见 LuaAstRootNode，
+ *       VM 闭包见 LuaVm，C 函数见 BuiltinRootNode），因此钩子内
+ *       {@code debug.getinfo(2)} 看到的是被调函数。尾调用进入 Lua 函数时
+ *       触发 {@code "tail call"}（仍属 'c' 掩码），且链尾只报告一次 return。</li>
  *   <li>{@code "count"}：指令计数钩子（count 参数）。由 {@link #fireCount}
  *       在语句边界触发；每 count 条“指令”（此处近似为语句计数）后触发一次。</li>
  * </ul>
@@ -32,6 +34,7 @@ public final class LuaLineHook {
     /** 标准事件名（缓存为 TruffleString，避免每次构造）。 */
     private static final TruffleString EVENT_LINE = LuaContext.toTruffleString("line");
     private static final TruffleString EVENT_CALL = LuaContext.toTruffleString("call");
+    private static final TruffleString EVENT_TAIL_CALL = LuaContext.toTruffleString("tail call");
     private static final TruffleString EVENT_RETURN = LuaContext.toTruffleString("return");
     private static final TruffleString EVENT_COUNT = LuaContext.toTruffleString("count");
 
@@ -64,7 +67,11 @@ public final class LuaLineHook {
 
     /** 触发一次 call 事件。调用前调用。 */
     public static void fireCall(Node location) {
-        LuaContext context = LuaContext.get(location);
+        fireCall(LuaContext.get(location));
+    }
+
+    /** 触发一次 call 事件（VM 解释器直接调用）。 */
+    public static void fireCall(LuaContext context) {
         if (!context.isHookMask('c')) {
             return;
         }
@@ -75,9 +82,30 @@ public final class LuaLineHook {
         invokeHook(context, hook, EVENT_CALL, null);
     }
 
+    /** 触发一次 tail call 事件（参考实现：尾调用进入被调 Lua 函数，仍属 'c' 掩码）。 */
+    public static void fireTailCall(Node location) {
+        fireTailCall(LuaContext.get(location));
+    }
+
+    /** 触发一次 tail call 事件（VM 解释器直接调用）。 */
+    public static void fireTailCall(LuaContext context) {
+        if (!context.isHookMask('c')) {
+            return;
+        }
+        Object hook = context.getHookFunction();
+        if (hook == null || context.isInHook()) {
+            return;
+        }
+        invokeHook(context, hook, EVENT_TAIL_CALL, null);
+    }
+
     /** 触发一次 return 事件。调用返回后调用。 */
     public static void fireReturn(Node location) {
-        LuaContext context = LuaContext.get(location);
+        fireReturn(LuaContext.get(location));
+    }
+
+    /** 触发一次 return 事件（VM 解释器直接调用）。 */
+    public static void fireReturn(LuaContext context) {
         if (!context.isHookMask('r')) {
             return;
         }
@@ -117,7 +145,15 @@ public final class LuaLineHook {
     private static void invokeHook(LuaContext context, Object hook, TruffleString event, Long lineArg) {
         context.setInHook(true);
         try {
-            if (lineArg != null) {
+            // Lua 钩子走 CallTarget 直调：interop 会插入 host→guest 包装帧，
+            // 使钩子内 debug.getinfo 的层级（如 getinfo(2)）错位。
+            if (hook instanceof LuaFunction function) {
+                if (lineArg != null) {
+                    function.callFromHook(event, lineArg);
+                } else {
+                    function.callFromHook(event);
+                }
+            } else if (lineArg != null) {
                 InteropLibrary.getFactory().getUncached().execute(hook, event, lineArg);
             } else {
                 InteropLibrary.getFactory().getUncached().execute(hook, event);

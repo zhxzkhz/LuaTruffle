@@ -401,6 +401,92 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void callHooksSeeTheCalleeFrameThroughVm() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local events = {}
+                    local names = {}
+                    local function hook(e)
+                        events[#events + 1] = e
+                        if e == 'call' or e == 'tail call' then
+                            local i = debug.getinfo(2, 'fSn')
+                            names[#names + 1] = i and i.what or 'nil'
+                            names[#names + 1] = (i and i.name) or ''
+                        end
+                    end
+                    local body = [[
+                        local function inner(x) return x + 1 end
+                        local function outer(y) return inner(y) * 2 end
+                        return outer(3)
+                    ]]
+                    local vm = assert(load(string.dump(assert(load(body)))))
+                    debug.sethook(hook, 'cr')
+                    local r = vm()
+                    debug.sethook()
+                    return r, events, names
+                    """);
+            assertEquals(8L, result.getArrayElement(0).asLong());
+            Value events = result.getArrayElement(1);
+            // 第 1 个 return 是 debug.sethook 自身返回时（钩子刚装上，参考实现同样如此）；
+            // 最后 1 个 call 是 debug.sethook() 清除钩子（调用前钩子仍在）。
+            // vm 尾调用 outer，因此 outer 报告 "tail call"，且链尾只报一次 return（与参考实现一致）。
+            assertEquals(7, events.getArraySize(), "sethook 自身 + vm/outer/inner 事件");
+            String[] expectedEvents = {
+                            "return",    // debug.sethook 装上钩子后自身返回
+                            "call",      // vm
+                            "tail call", // outer（return outer(3)）
+                            "call",      // inner
+                            "return",    // inner
+                            "return",    // outer（复用 vm 的 CallInfo，不再单独报 vm）
+                            "call"       // debug.sethook() 清除钩子
+            };
+            for (int i = 0; i < expectedEvents.length; i++) {
+                assertEquals(expectedEvents[i], events.getArrayElement(i).asString(), "event " + i);
+            }
+            Value names = result.getArrayElement(2);
+            assertEquals(8, names.getArraySize());
+            String[] expectedNames = {
+                            "main", "",      // vm 是主块（linedefined==0），调用点无名字
+                            "Lua", "outer",  // outer，局部变量名
+                            "Lua", "inner",  // inner，upvalue 名
+                            "C", "sethook"   // 内建调用，what=C
+            };
+            for (int i = 0; i < expectedNames.length; i++) {
+                assertEquals(expectedNames[i], names.getArrayElement(i).asString(), "name " + i);
+            }
+        }
+    }
+
+    @Test
+    void callHooksSeeTheCalleeFrameForAstFunctions() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local function f(x) return x + 1 end
+                    local calls, rets, what = 0, 0, nil
+                    local function hook(e)
+                        local i = debug.getinfo(2, 'fS')
+                        if i.func == f then
+                            what = i.what
+                            if e == 'call' then
+                                calls = calls + 1
+                            elseif e == 'return' then
+                                rets = rets + 1
+                            end
+                        end
+                    end
+                    debug.sethook(hook, 'cr')
+                    local r = f(1)
+                    debug.sethook()
+                    return r, calls, rets, what
+                    """);
+            assertEquals(2L, result.getArrayElement(0).asLong());
+            assertEquals(1L, result.getArrayElement(1).asLong(), "call hook sees f");
+            assertEquals(1L, result.getArrayElement(2).asLong(), "return hook sees f");
+            assertEquals("Lua", result.getArrayElement(3).asString());
+        }
+    }
+
+    @Test
     void getinfoReportsCFunctionAtBuiltinLevel() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """

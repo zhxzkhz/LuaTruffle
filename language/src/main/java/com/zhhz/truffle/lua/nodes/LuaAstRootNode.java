@@ -49,6 +49,7 @@ import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
 import com.zhhz.truffle.lua.nodes.controlflow.LuaReturnException;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
+import com.zhhz.truffle.lua.runtime.LuaLineHook;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTailCallException;
@@ -105,6 +106,11 @@ public final class LuaAstRootNode extends LuaRootNode {
         com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(this);
         if (context != null) {
             context.enterLuaCall(this);
+            // 与参考实现一致：call 钩子在函数帧建立之后触发，
+            // 因此钩子内 debug.getinfo(2) 看到的是被调用的函数（而不是调用点）。
+            if (context.isAnyHookActive()) {
+                LuaLineHook.fireCall(context);
+            }
         }
         try {
             try {
@@ -126,6 +132,10 @@ public final class LuaAstRootNode extends LuaRootNode {
             return new LuaMultiValue(new Object[0]);
         } finally {
             if (context != null) {
+                // return 钩子在帧销毁之前触发，level 2 仍是将返回的函数。
+                if (context.isAnyHookActive()) {
+                    LuaLineHook.fireReturn(context);
+                }
                 context.exitLuaCall();
             }
         }

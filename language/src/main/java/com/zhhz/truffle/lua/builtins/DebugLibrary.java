@@ -613,10 +613,11 @@ public final class DebugLibrary {
      *   <li>'l' 行钩子：instrumentation 监听 StatementTag（普通语句）+
      *       控制流节点（if/while/repeat/for）AST 分支点显式触发（{@link LuaLineHook#fireLine}），
      *       复刻真实 Lua 字节码的行归属（then/else/end 行、循环回边强制重触发等）。</li>
-     *   <li>'c' 调用钩子 / 'r' 返回钩子：instrumentation 监听 CallTag
-     *       （{@link LuaInvokeNode}/{@link LuaMethodCallNode}）。
-     *       onEnter → "call"；onReturnValue → "return"；onReturnExceptional → "return"
-     *       （异常退出也算返回，否则上层不会收到 return 事件导致栈不平衡）。</li>
+     *   <li>'c' 调用钩子 / 'r' 返回钩子：由被调函数的执行入口触发（与参考实现一致，
+     *       钩子执行时被调帧已经存在，故 {@code debug.getinfo(2)} 看到的是被调函数）：
+     *       AST 函数见 {@code LuaAstRootNode.execute}，字节码 VM 闭包见
+     *       {@code LuaVm.executeInternal}，C 函数（内建）见 {@code BuiltinRootNode.execute}。
+     *       异常退出同样触发 "return"（否则上层不会收到 return 事件导致栈不平衡）。</li>
      *   <li>count 计数钩子：instrumentation 监听 StatementTag，每次语句执行
      *       计数 +1，达阈值触发 "count" 事件并重置计数。</li>
      * </ul>
@@ -766,19 +767,18 @@ public final class DebugLibrary {
             context.setHookBindingStatement(true);
         }
         if (needCall) {
-            // 调用/返回钩子监听 CallTag；行钩子也需 CallTag 以在函数返回时更新 lastHookLine
+            // call/return 事件由被调函数的执行入口触发（见 LuaAstRootNode/BuiltinRootNode/LuaVm），
+            // 这里只监听 CallTag 以便函数返回时更新 lastHookLine
             // （模拟标准 Lua luaD_poscall 的 L->oldpc = ci->previous->u.l.savedpc）
             EventBinding<ExecutionEventListener> callBinding = instrumenter.attachExecutionEventListener(
                     SourceSectionFilter.newBuilder().tagIs(StandardTags.CallTag.class).build(),
                     new ExecutionEventListener() {
                         @Override
                         public void onEnter(EventContext eventContext, VirtualFrame frame) {
-                            LuaLineHook.fireCall(eventContext.getInstrumentedNode());
                         }
 
                         @Override
                         public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
-                            LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
                             SourceSection section = eventContext.getInstrumentedSourceSection();
                             if (section != null) {
                                 LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
@@ -789,7 +789,6 @@ public final class DebugLibrary {
                         @Override
                         public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
                                                          Throwable exception) {
-                            LuaLineHook.fireReturn(eventContext.getInstrumentedNode());
                             SourceSection section = eventContext.getInstrumentedSourceSection();
                             if (section != null) {
                                 LuaLineHook.setLastLine(eventContext.getInstrumentedNode(),
@@ -964,7 +963,14 @@ public final class DebugLibrary {
         }
 
         private String what() {
-            return isLuaFrame() ? "Lua" : "C";
+            if (!isLuaFrame()) {
+                return "C";
+            }
+            if (isVmClosure()) {
+                // 复刻 ldebug.c:funcinfo —— 主块（linedefined == 0）报告为 "main"。
+                return proto().linedefined == 0 ? "main" : "Lua";
+            }
+            return "Lua";
         }
 
         private String shortSource() {
@@ -996,6 +1002,15 @@ public final class DebugLibrary {
                 return target.vmFrame.currentLine();
             }
             Node node = target.callNode();
+            if (node == null && target.function() != null) {
+                // 经 interop 进入的帧没有调用节点：退回函数定义所在的起始行。
+                RootNode root = target.root();
+                SourceSection section = root != null ? root.getSourceSection() : null;
+                if (section != null) {
+                    return section.getStartLine();
+                }
+                return -1;
+            }
             if (node != null) {
                 // callNode 通常是 Truffle 的 DirectCallNode，其封装 section 来自父
                 // LuaInvokeNode/LuaMethodCallNode。向上查找最近的 LuaStatementNode
@@ -1245,8 +1260,16 @@ public final class DebugLibrary {
     private static LuaFrameInfo toFrameInfo(FrameInstance frameInstance) {
         Node callNode = frameInstance.getCallNode();
         Frame frame = frameInstance.getFrame(FrameAccess.MATERIALIZE);
+        // 优先取帧参数里的真实闭包（LuaFunction.Execute 把它放在 arguments[0]）：
+        // 这样 debug.getinfo(..., 'f').func 与原函数是同一对象；同时某些经 interop
+        // 进入的帧没有 callNode，也能据此判断它是不是 Lua 帧。
         LuaFunction function = null;
-        if (callNode != null && callNode.getRootNode() instanceof LuaRootNode luaRoot) {
+        Object[] frameArguments = frame.getArguments();
+        if (frameArguments.length > 0 && frameArguments[0] instanceof LuaFunction fn
+                && fn.getCallTarget() instanceof RootCallTarget rootCallTarget
+                && rootCallTarget.getRootNode() instanceof LuaRootNode) {
+            function = fn;
+        } else if (callNode != null && callNode.getRootNode() instanceof LuaRootNode luaRoot) {
             TruffleString name = luaRoot.getTSName();
             function = new LuaFunction(context().getFunctionShape(), luaRoot.getCallTarget(), null, name);
         }

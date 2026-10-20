@@ -82,6 +82,11 @@ public final class LuaVm {
         Frame sinkCaller;
         int sinkDst;
         int sinkWanted;
+        /**
+         * 本帧是否通过 TAILCALL 把执行权完全交给另一个 VM 闭包。参考实现中尾调用会
+         * 复用调用者的 CallInfo，因此调用者不再单独触发 return 钩子（链尾只报一次）。
+         */
+        boolean tailDelegated;
 
         Frame(Proto p, Object[] upvals, Object[] k) {
             this.p = p;
@@ -108,7 +113,7 @@ public final class LuaVm {
     /** 执行一个 VM 闭包，并记录其调用点解析出的 name/namewhat（供 debug.getinfo 'n'）。 */
     @TruffleBoundary
     public Object[] execute(LuaFunction function, Object[] args, String name, String namewhat) {
-        return executeInternal(function, args, 0, args.length, name, namewhat, null, 0, 0);
+        return executeInternal(function, args, 0, args.length, name, namewhat, null, 0, 0, false);
     }
 
     /**
@@ -117,7 +122,7 @@ public final class LuaVm {
      */
     private Object[] executeSlice(LuaFunction function, Object[] regs, int base, int nargs,
                     String name, String namewhat) {
-        return executeInternal(function, regs, base, nargs, name, namewhat, null, 0, 0);
+        return executeInternal(function, regs, base, nargs, name, namewhat, null, 0, 0, false);
     }
 
     /**
@@ -126,12 +131,19 @@ public final class LuaVm {
      */
     private void executeInto(LuaFunction function, Object[] regs, int base, int nargs,
                     String name, String namewhat, Frame caller, int dst, int wanted) {
-        executeInternal(function, regs, base, nargs, name, namewhat, caller, dst, wanted);
+        executeInto(function, regs, base, nargs, name, namewhat, caller, dst, wanted, false);
+    }
+
+    /** {@code tailEntry} 为真表示这次进入来自 TAILCALL：触发 "tail call" 而非 "call"。 */
+    private void executeInto(LuaFunction function, Object[] regs, int base, int nargs,
+                    String name, String namewhat, Frame caller, int dst, int wanted, boolean tailEntry) {
+        executeInternal(function, regs, base, nargs, name, namewhat, caller, dst, wanted, tailEntry);
     }
 
     @TruffleBoundary
     private Object[] executeInternal(LuaFunction function, Object[] args, int base, int nargs,
-                    String name, String namewhat, Frame sinkCaller, int sinkDst, int sinkWanted) {
+                    String name, String namewhat, Frame sinkCaller, int sinkDst, int sinkWanted,
+                    boolean tailEntry) {
         try {
             context.enterLuaCall(null);
         } catch (LuaException e) {
@@ -145,6 +157,7 @@ public final class LuaVm {
             f.sinkCaller = sinkCaller;
             f.sinkDst = sinkDst;
             f.sinkWanted = sinkWanted;
+            f.tailDelegated = false;
 
             int numParams = p.numparams;
             for (int i = 0; i < numParams; i++) {
@@ -168,10 +181,27 @@ public final class LuaVm {
             java.util.List<VmFrame> stack = context.getVmFrames();
             stack.add(dbg);
             try {
+                // 与参考实现一致：call 钩子在压入被调帧之后触发，
+                // 因此钩子内 debug.getinfo(2) 看到的是被调用的函数。
+                if (context.isAnyHookActive()) {
+                    if (tailEntry) {
+                        LuaLineHook.fireTailCall(context);
+                    } else {
+                        LuaLineHook.fireCall(context);
+                    }
+                }
                 return runFrame(f);
             } finally {
-                stack.remove(stack.size() - 1);
-                releaseFrame(f);
+                try {
+                    // 尾调用已把 return 事件交由链尾帧负责（参考实现复用调用者 CallInfo），
+                    // 否则 return 钩子在弹栈之前触发，level 2 仍是将返回的函数。
+                    if (!f.tailDelegated && context.isAnyHookActive()) {
+                        LuaLineHook.fireReturn(context);
+                    }
+                } finally {
+                    stack.remove(stack.size() - 1);
+                    releaseFrame(f);
+                }
             }
         } finally {
             context.exitLuaCall();
@@ -193,6 +223,7 @@ public final class LuaVm {
         f.sinkCaller = null;
         f.sinkDst = 0;
         f.sinkWanted = 0;
+        f.tailDelegated = false;
         return f;
     }
 
@@ -484,14 +515,16 @@ public final class LuaVm {
                         if (f.p.sizep() > 0) {
                             closeUpvals(f, 0);
                         }
+                        // 参考实现中尾调用替换调用者帧：不再单独触发本帧的 return。
+                        f.tailDelegated = true;
                         if (f.sinkCaller != null) {
                             // 尾调用直接延续当前帧的结果去向，无需再经中间寄存器。
                             executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1],
-                                            f.sinkCaller, f.sinkDst, f.sinkWanted);
+                                            f.sinkCaller, f.sinkDst, f.sinkWanted, true);
                             return null;
                         }
                         // 以当前帧自身为落点，等价于把结果复制回 a.. 并更新 top。
-                        executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1], f, a, 0);
+                        executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1], f, a, 0, true);
                         break;
                     }
                     Object[] results = callFrom(function, f.regs, a + 1, nargs, nw);
