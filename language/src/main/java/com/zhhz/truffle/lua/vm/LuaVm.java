@@ -67,6 +67,13 @@ public final class LuaVm {
         int pc;
         /** 对应的调试帧句柄（压入 LuaContext.getVmFrames()）。 */
         VmFrame dbg;
+        /**
+         * 结果直写目标：非空时 RETURN 把返回值直接写入该调用者帧的寄存器，
+         * 调用者无需再接收/复制结果数组。{@code sinkWanted == 0} 表示「全部结果」。
+         */
+        Frame sinkCaller;
+        int sinkDst;
+        int sinkWanted;
 
         Frame(Proto p, Object[] upvals, Object[] k) {
             this.p = p;
@@ -74,8 +81,8 @@ public final class LuaVm {
             this.k = k;
             // 额外预留 LUA_MINSTACK(20) 个寄存器，容纳变长返回值溢出（对应 C 版
             // Lua 栈在 maxstacksize 之外预留的 LUA_MINSTACK 余量）。
+            // 新数组全为 null；getR / VmFrame 读取时统一把 null 视为 nil，故无需预填充。
             this.regs = new Object[p.maxstacksize + LUA_MINSTACK];
-            Arrays.fill(this.regs, LuaNil.SINGLETON);
             this.top = p.maxstacksize;
         }
     }
@@ -93,6 +100,30 @@ public final class LuaVm {
     /** 执行一个 VM 闭包，并记录其调用点解析出的 name/namewhat（供 debug.getinfo 'n'）。 */
     @TruffleBoundary
     public Object[] execute(LuaFunction function, Object[] args, String name, String namewhat) {
+        return executeInternal(function, args, 0, args.length, name, namewhat, null, 0, 0);
+    }
+
+    /**
+     * 以调用者寄存器区间 {@code regs[base, base+nargs)} 作为实参执行 VM 闭包，
+     * 避免每次 VM→VM 调用都分配并复制一份 {@code Object[]}。
+     */
+    private Object[] executeSlice(LuaFunction function, Object[] regs, int base, int nargs,
+                    String name, String namewhat) {
+        return executeInternal(function, regs, base, nargs, name, namewhat, null, 0, 0);
+    }
+
+    /**
+     * 执行 VM 闭包并把返回值直接写入 {@code caller} 的寄存器（从 {@code dst} 开始）。
+     * {@code wanted == 0} 表示接收全部结果，此时由被调帧更新 {@code caller.top}。
+     */
+    private void executeInto(LuaFunction function, Object[] regs, int base, int nargs,
+                    String name, String namewhat, Frame caller, int dst, int wanted) {
+        executeInternal(function, regs, base, nargs, name, namewhat, caller, dst, wanted);
+    }
+
+    @TruffleBoundary
+    private Object[] executeInternal(LuaFunction function, Object[] args, int base, int nargs,
+                    String name, String namewhat, Frame sinkCaller, int sinkDst, int sinkWanted) {
         try {
             context.enterLuaCall(null);
         } catch (LuaException e) {
@@ -103,14 +134,21 @@ public final class LuaVm {
             Object[] upvals = function.getUpvalues();
             Object[] k = materializeConstants(p);
             Frame f = new Frame(p, upvals, k);
+            f.sinkCaller = sinkCaller;
+            f.sinkDst = sinkDst;
+            f.sinkWanted = sinkWanted;
 
             int numParams = p.numparams;
             for (int i = 0; i < numParams; i++) {
-                Object v = i < args.length ? args[i] : LuaNil.SINGLETON;
-                f.regs[i] = v == null ? LuaNil.SINGLETON : v;
+                f.regs[i] = i < nargs ? slot(args, base + i) : LuaNil.SINGLETON;
             }
-            if (p.isVararg != 0 && args.length > numParams) {
-                f.varargs = Arrays.copyOfRange(args, numParams, args.length);
+            if (p.isVararg != 0 && nargs > numParams) {
+                int n = nargs - numParams;
+                Object[] varargs = new Object[n];
+                for (int i = 0; i < n; i++) {
+                    varargs[i] = slot(args, base + numParams + i);
+                }
+                f.varargs = varargs;
             }
 
             VmFrame dbg = new VmFrame(function, p, f.regs);
@@ -377,37 +415,34 @@ public final class LuaVm {
                 case CALL: {
                     int b = Instruction.getB(i);
                     int c = Instruction.getC(i);
-                    int nargs = b != 0 ? b - 1 : f.top - a - 1;
-                    Object[] callArgs = new Object[Math.max(nargs, 0)];
-                    for (int j = 0; j < callArgs.length; j++) {
-                        callArgs[j] = getR(f, a + 1 + j);
-                    }
+                    int nargs = Math.max(b != 0 ? b - 1 : f.top - a - 1, 0);
                     Object function = getR(f, a);
                     String[] nw = callName(f.p, idx, a, function);
-                    Object[] results = callValue(function, callArgs, nw[0], nw[1]);
-                    if (c == 0) {
-                        for (int j = 0; j < results.length; j++) {
-                            setR(f, a + j, results[j]);
-                        }
-                        f.top = a + results.length;
+                    if (function instanceof LuaFunction fn && fn.isVmClosure()) {
+                        executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1], f, a,
+                                        c == 0 ? 0 : c - 1);
                     } else {
-                        int nresults = c - 1;
-                        for (int j = 0; j < nresults; j++) {
-                            setR(f, a + j, j < results.length ? results[j] : LuaNil.SINGLETON);
+                        Object[] results = callFrom(function, f.regs, a + 1, nargs, nw);
+                        if (c == 0) {
+                            for (int j = 0; j < results.length; j++) {
+                                setR(f, a + j, results[j]);
+                            }
+                            f.top = a + results.length;
+                        } else {
+                            int nresults = c - 1;
+                            for (int j = 0; j < nresults; j++) {
+                                setR(f, a + j, j < results.length ? results[j] : LuaNil.SINGLETON);
+                            }
                         }
                     }
                     break;
                 }
                 case TAILCALL: {
                     int b = Instruction.getB(i);
-                    int nargs = b != 0 ? b - 1 : f.top - a - 1;
-                    Object[] callArgs = new Object[Math.max(nargs, 0)];
-                    for (int j = 0; j < callArgs.length; j++) {
-                        callArgs[j] = getR(f, a + 1 + j);
-                    }
+                    int nargs = Math.max(b != 0 ? b - 1 : f.top - a - 1, 0);
                     Object function = getR(f, a);
                     String[] nw = callName(f.p, idx, a, function);
-                    Object[] results = callValue(function, callArgs, nw[0], nw[1]);
+                    Object[] results = callFrom(function, f.regs, a + 1, nargs, nw);
                     for (int j = 0; j < results.length; j++) {
                         setR(f, a + j, results[j]);
                     }
@@ -416,13 +451,29 @@ public final class LuaVm {
                 }
                 case RETURN: {
                     int b = Instruction.getB(i);
-                    int n = b != 0 ? b - 1 : f.top - a;
-                    Object[] results = new Object[Math.max(n, 0)];
-                    for (int j = 0; j < results.length; j++) {
-                        results[j] = getR(f, a + j);
-                    }
+                    int n = Math.max(b != 0 ? b - 1 : f.top - a, 0);
                     if (f.p.sizep() > 0) {
                         closeUpvals(f, 0);
+                    }
+                    Frame caller = f.sinkCaller;
+                    if (caller != null) {
+                        int wanted = f.sinkWanted;
+                        if (wanted == 0) {
+                            for (int j = 0; j < n; j++) {
+                                setR(caller, f.sinkDst + j, getR(f, a + j));
+                            }
+                            caller.top = f.sinkDst + n;
+                        } else {
+                            for (int j = 0; j < wanted; j++) {
+                                setR(caller, f.sinkDst + j,
+                                                j < n ? getR(f, a + j) : LuaNil.SINGLETON);
+                            }
+                        }
+                        return null;
+                    }
+                    Object[] results = new Object[n];
+                    for (int j = 0; j < n; j++) {
+                        results[j] = getR(f, a + j);
                     }
                     return results;
                 }
@@ -439,10 +490,14 @@ public final class LuaVm {
                 }
                 case TFORCALL: {
                     int c = Instruction.getC(i);
-                    Object[] callArgs = {getR(f, a + 1), getR(f, a + 2)};
-                    Object[] results = callValue(getR(f, a), callArgs);
-                    for (int j = 0; j < c; j++) {
-                        setR(f, a + 3 + j, j < results.length ? results[j] : LuaNil.SINGLETON);
+                    Object function = getR(f, a);
+                    if (function instanceof LuaFunction fn && fn.isVmClosure()) {
+                        executeInto(fn, f.regs, a + 1, 2, null, null, f, a + 3, c);
+                    } else {
+                        Object[] results = callFrom(function, f.regs, a + 1, 2, NO_NAME);
+                        for (int j = 0; j < c; j++) {
+                            setR(f, a + 3 + j, j < results.length ? results[j] : LuaNil.SINGLETON);
+                        }
                     }
                     break;
                 }
@@ -540,9 +595,14 @@ public final class LuaVm {
         if (r < 0 || r >= f.regs.length) {
             return LuaNil.SINGLETON;
         }
-        Object v = f.regs[r];
+        return slot(f.regs, r);
+    }
+
+    /** 读取寄存器/实参数组的第 {@code i} 个槽：解包 cell，null 一律视为 nil。 */
+    private static Object slot(Object[] regs, int i) {
+        Object v = regs[i];
         if (v instanceof LuaCell c) {
-            return c.value == null ? LuaNil.SINGLETON : c.value;
+            v = c.value;
         }
         return v == null ? LuaNil.SINGLETON : v;
     }
@@ -699,8 +759,10 @@ public final class LuaVm {
             long idx = (Long) ra + step;
             long limit = (Long) getR(f, a + 1);
             if ((0 < step) ? idx <= limit : limit <= idx) {
-                setR(f, a, idx);
-                setR(f, a + 3, idx);
+                // 控制变量与循环变量是同一个值，共享一次装箱。
+                Long boxed = idx;
+                setR(f, a, boxed);
+                setR(f, a + 3, boxed);
                 return true;
             }
         } else {
@@ -708,8 +770,9 @@ public final class LuaVm {
             double idx = (Double) ra + step;
             double limit = ((Number) getR(f, a + 1)).doubleValue();
             if ((0 < step) ? idx <= limit : limit <= idx) {
-                setR(f, a, idx);
-                setR(f, a + 3, idx);
+                Double boxed = idx;
+                setR(f, a, boxed);
+                setR(f, a + 3, boxed);
                 return true;
             }
         }
@@ -1142,6 +1205,21 @@ public final class LuaVm {
 
     private Object[] callValue(Object function, Object[] args) {
         return callValue(function, args, null, null);
+    }
+
+    /**
+     * 从调用者寄存器区间发起调用。VM 闭包直接以 {@code (regs, base, nargs)} 绑定形参，
+     * 只有内置函数或带 {@code __call} 的值才需要实体化实参数组。
+     */
+    private Object[] callFrom(Object function, Object[] regs, int base, int nargs, String[] nw) {
+        if (function instanceof LuaFunction fn && fn.isVmClosure()) {
+            return executeSlice(fn, regs, base, nargs, nw[0], nw[1]);
+        }
+        Object[] args = new Object[nargs];
+        for (int j = 0; j < nargs; j++) {
+            args[j] = slot(regs, base + j);
+        }
+        return callValue(function, args, nw[0], nw[1]);
     }
 
     private Object[] callValue(Object function, Object[] args, String name, String namewhat) {

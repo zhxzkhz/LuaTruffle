@@ -101,11 +101,12 @@ public final class VmFrame {
             return false;
         }
         int idx = n - 1;
+        Object stored = value == null ? LuaNil.SINGLETON : value;
         Object existing = regs[idx];
         if (existing instanceof LuaCell cell) {
-            cell.value = value;
+            cell.value = stored;
         } else {
-            regs[idx] = value;
+            regs[idx] = stored;
         }
         return true;
     }
@@ -137,8 +138,8 @@ public final class VmFrame {
 
     private static Object unwrap(Object value) {
         if (value instanceof LuaCell cell) {
-            return cell.value;
+            value = cell.value;
         }
-        return value;
+        return value == null ? LuaNil.SINGLETON : value;
     }
 }
