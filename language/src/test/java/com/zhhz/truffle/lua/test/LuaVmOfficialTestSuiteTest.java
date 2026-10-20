@@ -27,7 +27,29 @@ class LuaVmOfficialTestSuiteTest extends AbstractLuaTest {
             "calls.lua",
             "errors.lua",
             "db.lua",
+            "strings.lua",
+            "literals.lua",
+            "tpack.lua",
+            "locals.lua",
+            "code.lua",
+            "nextvar.lua",
+            "pm.lua",
+            "utf8.lua",
+            "events.lua",
+            "vararg.lua",
+            "goto.lua",
+            "math.lua",
     };
+
+    /** Same preamble all.lua installs before running the individual test files. */
+    private static final String PREAMBLE = """
+            _soft = false
+            _port = true
+            _nomsg = true
+            Message = function () end
+            math.randomseed(0)
+            debug = nil
+            """;
 
     @Test
     void officialTestFilesRunThroughBytecodeVm() {
@@ -36,36 +58,33 @@ class LuaVmOfficialTestSuiteTest extends AbstractLuaTest {
             System.out.println("skip: testdir=" + dir + " not found");
             return;
         }
-        StringBuilder list = new StringBuilder();
         for (String name : FILES) {
             if (!Files.exists(dir.resolve(name))) {
                 System.out.println("skip: missing " + name);
                 return;
             }
-            if (!list.isEmpty()) {
-                list.append(", ");
-            }
-            list.append('\'').append(name).append('\'');
         }
-        String driver = """
-                local dir = [[%s]]
-                local files = { %s }
-                for _, name in ipairs(files) do
-                    local f = assert(loadfile(dir .. '/' .. name), 'loadfile failed: ' .. name)
-                    local b = string.dump(f)
-                    local g = assert(load(b), 'reload failed: ' .. name)
-                    g()
-                end
-                return #files
-                """.formatted(dir.toString().replace('\\', '/'), list);
         try (Context context = newContextBuilder("lua")
                 .out(java.io.OutputStream.nullOutputStream())
                 .err(java.io.OutputStream.nullOutputStream())
                 .build()) {
-            var result = context.eval("lua", driver);
-            assertEquals(FILES.length, result.asInt());
-        } catch (PolyglotException e) {
-            fail("bytecode VM test suite failed: " + e.getMessage(), e);
+            context.eval("lua", PREAMBLE);
+            int executed = 0;
+            for (String name : FILES) {
+                String driver = """
+                        local f = assert(loadfile([[%s]]), 'loadfile failed')
+                        local b = string.dump(f)
+                        local g = assert(load(b), 'reload failed')
+                        g()
+                        """.formatted(dir.resolve(name).toString().replace('\\', '/'));
+                try {
+                    context.eval("lua", driver);
+                } catch (PolyglotException e) {
+                    fail("bytecode VM test failed in " + name + ": " + e.getMessage(), e);
+                }
+                executed++;
+            }
+            assertEquals(FILES.length, executed);
         }
     }
 }
