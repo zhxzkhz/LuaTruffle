@@ -536,4 +536,42 @@ public class LuaIntegrationTest extends AbstractLuaTest {
                 () -> eval("return json.encode(function() end)"));
         assertTrue(e.getMessage().contains("Cannot encode value of type 'function'"));
     }
+
+    @Test
+    public void testTailCallsThroughBytecodeVm() {
+        Value result = eval("""
+                local function body()
+                    local function sum(n, acc)
+                        if n == 0 then return acc end
+                        return sum(n - 1, acc + n)
+                    end
+                    local function multi(n)
+                        if n == 0 then return 1, 2, 3 end
+                        return multi(n - 1)
+                    end
+                    local function none() return end
+                    local function taily()
+                        local i = 0
+                        local function step()
+                            i = i + 1
+                            if i < 3 then return step() end
+                            return i
+                        end
+                        return step
+                    end
+                    local a = sum(100, 0)
+                    local b, c, d = multi(5)
+                    local s = taily()
+                    return a, b, c, d, s(), select('#', none())
+                end
+                local vm = assert(load(string.dump(body)))
+                return vm()
+                """);
+        assertEquals(5050L, result.getArrayElement(0).asLong());
+        assertEquals(1L, result.getArrayElement(1).asLong());
+        assertEquals(2L, result.getArrayElement(2).asLong());
+        assertEquals(3L, result.getArrayElement(3).asLong());
+        assertEquals(3L, result.getArrayElement(4).asLong());
+        assertEquals(0L, result.getArrayElement(5).asLong());
+    }
 }

@@ -442,6 +442,20 @@ public final class LuaVm {
                     int nargs = Math.max(b != 0 ? b - 1 : f.top - a - 1, 0);
                     Object function = getR(f, a);
                     String[] nw = callName(f.p, idx, a, function);
+                    if (function instanceof LuaFunction fn && fn.isVmClosure()) {
+                        if (f.p.sizep() > 0) {
+                            closeUpvals(f, 0);
+                        }
+                        if (f.sinkCaller != null) {
+                            // 尾调用直接延续当前帧的结果去向，无需再经中间寄存器。
+                            executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1],
+                                            f.sinkCaller, f.sinkDst, f.sinkWanted);
+                            return null;
+                        }
+                        // 以当前帧自身为落点，等价于把结果复制回 a.. 并更新 top。
+                        executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1], f, a, 0);
+                        break;
+                    }
                     Object[] results = callFrom(function, f.regs, a + 1, nargs, nw);
                     for (int j = 0; j < results.length; j++) {
                         setR(f, a + j, results[j]);
