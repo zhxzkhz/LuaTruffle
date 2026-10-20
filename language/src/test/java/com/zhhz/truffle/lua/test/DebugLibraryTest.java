@@ -262,6 +262,31 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void countHookFiresPerInstructionThroughVm() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local function measure(count)
+                        local fired = 0
+                        debug.sethook(function () fired = fired + 1 end, '', count)
+                        fired = 0
+                        for i = 1, 1000 do end
+                        debug.sethook()
+                        return fired
+                    end
+                    local vm = assert(load(string.dump(measure)))
+                    return vm(1), vm(4), vm(4000)
+                    """);
+            long once = result.getArrayElement(0).asLong();
+            long everyFour = result.getArrayElement(1).asLong();
+            long everyFourThousand = result.getArrayElement(2).asLong();
+            // 与 db.lua 的 count hook 断言一致：1000 次迭代约 1000 条指令。
+            assertTrue(once > 1000 && once < 1012, "count=1 fired " + once);
+            assertTrue(everyFour > 250 && everyFour < 255, "count=4 fired " + everyFour);
+            assertEquals(0L, everyFourThousand);
+        }
+    }
+
+    @Test
     void sethookClearsHookWithNil() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """
