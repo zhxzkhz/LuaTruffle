@@ -47,13 +47,18 @@ import com.zhhz.truffle.lua.vm.VmFrame;
  * 层级（level）语义遵循标准 Lua：level 1 表示调用 debug 函数的函数，
  * 内层（debug 内建自身的 BuiltinRootNode 帧）会被跳过。
  *
+ * <p>{@code sethook}/{@code gethook} 支持 {@code "line"}/{@code "call"}/{@code "return"}/
+ * {@code "count"} 事件（含 {@code "tail call"}），钩子按线程保存，AST 与字节码 VM 两种执行
+ * 方式都会触发；触发点见 {@link LuaLineHook}。
+ *
  * <p>限制（与宿主实现相关的取舍）：
  * <ul>
- *   <li>{@code sethook}/{@code gethook} 为占位实现（不触发钩子）。</li>
+ *   <li>C 函数帧没有 {@code func} 身份（{@code getinfo(..., 'f')} 返回 nil），
+ *       以 C 函数为键的调试代码（官方 db.lua 的部分自检）无法完全通过。</li>
+ *   <li>AST 的尾调用仍报告为调用者的 {@code "return"} + 被调者的 {@code "call"}，
+ *       尚未合并为 {@code "tail call"}；字节码 VM 已按参考实现报告。</li>
  *   <li>{@code getupvalue}/{@code setupvalue} 基于闭包的父帧命名槽位枚举，
  *       可能包含未被捕获的父函数局部变量（无精确的 upvalue 调试信息）。</li>
- *   <li>{@code name}/{@code namewhat}/{@code nparams}/{@code isvararg} 等
- *       依赖编译期调试信息的字段目前返回 nil/false。</li>
  * </ul>
  */
 public final class DebugLibrary {
