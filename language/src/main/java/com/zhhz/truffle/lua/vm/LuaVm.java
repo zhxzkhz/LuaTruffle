@@ -25,7 +25,9 @@ import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 
 /**
  * 移植自 {@code lvm.c} 的 Lua 5.3 字节码解释器。
@@ -49,6 +51,12 @@ public final class LuaVm {
     /** 当前正在解释的帧（用于错误位置信息）。进入 runFrame 时设置，退出时恢复。 */
     private Frame curFrame;
 
+    /**
+     * 按 Proto 复用已退出的帧（含寄存器数组），避免每次调用都分配 Object[] 并触发 GC。
+     * 同一个 LuaVm 实例内的递归/连续调用共享；退出时清空寄存器以丢弃悬挂的 LuaCell。
+     */
+    private final IdentityHashMap<Proto, ArrayDeque<Frame>> framePool = new IdentityHashMap<>();
+
     public LuaVm(LuaContext context) {
         this.context = context;
     }
@@ -59,8 +67,8 @@ public final class LuaVm {
 
     private static final class Frame {
         final Proto p;
-        final Object[] k;
-        final Object[] upvals;
+        Object[] k;
+        Object[] upvals;
         Object[] regs;
         Object[] varargs = NO_ARGS;
         int top;
@@ -133,7 +141,7 @@ public final class LuaVm {
             Proto p = function.getProto();
             Object[] upvals = function.getUpvalues();
             Object[] k = materializeConstants(p);
-            Frame f = new Frame(p, upvals, k);
+            Frame f = acquireFrame(p, upvals, k);
             f.sinkCaller = sinkCaller;
             f.sinkDst = sinkDst;
             f.sinkWanted = sinkWanted;
@@ -163,10 +171,40 @@ public final class LuaVm {
                 return runFrame(f);
             } finally {
                 stack.remove(stack.size() - 1);
+                releaseFrame(f);
             }
         } finally {
             context.exitLuaCall();
         }
+    }
+
+    private Frame acquireFrame(Proto p, Object[] upvals, Object[] k) {
+        ArrayDeque<Frame> pool = framePool.get(p);
+        Frame f = pool == null ? null : pool.pollLast();
+        if (f == null) {
+            return new Frame(p, upvals, k);
+        }
+        f.upvals = upvals;
+        f.k = k;
+        f.varargs = NO_ARGS;
+        f.top = p.maxstacksize;
+        f.pc = 0;
+        f.dbg = null;
+        f.sinkCaller = null;
+        f.sinkDst = 0;
+        f.sinkWanted = 0;
+        return f;
+    }
+
+    private void releaseFrame(Frame f) {
+        // 丢弃寄存器中的值（尤其是可能仍被闭包引用的 LuaCell），数组留给下一次复用。
+        Arrays.fill(f.regs, null);
+        f.k = null;
+        f.upvals = null;
+        f.varargs = NO_ARGS;
+        f.dbg = null;
+        f.sinkCaller = null;
+        framePool.computeIfAbsent(f.p, key -> new ArrayDeque<>()).addLast(f);
     }
 
     /**
