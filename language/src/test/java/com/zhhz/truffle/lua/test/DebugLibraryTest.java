@@ -563,6 +563,51 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void getinfoAndLocalsInspectSuspendedVmCoroutine() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local src = [==[
+                        local function f(x)
+                          local a = 1
+                          local l = coroutine.yield(debug.getinfo(1, 'l'))
+                          return a + x + l
+                        end
+                        return f
+                    ]==]
+                    local make = assert(load(string.dump(assert(load(src, 'vmdb'))), 'vmdb'))
+                    local co = coroutine.create(make())
+                    local ok, l = coroutine.resume(co, 10)
+                    local traceback = debug.traceback(co)
+                    local info = debug.getinfo(co, 1, 'Slf')
+                    local name, value = debug.getlocal(co, 1, 1)
+                    local missing = debug.getlocal(co, 1, 5)
+                    local setname = debug.setlocal(co, 1, 1, 30)
+                    local ok2, total = coroutine.resume(co, 100)
+                    return ok, l.currentline, traceback, info.what,
+                        info.currentline == l.currentline, type(info.func),
+                        debug.getinfo(co, 2) == nil, name, value, missing == nil,
+                        setname, ok2, total
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean(), "first resume ok");
+            long yieldLine = result.getArrayElement(1).asLong();
+            String traceback = result.getArrayElement(2).asString();
+            // 挂起协程的栈顶是 yield 的 C 帧，随后是协程自己的 VM 帧。
+            assertTrue(traceback.contains("[C]: in function 'coroutine.yield'"), traceback);
+            assertTrue(traceback.contains("vmdb"), traceback);
+            assertEquals("Lua", result.getArrayElement(3).asString());
+            assertTrue(result.getArrayElement(4).asBoolean(), "currentline matches the yield line: " + yieldLine);
+            assertEquals("function", result.getArrayElement(5).asString());
+            assertTrue(result.getArrayElement(6).asBoolean(), "level 2 is nil");
+            assertEquals("x", result.getArrayElement(7).asString());
+            assertEquals(10L, result.getArrayElement(8).asLong());
+            assertTrue(result.getArrayElement(9).asBoolean(), "out-of-range local is nil");
+            assertEquals("x", result.getArrayElement(10).asString());
+            assertTrue(result.getArrayElement(11).asBoolean(), "second resume ok");
+            assertEquals(131L, result.getArrayElement(12).asLong(), "setlocal changed x to 30");
+        }
+    }
+
+    @Test
     void tracebackMarksTailCallsAndHostFrame() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """

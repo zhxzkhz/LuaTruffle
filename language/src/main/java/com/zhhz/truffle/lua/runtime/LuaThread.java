@@ -34,6 +34,9 @@ public final class LuaThread extends LuaValue {
 
     private volatile State state = State.SUSPENDED;
 
+    /** 是否已经启动过（用于区分“尚未 resume”与“yield 挂起”）。 */
+    private volatile boolean started;
+
     /** 协程函数的 CallTarget */
     private final CallTarget callTarget;
     /** 传递给协程函数的 parentFrame（第一个参数） */
@@ -129,6 +132,11 @@ public final class LuaThread extends LuaValue {
         return debugStacks.astDepth;
     }
 
+    /** 该线程当前的字节码 VM 逻辑帧（自外层到内层）。 */
+    public java.util.List<com.zhhz.truffle.lua.vm.VmFrame> vmFrames() {
+        return debugStacks.vmFrames;
+    }
+
     public com.oracle.truffle.api.nodes.RootNode astFrameRoot(int index) {
         return debugStacks.astRoots[index];
     }
@@ -212,6 +220,7 @@ public final class LuaThread extends LuaValue {
     }
 
     public State getState() { return state; }
+    public boolean isStarted() { return started; }
     public boolean isMain() { return main; }
     public LuaFunction getFunction() { return function; }
 
@@ -318,6 +327,7 @@ public final class LuaThread extends LuaValue {
         if (env == null) {
             throw new RuntimeException("cannot create coroutine thread: env is null");
         }
+        started = true;
         Runnable body = () -> {
             Object prev = null;
             if (truffleContext != null) {

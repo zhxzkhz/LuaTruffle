@@ -59,8 +59,9 @@ import com.zhhz.truffle.lua.vm.VmFrame;
  *       但协程栈没有该帧。</li>
  *   <li>{@code xpcall} 的消息处理函数在 Truffle 异常展开之后才执行，因此处理函数内
  *       {@code debug.traceback} 看不到出错点的 {@code [C]: in function 'error'} 帧。</li>
- *   <li>{@code debug.getinfo(thread, ...)}/{@code getlocal(thread, ...)} 暂不切换到目标
- *       协程的栈，按当前线程处理。</li>
+ *   <li>{@code debug.getinfo(thread, ...)}/{@code getlocal(thread, ...)}/
+ *       {@code traceback(thread, ...)} 对挂起的字节码 VM 协程可用；AST 协程的帧属于
+ *       另一 Java 线程，Truffle 不提供跨线程枚举，故只能返回 nil。</li>
  *   <li>{@code getupvalue}/{@code setupvalue} 基于闭包的父帧命名槽位枚举，
  *       可能包含未被捕获的父函数局部变量（无精确的 upvalue 调试信息）。</li>
  * </ul>
@@ -133,17 +134,24 @@ public final class DebugLibrary {
         if (arguments.length == 0) {
             throw LuaException.create("bad argument #1 to 'getinfo' (value expected)", null);
         }
+        // Lua 5.3: debug.getinfo ([thread,] f [, what])
+        int base = 0;
+        LuaThread targetThread = null;
+        if (arguments[0] instanceof LuaThread thread) {
+            base = 1;
+            targetThread = thread;
+        }
         String what = "flnSrtu";
-        if (arguments.length > 1 && stringValue(arguments[1]) != null) {
-            what = stringValue(arguments[1]);
+        if (arguments.length > base + 1 && stringValue(arguments[base + 1]) != null) {
+            what = stringValue(arguments[base + 1]);
         }
 
         LuaContext context = context();
-        Object target = arguments[0];
+        Object target = arguments.length > base ? arguments[base] : null;
 
         if (target instanceof LuaNumber luaNumber) {
             long level = (long) luaNumber.getValue();
-            LuaFrameInfo info = frameAtLevel(level);
+            LuaFrameInfo info = frameFor(targetThread, level);
             if (info == null) {
                 return LuaNil.SINGLETON;
             }
@@ -151,7 +159,7 @@ public final class DebugLibrary {
         }
         if (target instanceof Number javaNumber) {
             long level = javaNumber.longValue();
-            LuaFrameInfo info = frameAtLevel(level);
+            LuaFrameInfo info = frameFor(targetThread, level);
             if (info == null) {
                 return LuaNil.SINGLETON;
             }
@@ -181,9 +189,10 @@ public final class DebugLibrary {
         // Lua 5.3: debug.getlocal ([thread,] f, var)
         // - thread 可选；f 可以是函数（返回参数名）或层级数（返回局部变量）
         int base = 0;
-        if (arguments.length > 0 && arguments[0] instanceof LuaThread) {
-            // TODO: 真正切到指定线程的栈；目前 main 线程下与默认一致
+        LuaThread targetThread = null;
+        if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
             base = 1;
+            targetThread = thread;
         }
         Object first = arguments.length > base ? arguments[base] : null;
         if (first instanceof LuaFunction func) {
@@ -193,9 +202,10 @@ public final class DebugLibrary {
         }
         long level = integerArgument(arguments, base, "getlocal");
         long n = integerArgument(arguments, base + 1, "getlocal");
-        LuaFrameInfo info = frameAtLevel(level);
+        LuaFrameInfo info = frameFor(targetThread, level);
         if (info == null) {
-            throw LuaException.create("level out of range", null);
+            throw LuaException.create("bad argument #" + (base + 1)
+                    + " to 'debug.getlocal' (level out of range)", null);
         }
         // 字节码 VM 帧：局部变量名/值来自 Proto.locvars 与寄存器
         if (info.vmFrame() != null) {
@@ -239,12 +249,20 @@ public final class DebugLibrary {
     @LuaBuiltin(name = "setlocal")
     @TruffleBoundary
     public static Object setLocal(Object[] arguments) {
-        long level = integerArgument(arguments, 0, "setlocal");
-        long n = integerArgument(arguments, 1, "setlocal");
-        Object value = arguments.length > 2 ? arguments[2] : LuaNil.SINGLETON;
-        LuaFrameInfo info = frameAtLevel(level);
+        // Lua 5.3: debug.setlocal ([thread,] level, var, value)
+        int base = 0;
+        LuaThread targetThread = null;
+        if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
+            base = 1;
+            targetThread = thread;
+        }
+        long level = integerArgument(arguments, base, "setlocal");
+        long n = integerArgument(arguments, base + 1, "setlocal");
+        Object value = arguments.length > base + 2 ? arguments[base + 2] : LuaNil.SINGLETON;
+        LuaFrameInfo info = frameFor(targetThread, level);
         if (info == null) {
-            throw LuaException.create("level out of range", null);
+            throw LuaException.create("bad argument #" + (base + 1)
+                    + " to 'debug.setlocal' (level out of range)", null);
         }
         if (info.vmFrame() != null) {
             VmFrame vf = info.vmFrame();
@@ -595,10 +613,17 @@ public final class DebugLibrary {
     @LuaBuiltin(name = "traceback")
     @TruffleBoundary
     public static Object traceback(Object[] arguments) {
-        Object message = arguments.length > 0 ? arguments[0] : LuaNil.SINGLETON;
+        // Lua 5.3: debug.traceback ([thread,] [message [, level]])
+        int base = 0;
+        LuaThread targetThread = null;
+        if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
+            base = 1;
+            targetThread = thread;
+        }
+        Object message = arguments.length > base ? arguments[base] : LuaNil.SINGLETON;
         long level = 1;
-        if (arguments.length > 1) {
-            level = integerArgument(arguments, 1, "traceback");
+        if (arguments.length > base + 1) {
+            level = integerArgument(arguments, base + 1, "traceback");
         }
 
         // 标准行为：非字符串消息时原样返回（pcall 的处理器依赖这一点）
@@ -609,10 +634,35 @@ public final class DebugLibrary {
                 builder.append(messageString.toJavaStringUncached()).append('\n');
             }
             builder.append("stack traceback:");
-            appendFrames(builder, level);
+            if (targetThread != null && targetThread != context().currentThread()) {
+                appendThreadFrames(builder, targetThread, level);
+            } else {
+                appendFrames(builder, level);
+            }
             return LuaContext.toTruffleString(builder.toString());
         }
         return message;
+    }
+
+    /**
+     * 渲染另一个（挂起）协程的栈。挂起于 yield 时，参考实现的栈顶是
+     * {@code [C]: in function 'coroutine.yield'}，随后是协程自己的 VM 帧。
+     */
+    private static void appendThreadFrames(StringBuilder builder, LuaThread thread, long startLevel) {
+        long[] current = {0};
+        if (thread.isStarted() && thread.getState() == LuaThread.State.SUSPENDED) {
+            current[0]++;
+            if (current[0] >= startLevel) {
+                builder.append("\n\t[C]: in function 'coroutine.yield'");
+            }
+        }
+        java.util.List<VmFrame> vmFrames = thread.vmFrames();
+        for (int i = vmFrames.size() - 1; i >= 0; i--) {
+            current[0]++;
+            if (current[0] >= startLevel) {
+                appendVmFrame(builder, vmFrames.get(i), current[0], false);
+            }
+        }
     }
 
     // =================================================================================
@@ -1262,6 +1312,28 @@ public final class DebugLibrary {
         return result[0];
     }
 
+    /**
+     * 解析 getinfo/getlocal/setlocal 的目标帧：未指定线程或就是当前线程时走实时栈；
+     * 指定了另一个（挂起）协程时读取该线程自己的 VM 逻辑帧。
+     * <p>
+     * 限制：跨线程目前只支持字节码 VM 帧。AST 帧是另一 Java 线程上的 Truffle 帧，
+     * Truffle 不提供跨线程枚举/物化接口，故返回 null（参考实现可以做到）。
+     */
+    private static LuaFrameInfo frameFor(LuaThread thread, long level) {
+        if (level <= 0) {
+            return null;
+        }
+        if (thread == null || thread == context().currentThread()) {
+            return frameAtLevel(level);
+        }
+        java.util.List<VmFrame> vmFrames = thread.vmFrames();
+        int index = vmFrames.size() - (int) level;
+        if (index < 0 || index >= vmFrames.size()) {
+            return null;
+        }
+        return LuaFrameInfo.forVm(vmFrames.get(index), null);
+    }
+
     /** 该 Truffle 帧是否为字节码 VM 的容器帧（{@code LuaVmRootNode}）。 */
     private static boolean isVmRootFrame(FrameInstance frameInstance) {
         CallTarget target = frameInstance.getCallTarget();
@@ -1459,8 +1531,12 @@ public final class DebugLibrary {
             builder.append(": in hook");
         } else if ("main chunk".equals(info.functionName())) {
             builder.append(": in main chunk");
+        } else if (vf.name() != null) {
+            builder.append(": in function '").append(vf.name()).append("'");
         } else {
-            builder.append(": in function '").append(info.functionName()).append("'");
+            // 无名帧：参考实现输出 "in function <src:linedefined>"。
+            builder.append(": in function <").append(info.shortSource()).append(":")
+                    .append(vf.proto().linedefined).append(">");
         }
         if (vf.tailEntry()) {
             builder.append("\n\t(...tail calls...)");
