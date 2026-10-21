@@ -164,7 +164,7 @@ public final class MathLibrary {
         Object value = args[0];
         if (value instanceof TruffleString || value instanceof com.zhhz.truffle.lua.runtime.LuaString) {
             // 与标准 Lua 的 lua_tointegerx 一致：数字字符串也可转换
-            value = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode.create().execute(value);
+            value = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNodeGen.getUncached().execute(value);
             if (value == null) return LuaNil.SINGLETON;
         }
         if (value instanceof Long) return value;
@@ -208,6 +208,10 @@ public final class MathLibrary {
         if (index >= args.length) throw argumentError(index + 1, function, "number expected, got no value");
         Object value = args[index];
         if (value instanceof Long || value instanceof Double) return value;
+        // 宿主 interop 的装箱数字（Integer/Float 等）与数字字符串都需要归一化，
+        // 与算术运算保持一致；否则会出现 "number expected, got number"。
+        Object converted = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNodeGen.getUncached().execute(value);
+        if (converted != null) return converted;
         throw argumentError(index + 1, function, "number expected, got "
                 + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }

@@ -3,7 +3,7 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
-import com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode;
+import com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNodeGen;
 import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaString;
@@ -193,8 +193,15 @@ public final class Bit32Library {
         if (value instanceof Double doubleValue) {
             return toInteger(doubleValue, index, function);
         }
+        // 宿主 interop 的装箱数字（Integer/Float 等），与算术运算保持一致。
+        if (value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof Float floatValue) {
+            return toInteger(floatValue.doubleValue(), index, function);
+        }
         if (value instanceof TruffleString || value instanceof LuaString) {
-            Object number = LuaCoerceToNumberNode.create().execute(value);
+            Object number = LuaCoerceToNumberNodeGen.getUncached().execute(value);
             if (number instanceof Long longValue) {
                 return longValue;
             }
