@@ -43,6 +43,11 @@ class LuaVmOfficialTestSuiteTest extends AbstractLuaTest {
             "attrib.lua",
             "sort.lua",
             "gc.lua",
+            "main.lua",
+            "api.lua",
+            "verybig.lua",
+            "files.lua",
+            "errors_nodump.lua",
     };
 
     /** Same preamble all.lua installs before running the individual test files. */
