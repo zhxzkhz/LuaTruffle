@@ -2,6 +2,7 @@ package com.zhhz.truffle.lua.builtins.pack;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -32,6 +33,7 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
     @Child private SearchPathBuiltinNode searchPathNode = SearchPathBuiltinNodeGen.create();
 
     @Specialization
+    @TruffleBoundary
     public Object doSearch(Object[] args) {
         if (args.length == 0) {
             return toTruffleString("no module name provided");

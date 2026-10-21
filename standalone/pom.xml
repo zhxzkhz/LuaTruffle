@@ -64,6 +64,28 @@
     </build>
     <profiles>
         <profile>
+            <id>native-image-windows</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                </os>
+            </activation>
+            <properties>
+                <nativeImageExecutable>${env.JAVA_HOME}/bin/native-image.cmd</nativeImageExecutable>
+            </properties>
+        </profile>
+        <profile>
+            <id>native-image-unix</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                </os>
+            </activation>
+            <properties>
+                <nativeImageExecutable>${env.JAVA_HOME}/bin/native-image</nativeImageExecutable>
+            </properties>
+        </profile>
+        <profile>
             <id>native</id>
             <build>
                 <plugins>
@@ -78,11 +100,11 @@
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>
-                                        ${env.JAVA_HOME}/bin/native-image</executable>
+                                    <executable>${nativeImageExecutable}</executable>
                                     <commandlineArgs>
+                                        
                                         --initialize-at-build-time=com.zhhz.truffle.lua,org.antlr.v4
-                                        -p %classpath
+  -p %classpath
                                         -H:+ReportExceptionStackTraces
                                         -H:MaxRuntimeCompileMethods=250
                                         -m ${launcherClass}
