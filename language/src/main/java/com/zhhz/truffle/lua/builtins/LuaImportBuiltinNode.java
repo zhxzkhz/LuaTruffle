@@ -65,8 +65,13 @@ public abstract class LuaImportBuiltinNode extends LuaBuiltinNode {
             return cached;
         }
         Object symbol = importSymbolBoundary(name, context, arrays);
-        context.cacheImportedSymbol(name, symbol);
+        cacheImportedSymbolBoundary(context, name, symbol);
         return symbol;
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static void cacheImportedSymbolBoundary(LuaContext context, String name, Object symbol) {
+        context.cacheImportedSymbol(name, symbol);
     }
 
     /** 查找顺序：通配符包导入；宿主符号（Java 类）优先，其次 polyglot bindings；均未命中则抛错。 */

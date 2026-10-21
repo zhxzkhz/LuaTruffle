@@ -158,11 +158,7 @@ public final class Bit32Library {
 
     private static long rotate(long r, long d) {
         int i = (int) (d & (NBITS - 1)); // i = d % NBITS
-        r = trim(r);
-        if (i != 0) { // 避免 i == 0 时的未定义移位
-            r = (r << i) | (r >>> (NBITS - i));
-        }
-        return trim(r);
+        return Integer.toUnsignedLong(Integer.rotateLeft((int) trim(r), i));
     }
 
     private static int[] fieldArgs(Object[] args, int fIndex, String function) {

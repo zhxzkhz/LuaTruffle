@@ -142,6 +142,7 @@ public final class LuaLineHook {
     }
 
     /** 内部：执行钩子函数，统一处理 interop 异常与重入保护。 */
+    @TruffleBoundary
     private static void invokeHook(LuaContext context, Object hook, TruffleString event, Long lineArg) {
         context.setInHook(true);
         try {

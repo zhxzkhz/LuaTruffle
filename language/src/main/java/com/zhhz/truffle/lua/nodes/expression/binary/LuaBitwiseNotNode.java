@@ -51,11 +51,16 @@ public abstract class LuaBitwiseNotNode extends LuaExpressionNode {
         boolean numeric = operand instanceof Long || operand instanceof Double
                 || operand instanceof com.oracle.truffle.api.strings.TruffleString
                 || operand instanceof String;
+        throw bitwiseNotError(operand, numeric);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private RuntimeException bitwiseNotError(Object operand, boolean numeric) {
         if (numeric) {
-            throw LuaException.runtimeError("number" + getOperandNode().getErrorSuffix()
+            return LuaException.runtimeError("number" + getOperandNode().getErrorSuffix()
                     + " has no integer representation", this);
         }
-        throw LuaException.runtimeError("attempt to perform bitwise operation on a "
+        return LuaException.runtimeError("attempt to perform bitwise operation on a "
                 + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(operand) + " value"
                 + getOperandNode().getErrorSuffix(), this);
     }

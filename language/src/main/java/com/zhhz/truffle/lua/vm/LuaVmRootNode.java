@@ -29,7 +29,7 @@ public final class LuaVmRootNode extends RootNode {
         System.arraycopy(args, 1, userArguments, 0, userArguments.length);
 
         LuaContext context = LuaContext.get(this);
-        LuaVm vm = new LuaVm(context);
+        LuaVm vm = createVm(context);
         context.enterVmContainer(vm);
         Object[] results;
         try {
@@ -45,5 +45,10 @@ public final class LuaVmRootNode extends RootNode {
             return results[0];
         }
         return new LuaMultiValue(results);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static LuaVm createVm(LuaContext context) {
+        return new LuaVm(context);
     }
 }

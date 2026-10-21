@@ -235,7 +235,7 @@ public final class TableLibrary {
                 try {
                     result = InteropLibrary.getUncached().execute(lenMeta, table, table);
                 } catch (Exception e) {
-                    throw LuaException.create("error in metamethod '__len': " + e.getMessage(), null);
+                    throw LuaException.create("error in metamethod '__len': " + LuaException.messageOf(e), null);
                 }
                 Object value = LuaMultiValue.firstValue(result);
                 if (value instanceof Long longValue) {

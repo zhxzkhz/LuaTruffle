@@ -108,6 +108,11 @@ public final class LuaBlockNode extends LuaStatementNode {
         executeVoidSlowPath(frame);
     }
 
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private Integer labelTarget(TruffleString label) {
+        return labelTargets.get(label);
+    }
+
     private void executeVoidSlowPath(VirtualFrame frame) {
         try {
             int index = 0;
@@ -116,7 +121,7 @@ public final class LuaBlockNode extends LuaStatementNode {
                 index++;
             }
         } catch (LuaGotoException e) {
-            Integer target = e.targetsBlock(blockPath) ? labelTargets.get(e.getLabel()) : null;
+            Integer target = e.targetsBlock(blockPath) ? labelTarget(e.getLabel()) : null;
             if (target == null) {
                 close(frame, LuaNil.SINGLETON);
                 throw e;
@@ -128,7 +133,7 @@ public final class LuaBlockNode extends LuaStatementNode {
                     statements[index].executeVoid(frame);
                     index++;
                 } catch (LuaGotoException nested) {
-                    Integer nestedTarget = nested.targetsBlock(blockPath) ? labelTargets.get(nested.getLabel()) : null;
+                    Integer nestedTarget = nested.targetsBlock(blockPath) ? labelTarget(nested.getLabel()) : null;
                     if (nestedTarget == null) {
                         close(frame, LuaNil.SINGLETON);
                         throw nested;
@@ -150,6 +155,7 @@ public final class LuaBlockNode extends LuaStatementNode {
         }
     }
 
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private static Object closeErrorObject(Throwable throwable) {
         if (throwable instanceof ControlFlowException) {
             return LuaNil.SINGLETON;

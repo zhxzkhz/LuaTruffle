@@ -1,5 +1,6 @@
 package com.zhhz.truffle.lua.builtins;
 
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
@@ -96,6 +97,7 @@ public final class LuaFileHandle extends LuaValue {
         }
     }
 
+    @TruffleBoundary
     int read() throws IOException {
         ensureOpen();
         if (!readable) throw new IOException("Bad file descriptor");
@@ -175,6 +177,7 @@ public final class LuaFileHandle extends LuaValue {
         return position;
     }
 
+    @TruffleBoundary
     Object closeHandle() throws IOException, InterruptedException {
         if (closed) throw new IOException("attempt to use a closed file");
         if (standard) return false;

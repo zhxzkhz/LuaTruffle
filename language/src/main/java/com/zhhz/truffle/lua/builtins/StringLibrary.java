@@ -340,7 +340,7 @@ public final class StringLibrary {
             } catch (LuaException exception) {
                 throw exception;
             } catch (Exception exception) {
-                throw LuaException.create("error in string.gsub replacement function\n" + exception.getMessage(), null);
+                throw LuaException.create("error in string.gsub replacement function\n" + LuaException.messageOf(exception), null);
             } finally {
                 if (context != null) {
                     context.exitNonYieldable();
@@ -463,7 +463,7 @@ public final class StringLibrary {
         } catch (LuaException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw LuaException.create("invalid format: " + exception.getMessage(), null);
+            throw LuaException.create("invalid format: " + LuaException.messageOf(exception), null);
         }
     }
 

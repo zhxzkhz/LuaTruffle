@@ -128,10 +128,10 @@ public abstract class LuaPathSearcherNode extends LuaBuiltinNode {
         } catch (SecurityException e) {
             return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\tpermission denied");
         } catch (IOException e) {
-            return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\t" + e.getMessage());
+            return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\t" + LuaException.messageOf(e));
         } catch (Exception e) {
             // 语法错误等
-            return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\t" + e.getMessage());
+            return toTruffleString("\n\terror loading module '" + moduleName + "' from file '" + filePath + "':\n\t" + LuaException.messageOf(e));
         }
     }
 

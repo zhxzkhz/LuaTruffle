@@ -110,6 +110,7 @@ public abstract class LuaCoerceToNumberNode extends Node {
      * 解析一个完整的 Lua 数字字符串（等价于 C 的 {@code lua_stringtonumber}）：
      * 成功返回 {@link Long} 或 {@link Double}，失败返回 {@code null}。
      */
+    @TruffleBoundary
     public static Object parseLuaNumber(String value) {
         int start = 0;
         int end = value.length();

@@ -122,7 +122,7 @@ public abstract class LuaBinaryNode extends LuaExpressionNode {
             try {
                 return Double.parseDouble(((TruffleString) value).toJavaStringUncached());
             } catch (NumberFormatException e) {
-                throw new RuntimeException(e.getMessage());
+                throw new RuntimeException(LuaException.messageOf(e));
             }
         }
         throw new RuntimeException("attempt to perform arithmetic on a " + getTypeName(value) + " value");

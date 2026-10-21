@@ -40,5 +40,6 @@
  */
 open module org.graalvm.lua.launcher {
 	requires org.graalvm.polyglot;
+	requires static org.graalvm.truffle;
 	exports com.zhhz.truffle.lua.launcher;
 }

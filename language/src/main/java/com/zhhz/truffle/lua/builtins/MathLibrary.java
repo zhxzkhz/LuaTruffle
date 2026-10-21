@@ -11,9 +11,19 @@ import java.util.Random;
 /** Implementation of Lua 5.3's math standard library. */
 public final class MathLibrary {
     private static final double LONG_UPPER_BOUND = 0x1.0p63;
-    private static final Random RANDOM = new Random();
+    private static Random random;
 
     private MathLibrary() {
+    }
+
+    @TruffleBoundary
+    private static Random random() {
+        Random value = random;
+        if (value == null) {
+            value = new Random();
+            random = value;
+        }
+        return value;
     }
 
     @LuaBuiltin(name = "abs")
@@ -102,7 +112,7 @@ public final class MathLibrary {
             throw LuaException.create("wrong number of arguments", null);
         }
         if (args.length == 0) {
-            return RANDOM.nextDouble();
+            return random().nextDouble();
         }
         long lower = 1;
         long upper = integer(args, 0, "random");
@@ -117,15 +127,15 @@ public final class MathLibrary {
             throw argumentError(1, "random", "interval too large");
         }
         if (lower == Long.MIN_VALUE && upper == Long.MAX_VALUE) {
-            return RANDOM.nextLong();
+            return random().nextLong();
         }
         long range = upper - lower + 1;
         if (range > 0) {
-            return lower + RANDOM.nextLong(range);
+            return lower + random().nextLong(range);
         }
         long result;
         do {
-            result = RANDOM.nextLong();
+            result = random().nextLong();
         } while (result < lower || result > upper);
         return result;
     }
@@ -133,7 +143,7 @@ public final class MathLibrary {
     @LuaBuiltin(name = "randomseed")
     @TruffleBoundary
     public static Object randomseed(Object[] args) {
-        RANDOM.setSeed(integer(args, 0, "randomseed"));
+        random().setSeed(integer(args, 0, "randomseed"));
         return LuaNil.SINGLETON;
     }
 

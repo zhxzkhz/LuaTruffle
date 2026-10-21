@@ -42,7 +42,7 @@ public final class LuaCloseSlotNode extends LuaStatementNode {
 
         Object closeFunction = findCloseMetamethod(value);
         if (!(closeFunction instanceof LuaFunction)) {
-            throw LuaException.create("variable '" + variableName.toJavaStringUncached() + "' got a non-closable value", this);
+            throw nonClosableError();
         }
 
         try {
@@ -52,8 +52,19 @@ public final class LuaCloseSlotNode extends LuaStatementNode {
         } catch (LuaException e) {
             throw e;
         } catch (UnsupportedTypeException | ArityException | UnsupportedMessageException e) {
-            throw LuaException.create("error closing variable '" + variableName.toJavaStringUncached() + "': " + e.getMessage(), this);
+            throw closeError(e);
         }
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private RuntimeException nonClosableError() {
+        return LuaException.create("variable '" + variableName.toJavaStringUncached() + "' got a non-closable value", this);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private RuntimeException closeError(Exception cause) {
+        return LuaException.create("error closing variable '" + variableName.toJavaStringUncached() + "': "
+                + LuaException.messageOf(cause), this);
     }
 
     private Object readSlot(VirtualFrame frame) {

@@ -289,6 +289,7 @@ public final class LuaMain {
         return windows ? script.toString().replace('\\', '/') : script.toString();
     }
 
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private static int executeSource(Source source, String[] arguments, boolean portableTests,
                                      List<String> evalStatements, List<String> loadModules,
                                      boolean interactive, String resourcesPath, boolean noScript,

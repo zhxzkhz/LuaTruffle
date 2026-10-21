@@ -93,6 +93,28 @@ public final class LuaException extends AbstractTruffleException {
         return context != null && context.hasErrorHandler();
     }
 
+    /**
+     * 读取任意异常的消息。在边界方法里做虚调用，避免 {@code Throwable.getMessage()}
+     * 的各实现（例如 {@code IllegalFormatConversionException} 内部的 {@code String.format}）
+     * 被 Native Image 判定为运行期编译可达。
+     */
+    @TruffleBoundary
+    public static String messageOf(Throwable throwable) {
+        return throwable == null ? null : throwable.getMessage();
+    }
+
+    /** 同 {@link #messageOf(Throwable)}，用于 {@code toString()} 这类虚调用。 */
+    @TruffleBoundary
+    public static String descriptionOf(Throwable throwable) {
+        return throwable == null ? "null" : throwable.toString();
+    }
+
+    /** 宿主对象的简单类名。反射相关的 {@code Class} 内部实现不能在运行期编译。 */
+    @TruffleBoundary
+    public static String simpleNameOf(Object value) {
+        return value == null ? "null" : value.getClass().getSimpleName();
+    }
+
     private static String displayOf(Object errorObject) {
         if (errorObject instanceof String string) {
             return string;

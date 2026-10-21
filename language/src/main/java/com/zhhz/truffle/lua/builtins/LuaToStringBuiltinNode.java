@@ -41,7 +41,7 @@ public abstract class LuaToStringBuiltinNode extends LuaBuiltinNode {
                     Object result = InteropLibrary.getUncached().execute(metamethod, value);
                     return LuaMultiValue.firstValue(result);
                 } catch (Exception exception) {
-                    throw LuaException.create("error in __tostring metamethod: " + exception.getMessage(), this);
+                    throw LuaException.create("error in __tostring metamethod: " + LuaException.messageOf(exception), this);
                 }
             }
         }

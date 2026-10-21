@@ -27,17 +27,49 @@ final class LuaStringSupport {
             return TruffleString.CopyToByteArrayNode.getUncached().execute(string.getValue(), LuaLanguage.STRING_ENCODING);
         }
         if (value instanceof String string) {
-            return string.getBytes(StandardCharsets.UTF_8);
+            return utf8Bytes(string);
         }
         if (value instanceof Long number) {
-            return Long.toString(number).getBytes(StandardCharsets.US_ASCII);
+            return asciiBytes(Long.toString(number));
         }
         if (value instanceof Double number) {
-            String text = number == number.longValue() ? Long.toString(number.longValue()) : Double.toString(number);
-            return text.getBytes(StandardCharsets.US_ASCII);
+            return asciiBytes(doubleText(number));
         }
-        throw argumentError(function, argument, "string expected, got "
+        throw stringExpectedError(function, argument, value);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static RuntimeException stringExpectedError(String function, int argument, Object value) {
+        return argumentError(function, argument, "string expected, got "
                 + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
+    }
+
+    /**
+     * 宿主 {@code String} 转 UTF-8 字节。放在边界里，避免 {@code String.getBytes} 内部的
+     * {@code CharsetEncoder}/{@code Throwable} 虚调用把 JDK 实现拉进运行期编译范围。
+     */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static byte[] utf8Bytes(String text) {
+        return text.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /** {@code Double.toString} 在 Native Image 中会牵出资源包/线程创建，放在边界里。 */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static String doubleText(double number) {
+        return number == (long) number ? Long.toString((long) number) : Double.toString(number);
+    }
+
+    /**
+     * 数字转字符串后的字节化。数字只含 ASCII 字符，直接截断 char 即可，
+     * 避免 {@code String.getBytes(US_ASCII)} 在 Native Image 中引入 CharsetEncoder
+     * 的运行期编译依赖。
+     */
+    private static byte[] asciiBytes(String text) {
+        byte[] bytes = new byte[text.length()];
+        for (int i = 0; i < text.length(); i++) {
+            bytes[i] = (byte) text.charAt(i);
+        }
+        return bytes;
     }
 
     static RuntimeException argumentError(String function, int arg, String message) {

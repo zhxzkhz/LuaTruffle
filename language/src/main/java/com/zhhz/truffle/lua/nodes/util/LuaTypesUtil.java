@@ -63,6 +63,7 @@ public final class LuaTypesUtil {
      * 同类型为 {@code attempt to compare two <type> values}，
      * 否则为 {@code attempt to compare <t1> with <t2>}。
      */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     public static String orderErrorMessage(Object first, Object second) {
         String t1 = getTypeName(first);
         String t2 = getTypeName(second);

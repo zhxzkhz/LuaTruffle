@@ -201,8 +201,20 @@ public abstract class LuaReadLocalVariableNode extends LuaExpressionNode {
         return name instanceof TruffleString ts ? ts : null;
     }
 
+    private String errorSuffix;
+
     @Override
     public String getErrorSuffix() {
+        String suffix = errorSuffix;
+        if (suffix == null) {
+            suffix = computeErrorSuffix();
+            errorSuffix = suffix;
+        }
+        return suffix;
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private String computeErrorSuffix() {
         TruffleString name = getUnresolvedVariableName();
         return name == null ? "" : " (local '" + name.toJavaStringUncached() + "')";
     }

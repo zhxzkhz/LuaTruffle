@@ -47,7 +47,7 @@ public abstract class GenericBuiltinNode extends LuaBuiltinNode {
     }
 
     RuntimeException invalidZeroArgument(Exception e) {
-        return LuaException.create("Error executing builtin: " + getTargetMethod().getName() + "\n" + e.getMessage(), this);
+        return LuaException.create("Error executing builtin: " + getTargetMethod().getName() + "\n" + LuaException.messageOf(e), this);
     }
 
 }

@@ -47,7 +47,7 @@ public abstract class LuaLengthNode extends LuaExpressionNode {
                     Object result = InteropLibrary.getUncached().execute(lenMeta, operand, operand);
                     return LuaMultiValue.firstValue(result);
                 } catch (Exception e) {
-                    throw LuaException.create("error in metamethod '__len': " + e.getMessage(), this);
+                    throw LuaException.create("error in metamethod '__len': " + LuaException.messageOf(e), this);
                 }
             }
         }

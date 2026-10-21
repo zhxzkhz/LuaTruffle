@@ -205,7 +205,7 @@ public final class LuaMain {
                             Class<?> interrupt = Class.forName("com.zhhz.truffle.lua.runtime.LuaInterrupt");
                             interrupt.getMethod("request").invoke(null);
                         } catch (ReflectiveOperationException e) {
-                            System.err.println("cannot request interrupt: " + e.getMessage());
+                            System.err.println("cannot request interrupt: " + LuaException.messageOf(e));
                         }
                         return;
                     }
@@ -330,7 +330,7 @@ public final class LuaMain {
                 //.allowCreateThread(true)
                 .build();
         } catch (IllegalArgumentException e) {
-            err.println(e.getMessage());
+            err.println(LuaException.messageOf(e));
             return 1;
         }
 
@@ -380,7 +380,7 @@ public final class LuaMain {
                             System.out.println("返回值：" + Value.asValue(result));
                         }
                     } catch (IOException ioException) {
-                        err.println(ioException.getMessage());
+                        err.println(LuaException.messageOf(ioException));
                         return 1;
                     }
                 } else {
@@ -419,7 +419,7 @@ public final class LuaMain {
         // 标准 lua CLI 只打印 "progname: message"：位置信息（src:line:）已包含在
         // 消息内（error() 为字符串消息添加；非字符串对象无位置）。
         // 客栈回溯来自 polyglot 异常的 guest 栈。
-        String message = e.getMessage();
+        String message = LuaException.messageOf(e);
         if (message == null || message.isBlank()) {
             message = e.isSyntaxError() ? "syntax error" : "unknown Lua error";
         }
@@ -604,7 +604,7 @@ public final class LuaMain {
      *    （例如 "function f ( x ) local" 在 'local' 之后报错，即 col 已越过行尾）
      */
     private static boolean isIncompleteChunk(String chunk, PolyglotException e) {
-        String msg = e.getMessage();
+        String msg = LuaException.messageOf(e);
         if (msg == null) return false;
         if (msg.contains("<EOF>") || msg.contains("expected") || msg.contains("unfinished")
             || msg.contains("incomplete") || msg.contains("'end'")

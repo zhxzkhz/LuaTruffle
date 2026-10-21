@@ -10,6 +10,7 @@ import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.zhhz.truffle.lua.LuaException;
 import java.util.concurrent.Exchanger;
 
 /**
@@ -66,7 +67,7 @@ public final class LuaThread extends LuaValue {
     // L->oldpc / L->allowhook）。协程各有独立钩子；主线程使用 mainThread 实例。
     // =================================================================================
     private Object hookFunction;
-    private String hookMask = "";
+    private int hookMask;
     private int hookCount;
     private int lastHookLine = -1;
     private boolean inHook;
@@ -147,11 +148,41 @@ public final class LuaThread extends LuaValue {
 
     public Object getHookFunction() { return hookFunction; }
     public void setHookFunction(Object function) { this.hookFunction = function; }
-    public String getHookMask() { return hookMask; }
-    public void setHookMask(String mask) { this.hookMask = mask; }
+
+    /** 钩子掩码（位集）。字符串形式按标准 Lua 的 {@code luaL_getmask} 顺序 "crl" 输出。 */
+    private static final int HOOK_CALL = 1;
+    private static final int HOOK_RETURN = 2;
+    private static final int HOOK_LINE = 4;
+    private static final String[] HOOK_MASK_NAMES = {"", "c", "r", "cr", "l", "cl", "rl", "crl"};
+
+    public String getHookMask() { return HOOK_MASK_NAMES[hookMask]; }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    public void setHookMask(String mask) {
+        int bits = 0;
+        if (mask != null) {
+            if (mask.indexOf('c') >= 0) {
+                bits |= HOOK_CALL;
+            }
+            if (mask.indexOf('r') >= 0) {
+                bits |= HOOK_RETURN;
+            }
+            if (mask.indexOf('l') >= 0) {
+                bits |= HOOK_LINE;
+            }
+        }
+        this.hookMask = bits;
+    }
     public int getHookCount() { return hookCount; }
     public void setHookCount(int count) { this.hookCount = count; }
-    public boolean isHookMask(char c) { return hookMask.indexOf(c) >= 0; }
+    public boolean isHookMask(char c) {
+        return switch (c) {
+            case 'c' -> (hookMask & HOOK_CALL) != 0;
+            case 'r' -> (hookMask & HOOK_RETURN) != 0;
+            case 'l' -> (hookMask & HOOK_LINE) != 0;
+            default -> false;
+        };
+    }
     public int getLastHookLine() { return lastHookLine; }
     public void setLastHookLine(int line) { this.lastHookLine = line; }
     public boolean isInHook() { return inHook; }
@@ -175,7 +206,7 @@ public final class LuaThread extends LuaValue {
     /** 清空该线程的钩子状态。 */
     public void clearHook() {
         hookFunction = null;
-        hookMask = "";
+        hookMask = 0;
         hookCount = 0;
         lastHookLine = -1;
         inHook = false;
@@ -376,9 +407,9 @@ public final class LuaThread extends LuaValue {
                     Object errObj;
                     if (e instanceof com.zhhz.truffle.lua.LuaException le) {
                         errObj = le.getErrorObject();
-                        if (errObj == null) errObj = LuaContext.toTruffleString(le.getMessage());
+                        if (errObj == null) errObj = LuaContext.toTruffleString(LuaException.messageOf(le));
                     } else {
-                        errObj = LuaContext.toTruffleString(e.getMessage() != null ? e.getMessage() : e.toString());
+                        errObj = LuaContext.toTruffleString(LuaException.messageOf(e) != null ? LuaException.messageOf(e) : LuaException.descriptionOf(e));
                     }
                     exchanger.exchange(new Object[]{"error", errObj});
                 }

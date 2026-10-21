@@ -67,7 +67,7 @@ public abstract class LuaMetatableNode extends Node {
                 throw e;
             } catch (Exception e) {
                 // 包装在元方法内部发生的错误
-                throw LuaException.create("error in metamethod '" + eventName + "'" + "\n" + e.getMessage(),this);
+                throw LuaException.create("error in metamethod '" + eventName + "'" + "\n" + LuaException.messageOf(e),this);
             }
         }
 

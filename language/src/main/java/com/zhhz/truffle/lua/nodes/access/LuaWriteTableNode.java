@@ -4,6 +4,7 @@ import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.nodes.util.WriteHelperNode;
 import com.zhhz.truffle.lua.nodes.util.WriteHelperNodeGen;
@@ -68,9 +69,10 @@ public abstract class LuaWriteTableNode extends LuaWriteVariableNode {
      * 写入路径的 "attempt to index a ... value" 错误需要附带上表表达式的变量来源后缀
      * （如 {@code " (upvalue 'a')"}），与标准 Lua 的 varinfo 一致。
      */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private com.oracle.truffle.api.exception.AbstractTruffleException withIndexSuffix(
             com.oracle.truffle.api.exception.AbstractTruffleException e) {
-        String message = e.getMessage();
+        String message = LuaException.messageOf(e);
         if (message != null && message.startsWith("attempt to index a ")) {
             return com.zhhz.truffle.lua.LuaException.runtimeError(
                     message + getTableNode().getErrorSuffix(), this);

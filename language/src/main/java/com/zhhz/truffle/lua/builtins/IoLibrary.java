@@ -193,7 +193,7 @@ public final class IoLibrary {
         try {
             return handle.seek(whence, offset);
         } catch (IllegalArgumentException exception) {
-            throw argumentError(2, "seek", exception.getMessage());
+            throw argumentError(2, "seek", LuaException.messageOf(exception));
         } catch (Exception exception) {
             return failure(exception);
         }
@@ -243,6 +243,7 @@ public final class IoLibrary {
         return function;
     }
 
+    @TruffleBoundary
     static Object readValues(LuaFileHandle handle, Object[] arguments, int start, String function) {
         try {
             if (start >= arguments.length) return readLine(handle, false);
@@ -275,6 +276,7 @@ public final class IoLibrary {
         }
     }
 
+    @TruffleBoundary
     private static Object readFormat(LuaFileHandle handle, Object format, int argument, String function) throws IOException {
         if (format instanceof Long number) return readCount(handle, number, argument, function);
         if (format instanceof Double number && number == Math.rint(number)) return readCount(handle, (long) number.doubleValue(), argument, function);
@@ -291,6 +293,7 @@ public final class IoLibrary {
         };
     }
 
+    @TruffleBoundary
     private static Object readCount(LuaFileHandle handle, long count, int argument, String function) throws IOException {
         if (count < 0 || count > Integer.MAX_VALUE) throw argumentError(argument, function, "invalid format");
         if (count == 0) {
@@ -307,6 +310,7 @@ public final class IoLibrary {
         return output.size() == 0 ? LuaNil.SINGLETON : LuaStringSupport.fromBytes(output.toByteArray());
     }
 
+    @TruffleBoundary
     private static Object readAll(LuaFileHandle handle) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int value;
@@ -314,6 +318,7 @@ public final class IoLibrary {
         return LuaStringSupport.fromBytes(output.toByteArray());
     }
 
+    @TruffleBoundary
     private static Object readLine(LuaFileHandle handle, boolean keepNewline) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int value;
@@ -369,6 +374,7 @@ public final class IoLibrary {
         return count;
     }
 
+    @TruffleBoundary
     private static Object readNumber(LuaFileHandle handle) throws IOException {
         RN rn = new RN();
         rn.f = handle;
@@ -472,6 +478,7 @@ public final class IoLibrary {
         return string(arguments[index], index + 1, function);
     }
 
+    @TruffleBoundary
     private static String string(Object value, int argument, String function) {
         if (value instanceof TruffleString string) return string.toJavaStringUncached();
         if (value instanceof String string) return string;
@@ -489,7 +496,7 @@ public final class IoLibrary {
     }
 
     private static String errorMessage(Exception exception) {
-        return exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        return LuaException.messageOf(exception) == null ? LuaException.simpleNameOf(exception) : LuaException.messageOf(exception);
     }
 
     private static RuntimeException argumentError(int argument, String function, String message) {

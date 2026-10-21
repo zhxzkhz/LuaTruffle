@@ -65,8 +65,8 @@ public abstract class LuaPcallBuiltinNode extends LuaBuiltinNode {
         if (exception instanceof LuaException luaException) {
             error = luaException.getErrorObject();
         } else {
-            String message = exception.getMessage();
-            error = message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
+            String message = LuaException.messageOf(exception);
+            error = message == null || message.isBlank() ? LuaException.simpleNameOf(exception) : message;
         }
         // 标准 Lua 的运行时错误对象是字符串；把 Java String 统一转成 Lua 字符串，
         // 否则 pcall 捕获后对错误消息做索引/方法调用会失败。

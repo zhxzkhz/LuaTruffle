@@ -137,7 +137,7 @@ public abstract class LuaTableSortBuiltinNode extends LuaBuiltinNode {
             } catch (LuaException exception) {
                 throw exception;
             } catch (Exception exception) {
-                throw LuaException.create("error in table.sort comparator\n" + exception.getMessage(), this);
+                throw LuaException.create("error in table.sort comparator\n" + LuaException.messageOf(exception), this);
             } finally {
                 context.exitNonYieldable();
             }

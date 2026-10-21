@@ -54,8 +54,20 @@ public abstract class LuaReadUpvalueNode extends LuaExpressionNode {
         return null;
     }
 
+    private String errorSuffix;
+
     @Override
     public String getErrorSuffix() {
+        String suffix = errorSuffix;
+        if (suffix == null) {
+            suffix = computeErrorSuffix();
+            errorSuffix = suffix;
+        }
+        return suffix;
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private String computeErrorSuffix() {
         TruffleString name = getUnresolvedVariableName();
         return name == null ? "" : " (upvalue '" + name.toJavaStringUncached() + "')";
     }

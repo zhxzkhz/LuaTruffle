@@ -1,13 +1,49 @@
 {
   "reflection": [
     {
+      "type": "com.zhhz.truffle.lua.builtins.Bit32Library",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.CoroutineLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.DebugLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.IoLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.JsonLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.MathLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
       "type": "com.zhhz.truffle.lua.builtins.OsLibrary",
-      "methods": [
-        {
-          "name": "clock",
-          "parameterTypes": []
-        }
-      ],
       "allDeclaredConstructors": true,
       "allPublicConstructors": true,
       "allDeclaredMethods": true,
@@ -15,6 +51,20 @@
     },
     {
       "type": "com.zhhz.truffle.lua.builtins.StringLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.TableLibrary",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true
+    },
+    {
+      "type": "com.zhhz.truffle.lua.builtins.Utf8Library",
       "allDeclaredConstructors": true,
       "allPublicConstructors": true,
       "allDeclaredMethods": true,

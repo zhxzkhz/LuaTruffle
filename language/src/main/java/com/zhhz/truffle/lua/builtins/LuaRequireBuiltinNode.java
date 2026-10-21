@@ -140,7 +140,7 @@ public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
                 // 标准 Lua：searcher 抛出的错误（如 "'package.path' must be a string"）直接向上传播
                 throw e;
             } catch (Exception e) {
-                throw LuaException.create("error calling package.searchers[" + i + "]: " + e.getMessage(), this);
+                throw LuaException.create("error calling package.searchers[" + i + "]: " + LuaException.messageOf(e), this);
             }
         }
 
@@ -181,7 +181,7 @@ public abstract class LuaRequireBuiltinNode extends LuaBuiltinNode {
         } catch (Exception e) {
             // 如果在加载过程中出错，清理 loaded 表（虽然标准Lua不一定清理，但为了安全）
             // loaded.rawset(modName, null); 
-            throw LuaException.create("error loading module '" + modName + "' from file '" + loaderData + "':\n" + e.getMessage(), this);
+            throw LuaException.create("error loading module '" + modName + "' from file '" + loaderData + "':\n" + LuaException.messageOf(e), this);
         }
     }
     /*

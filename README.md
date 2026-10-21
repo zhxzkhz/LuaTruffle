@@ -60,7 +60,14 @@ mvn package
 # 2. 构建 Native Image (AOT 编译)
 # 需要安装 native-image 工具: gu install native-image
 mvn package -Pnative
+# 产物: standalone/target/luanative(.exe)
+./standalone/target/luanative --portable-tests all.lua
 ```
+
+> Native Image 构建使用 `standalone/pom.xml` 中的 `-H:MaxRuntimeCompileMethods=250`；
+> 标准库通过反射安装，相关元数据位于
+> `language/src/main/resources/META-INF/native-image/org.graalvm.truffle/truffle-lua/`
+> （`reflect-config.json` / `reachability-metadata.json`）。新增 `@LuaBuiltin` 库类时需同步登记。
 
 ### 运行 Lua 脚本
 

@@ -1,16 +1,126 @@
 [
   {
+    "name": "com.zhhz.truffle.lua.builtins.Bit32Library",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.CoroutineLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.DebugLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.IoLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.JsonLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.MathLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
     "name": "com.zhhz.truffle.lua.builtins.OsLibrary",
-    "methods": [
-      {"name": "clock", "parameterTypes": []},
-      {"name": "time", "parameterTypes": []},
-      {"name": "exit", "parameterTypes": ["int"]}
-    ],
-    "queriedMethods": [
-      {"name": "clock", "parameterTypes": []},
-      {"name": "time", "parameterTypes": []},
-      {"name": "exit", "parameterTypes": ["int"]}
-    ],
     "allDeclaredClasses": true,
     "allDeclaredMethods": true,
     "allDeclaredFields": true,
@@ -31,98 +141,46 @@
   },
   {
     "name": "com.zhhz.truffle.lua.builtins.StringLibrary",
-    "methods": [
-      {
-        "name": "byteFunc",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "charFunc",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "find",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "format",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "gsub",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "len",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "lower",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "rep",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "reverse",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "sub",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "upper",
-        "parameterTypes": ["java.lang.Object[]"]
-      }
-    ],
-    "queriedMethods": [
-      {
-        "name": "byteFunc",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "charFunc",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "find",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "format",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "gsub",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "len",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "lower",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "rep",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "reverse",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "sub",
-        "parameterTypes": ["java.lang.Object[]"]
-      },
-      {
-        "name": "upper",
-        "parameterTypes": ["java.lang.Object[]"]
-      }
-    ],
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.TableLibrary",
+    "allDeclaredClasses": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allPublicClasses": true,
+    "allPublicMethods": true,
+    "allPublicFields": true,
+    "allPublicConstructors": true,
+    "allRecordComponents": true,
+    "allNestMembers": true,
+    "allSigners": true,
+    "allPermittedSubclasses": true,
+    "queryAllDeclaredMethods": true,
+    "queryAllDeclaredConstructors": true,
+    "queryAllPublicMethods": true,
+    "queryAllPublicConstructors": true,
+    "unsafeAllocated": true
+  },
+  {
+    "name": "com.zhhz.truffle.lua.builtins.Utf8Library",
     "allDeclaredClasses": true,
     "allDeclaredMethods": true,
     "allDeclaredFields": true,

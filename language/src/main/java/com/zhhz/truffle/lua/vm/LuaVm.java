@@ -1357,7 +1357,7 @@ public final class LuaVm {
         try {
             result = InteropLibrary.getUncached().execute(fn, args);
         } catch (com.oracle.truffle.api.interop.InteropException e) {
-            throw error(e.getMessage());
+            throw error(LuaException.messageOf(e));
         } catch (LuaException e) {
             throw decorate(e);
         }

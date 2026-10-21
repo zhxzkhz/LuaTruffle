@@ -37,8 +37,20 @@ public final class LuaReadGlobalVariableNode extends LuaExpressionNode {
         return this.name;
     }
 
+    private String errorSuffix;
+
     @Override
     public String getErrorSuffix() {
+        String suffix = errorSuffix;
+        if (suffix == null) {
+            suffix = computeErrorSuffix();
+            errorSuffix = suffix;
+        }
+        return suffix;
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private String computeErrorSuffix() {
         return " (global '" + name.toJavaStringUncached() + "')";
     }
 }

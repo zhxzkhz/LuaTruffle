@@ -776,15 +776,14 @@ public final class DebugLibrary {
             if (!t.hasHook()) {
                 continue;
             }
-            String mask = t.getHookMask();
-            if (mask.indexOf('l') >= 0) {
+            if (t.isHookMask('l')) {
                 needStatement = true;
                 needCall = true;
             }
             if (t.getHookCount() > 0) {
                 needStatement = true;
             }
-            if (mask.indexOf('c') >= 0 || mask.indexOf('r') >= 0) {
+            if (t.isHookMask('c') || t.isHookMask('r')) {
                 needCall = true;
             }
         }
@@ -809,6 +808,7 @@ public final class DebugLibrary {
                     SourceSectionFilter.newBuilder().tagIs(StandardTags.StatementTag.class).build(),
                     new ExecutionEventListener() {
                         @Override
+                        @TruffleBoundary
                         public void onEnter(EventContext eventContext, VirtualFrame frame) {
                             LuaLineHook.fireCount(eventContext.getInstrumentedNode());
                             SourceSection section = eventContext.getInstrumentedSourceSection();
@@ -840,6 +840,7 @@ public final class DebugLibrary {
                         }
 
                         @Override
+                        @TruffleBoundary
                         public void onReturnValue(EventContext eventContext, VirtualFrame frame, Object result) {
                             SourceSection section = eventContext.getInstrumentedSourceSection();
                             if (section != null) {
@@ -849,6 +850,7 @@ public final class DebugLibrary {
                         }
 
                         @Override
+                        @TruffleBoundary
                         public void onReturnExceptional(EventContext eventContext, VirtualFrame frame,
                                                          Throwable exception) {
                             SourceSection section = eventContext.getInstrumentedSourceSection();
@@ -923,8 +925,8 @@ public final class DebugLibrary {
                 CallTarget target = context.getEnv().parseInternal(source);
                 target.call();
             } catch (Exception exception) {
-                String message = exception.getMessage();
-                error.println(message == null ? exception.getClass().getSimpleName() : message);
+                String message = LuaException.messageOf(exception);
+                error.println(message == null ? LuaException.simpleNameOf(exception) : message);
             }
         }
     }

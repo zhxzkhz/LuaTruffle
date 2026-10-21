@@ -71,8 +71,8 @@ final class LuaFileLoader {
         if (exception instanceof AccessDeniedException accessDenied) {
             return "cannot open " + accessDenied.getFile() + ": Permission denied";
         }
-        String message = exception.getMessage();
-        return message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
+        String message = LuaException.messageOf(exception);
+        return message == null || message.isBlank() ? LuaException.simpleNameOf(exception) : message;
     }
 
     private static String filename(Object[] arguments, String function) {

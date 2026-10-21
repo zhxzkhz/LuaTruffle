@@ -184,7 +184,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
                     // 例如向上抛出一个 table 作为错误对象时必须保持其身份。
                     throw luaError;
                 } catch (Exception e) {
-                    throw LuaException.create("error in metamethod '__index': " + e.getMessage(), node);
+                    throw indexMetamethodError(node, e);
                 }
             }
 
@@ -206,10 +206,21 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
             return LuaNil.SINGLETON;
         }
         String suffix = indexSuffix != null ? indexSuffix : indexNameSuffix(node);
-        throw LuaException.runtimeError("attempt to index a " + typeName + " value" + suffix, node);
+        throw missingIndexError(node, typeName, suffix);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static RuntimeException missingIndexError(Node node, String typeName, String suffix) {
+        return LuaException.runtimeError("attempt to index a " + typeName + " value" + suffix, node);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private static RuntimeException indexMetamethodError(Node node, Exception cause) {
+        return LuaException.create("error in metamethod '__index': " + LuaException.messageOf(cause), node);
     }
 
     /** 依据被索引表达式的来源，构造类似 {@code (global 'X')} 的名字后缀。 */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private static String indexNameSuffix(Node node) {
         if (!(node instanceof LuaReadTableNode readNode)) {
             return "";
@@ -234,7 +245,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
         } else {
             return "";
         }
-        return String.format(" (%s '%s')", what, name.toJavaStringUncached());
+        return " (" + what + " '" + name.toJavaStringUncached() + "')";
     }
 
     /** 对应 Lua 的 MAXTAGLOOP：__index 链的最大迭代次数。 */
@@ -265,8 +276,20 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
      * 字段访问的运行时错误后缀：常量字符串键为 {@code (field 'x')}，
      * 动态键（如 {@code a[b]}）为 {@code (field '?')}，与标准 Lua 的 varinfo 一致。
      */
+    private String errorSuffix;
+
     @Override
     public String getErrorSuffix() {
+        String suffix = errorSuffix;
+        if (suffix == null) {
+            suffix = computeErrorSuffix();
+            errorSuffix = suffix;
+        }
+        return suffix;
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private String computeErrorSuffix() {
         LuaExpressionNode keyNode = getKeyNode();
         if (keyNode instanceof LuaStringLiteralNode literal) {
             TruffleString name = literal.getUnresolvedVariableName();

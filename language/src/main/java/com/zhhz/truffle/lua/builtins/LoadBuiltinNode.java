@@ -90,7 +90,7 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
             return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, getErrorMessage(e) });
         } catch (Exception e){
             return new LuaMultiValue(new Object[]{LuaNil.SINGLETON,
-                    toTruffleString(String.valueOf(e.getMessage())) });
+                    toTruffleString(String.valueOf(LuaException.messageOf(e))) });
         }
     }
 
@@ -151,7 +151,7 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
                     throw e;
                 } catch (Exception e) {
                     // 如果读取器本身报错，load 也会失败
-                    throw LuaException.create("error in reader function\n" + e.getMessage(),this);
+                    throw LuaException.create("error in reader function\n" + LuaException.messageOf(e),this);
                 }
             }
             return sb.toString();
@@ -193,7 +193,7 @@ public abstract class LoadBuiltinNode extends LuaBuiltinNode {
             sb.append("unknown location: ");
         }
 
-        sb.append(e.getMessage());
+        sb.append(LuaException.messageOf(e));
         // 对于其他异常，返回类名
         return sb.toString();
     }

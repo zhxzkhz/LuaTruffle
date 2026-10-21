@@ -15,6 +15,7 @@ import java.lang.management.MemoryMXBean;
 public abstract class LuaCollectGarbageBuiltinNode extends LuaBuiltinNode {
 
     @Specialization
+    @TruffleBoundary
     public Object doGarbage(Object[] arguments) {
         String option = "collect"; // 默认选项
 

@@ -41,7 +41,7 @@ public abstract class LuaPairsBuiltinNode extends LuaBuiltinNode {
                 try {
                     result = InteropLibrary.getUncached().execute(pairsMeta, target);
                 } catch (Exception e) {
-                    throw LuaException.create("error in metamethod '__pairs': " + e.getMessage(), this);
+                    throw pairsMetamethodError(e);
                 }
                 return normalizeToThree(result);
             }
@@ -72,5 +72,10 @@ public abstract class LuaPairsBuiltinNode extends LuaBuiltinNode {
             three[i] = i < values.length ? values[i] : LuaNil.SINGLETON;
         }
         return new LuaMultiValue(three);
+    }
+
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
+    private RuntimeException pairsMetamethodError(Exception cause) {
+        return LuaException.create("error in metamethod '__pairs': " + LuaException.messageOf(cause), this);
     }
 }

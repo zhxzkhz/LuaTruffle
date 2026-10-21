@@ -29,16 +29,23 @@ public abstract class LuaRawEqualBuiltinNode extends LuaBuiltinNode {
         if (left == right) {
             return true;
         }
-        if (isNumber(left) && isNumber(right)) {
-            return ((Number) left).doubleValue() == ((Number) right).doubleValue();
+        // 显式分派到 Long/Double，避免对 Number 的虚调用把 JDK 中其他
+        // Number 实现（如 BigInteger）拉进 Native Image 的运行期编译范围。
+        if (left instanceof Long l && right instanceof Long r) {
+            return l.longValue() == r.longValue();
+        }
+        if (left instanceof Double l && right instanceof Double r) {
+            return l.doubleValue() == r.doubleValue();
+        }
+        if (left instanceof Long l && right instanceof Double r) {
+            return l.doubleValue() == r.doubleValue();
+        }
+        if (left instanceof Double l && right instanceof Long r) {
+            return l.doubleValue() == r.doubleValue();
         }
         if (left instanceof TruffleString l && right instanceof TruffleString r) {
             return TruffleString.EqualNode.getUncached().execute(l, r, LuaLanguage.STRING_ENCODING);
         }
         return false;
-    }
-
-    private static boolean isNumber(Object value) {
-        return value instanceof Long || value instanceof Double;
     }
 }

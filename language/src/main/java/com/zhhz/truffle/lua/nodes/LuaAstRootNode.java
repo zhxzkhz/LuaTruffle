@@ -164,6 +164,7 @@ public final class LuaAstRootNode extends LuaRootNode {
     /**
      * 顶层尾调用重试循环：在固定 Java 栈深度下反复执行尾递归目标，直到正常返回。
      */
+    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private Object doTailCall(LuaTailCallException initial) {
         LuaTailCallException e = initial;
         while (true) {

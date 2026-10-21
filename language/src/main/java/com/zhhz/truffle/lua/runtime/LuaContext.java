@@ -194,6 +194,7 @@ public final class LuaContext {
     private LuaThread mainThread;
 
     /** 当前执行线程对应的 LuaThread（协程或主线程）。 */
+    @TruffleBoundary
     public LuaThread currentThread() {
         LuaThread thread = currentCoroutine.get();
         return thread != null ? thread : mainThread;
@@ -215,7 +216,9 @@ public final class LuaContext {
     public int getInstructionCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getInstructionCount(); }
     public void setInstructionCount(int count) { LuaThread t = currentThread(); if (t != null) t.setInstructionCount(count); }
     /** 标记/取消“下一次函数进入来自尾调用”（AST 尾调用重试循环使用）。 */
+    @TruffleBoundary
     public void setPendingTailCall(boolean value) { LuaThread t = currentThread(); if (t != null) t.setPendingTailCall(value); }
+    @TruffleBoundary
     public boolean takePendingTailCall() {
         LuaThread t = currentThread();
         return t != null && t.takePendingTailCall();
@@ -863,7 +866,7 @@ public final class LuaContext {
             CallTarget callTarget = env.parseInternal(initSource);
             callTarget.call();
         } catch (IOException e) {
-            throw LuaException.create("LUA_INIT: " + e.getMessage(), null);
+            throw LuaException.create("LUA_INIT: " + LuaException.messageOf(e), null);
         }
     }
 
@@ -1085,7 +1088,7 @@ public final class LuaContext {
      * Lua 函数嵌套上限。标准 Lua 通过 Lua 栈（约 1e6 槽）限制，纯 Lua 递归报
      * "stack overflow"；本引擎使用 Java 栈，故取一个远低于 Java 栈容量的值。
      */
-    private static final int LUA_MAX_DEPTH = Integer.getInteger("lua.maxdepth", 250);
+    private final int luaMaxDepth = Integer.getInteger("lua.maxdepth", 250);
     /** 错误处理期间允许的额外嵌套余量（对应标准 Lua 的 LUAI_MAXCCALLS>>3）。 */
     private static final int LUA_ERROR_HEADROOM = 25;
 
@@ -1143,17 +1146,17 @@ public final class LuaContext {
         }
     }
 
-    /** 进入一个 Lua 函数调用；超过 LUA_MAX_DEPTH 抛 "stack overflow"。 */
+    /** 进入一个 Lua 函数调用；超过 luaMaxDepth 抛 "stack overflow"。 */
     public void enterLuaCall(com.oracle.truffle.api.nodes.Node location) {
         int depth = ++luaCallDepth;
         // 硬上限：与标准 Lua 一致，在错误处理期间再次溢出时报 "error in error handling"。
-        if (depth >= LUA_MAX_DEPTH + LUA_ERROR_HEADROOM) {
+        if (depth >= luaMaxDepth + LUA_ERROR_HEADROOM) {
             luaCallDepth--;
             stackOverflow = true;
             throw LuaException.create("error in error handling", location);
         }
         // 软上限：首次达到上限时报 "stack overflow"（消息处理函数尚可在余量内运行）。
-        if (depth >= LUA_MAX_DEPTH && !stackOverflow) {
+        if (depth >= luaMaxDepth && !stackOverflow) {
             luaCallDepth--;
             throw stackError("stack overflow", location);
         }

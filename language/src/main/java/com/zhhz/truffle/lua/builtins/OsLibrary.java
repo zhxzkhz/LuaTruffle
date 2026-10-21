@@ -346,7 +346,7 @@ public final class OsLibrary {
     }
 
     private static LuaMultiValue failure(Exception exception) {
-        String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        String message = LuaException.messageOf(exception) == null ? LuaException.simpleNameOf(exception) : LuaException.messageOf(exception);
         return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, text(message), 1L});
     }
 

@@ -44,13 +44,23 @@ public abstract class WriteHelperNode extends Node {
         try {
             objects.writeMember(object, toMemberName(key), value);
         } catch (UnsupportedMessageException e) {
-            throw LuaException.create("cannot write to host object member '" + toMemberName(key) + "'", this);
+            throw cannotWriteMember(this, key);
         } catch (UnknownIdentifierException e) {
             throw LuaException.undefinedProperty(this, key);
         } catch (UnsupportedTypeException e) {
-            throw LuaException.create("unsupported value type for host object member '" + toMemberName(key)
-                + "': " + (value == null ? "null" : value.getClass().getSimpleName()), this);
+            throw unsupportedTypeError(this, key, value);
         }
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static RuntimeException cannotWriteMember(Node node, Object key) {
+        return LuaException.create("cannot write to host object member '" + toMemberName(key) + "'", node);
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static RuntimeException unsupportedTypeError(Node node, Object key, Object value) {
+        return LuaException.create("unsupported value type for host object member '" + toMemberName(key)
+            + "': " + (value == null ? "null" : LuaException.simpleNameOf(value)), node);
     }
 
     @CompilerDirectives.TruffleBoundary
@@ -74,7 +84,12 @@ public abstract class WriteHelperNode extends Node {
             slowPathWriteUncached(this, luaTable, key, value);
             return;
         }
-        throw LuaException.create("attempt to index a " + LuaTypesUtil.getTypeName(object) + " value", this);
+        throw indexError(this, object);
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static RuntimeException indexError(Node node, Object object) {
+        return LuaException.create("attempt to index a " + LuaTypesUtil.getTypeName(object) + " value", node);
     }
 
     /**
@@ -129,7 +144,7 @@ public abstract class WriteHelperNode extends Node {
                     interop.execute(newIndexMeta, current, key, value);
                     return;
                 } catch (Exception e) {
-                    throw LuaException.create("error in metamethod '__newindex': " + e.getMessage(), node);
+                    throw LuaException.create("error in metamethod '__newindex': " + LuaException.messageOf(e), node);
                 }
             }
 
