@@ -102,6 +102,34 @@ public class LuaIntegrationTest extends AbstractLuaTest {
     }
 
     @Test
+    public void xpcallHandlerRunsBeforeStackUnwinds() {
+        // 消息处理函数在抛出点（栈尚未展开）执行，因此能看到 error 与调用者帧；
+        // pcall 内部的错误不触发外层 xpcall 的处理函数；处理函数自身出错时为 LUA_ERRERR。
+        Value result = eval("""
+                local function f() error('boom') end
+                local ok, traceback = xpcall(f, function(e) return debug.traceback(e, 2) end)
+                local ok2, nested, nestedMessage = xpcall(function()
+                    return pcall(function() error('caught') end)
+                end, function(e) return 'handler:' .. e end)
+                local ok3, handlerError = xpcall(function() error('x') end,
+                    function(e) error('handler failed') end)
+                return ok, traceback, ok2, nested, nestedMessage, ok3, handlerError
+                """);
+        assertFalse(result.getArrayElement(0).asBoolean(), "xpcall reports the error");
+        String traceback = result.getArrayElement(1).asString();
+        assertTrue(traceback.contains("[C]: in function 'error'"), traceback);
+        assertTrue(traceback.contains("in function 'f'"), traceback);
+        assertTrue(traceback.contains("[C]: in function 'xpcall'"), traceback);
+        assertTrue(result.getArrayElement(2).asBoolean(), "outer xpcall succeeds");
+        assertFalse(result.getArrayElement(3).asBoolean(), "inner pcall reports the error");
+        String nestedMessage = result.getArrayElement(4).asString();
+        assertTrue(nestedMessage.endsWith("caught"), nestedMessage);
+        assertFalse(nestedMessage.startsWith("handler:"), "pcall suppresses the outer handler");
+        assertFalse(result.getArrayElement(5).asBoolean());
+        assertEquals("error in error handling", result.getArrayElement(6).asString());
+    }
+
+    @Test
     public void testErrorAddsPositionPrefixForStringMessages() {
         // level 1（默认）：前缀指向 error() 的调用行（第 2 行）
         Value level1 = eval("""

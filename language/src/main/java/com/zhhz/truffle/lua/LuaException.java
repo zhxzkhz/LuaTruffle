@@ -49,6 +49,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 import com.zhhz.truffle.lua.nodes.LuaStatementNode;
+import com.zhhz.truffle.lua.runtime.LuaContext;
 import com.zhhz.truffle.lua.runtime.LuaLanguageView;
 
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
@@ -63,6 +64,8 @@ public final class LuaException extends AbstractTruffleException {
     private static final InteropLibrary UNCACHED_LIB = InteropLibrary.getFactory().getUncached();
     private final Object errorObject;
     private boolean positioned;
+    /** 消息处理函数是否已在抛出点被调用（xpcall 不应重复调用）。 */
+    private boolean handled;
 
     LuaException(String message, Node location) {
         this(message, message, location);
@@ -73,8 +76,45 @@ public final class LuaException extends AbstractTruffleException {
         this.errorObject = errorObject;
     }
 
+    /**
+     * 在抛出点调用当前 xpcall 的消息处理函数（等价 C 端 {@code luaG_errormsg}），
+     * 返回处理后的错误对象。未设置处理函数时原样返回。
+     */
+    private static Object applyHandler(Object errorObject) {
+        LuaContext context = LuaContext.get(null);
+        if (context == null || !context.hasErrorHandler()) {
+            return errorObject;
+        }
+        return context.handleErrorObject(errorObject);
+    }
+
+    private static boolean hasHandler() {
+        LuaContext context = LuaContext.get(null);
+        return context != null && context.hasErrorHandler();
+    }
+
+    private static String displayOf(Object errorObject) {
+        if (errorObject instanceof String string) {
+            return string;
+        }
+        if (errorObject instanceof com.oracle.truffle.api.strings.TruffleString string) {
+            return string.toJavaStringUncached();
+        }
+        return String.valueOf(errorObject);
+    }
+
     @TruffleBoundary
     public static AbstractTruffleException create(String message, Node location) {
+        boolean handledNow = hasHandler();
+        Object errorObject = handledNow ? applyHandler(message) : message;
+        LuaException exception = new LuaException(handledNow ? displayOf(errorObject) : message, errorObject, location);
+        exception.handled = handledNow;
+        return exception;
+    }
+
+    /** 创建不调用消息处理函数的错误（用于 LUA_ERRERR 等已处理场景）。 */
+    @TruffleBoundary
+    public static AbstractTruffleException createUnhandled(String message, Node location) {
         return new LuaException(message, location);
     }
 
@@ -87,8 +127,11 @@ public final class LuaException extends AbstractTruffleException {
     @TruffleBoundary
     public static AbstractTruffleException runtimeError(String message, Node location) {
         String full = withPosition(message, location);
-        LuaException exception = new LuaException(full, full, location);
+        boolean handledNow = hasHandler();
+        Object errorObject = handledNow ? applyHandler(full) : full;
+        LuaException exception = new LuaException(handledNow ? displayOf(errorObject) : full, errorObject, location);
         exception.positioned = true;
+        exception.handled = handledNow;
         return exception;
     }
 
@@ -99,8 +142,11 @@ public final class LuaException extends AbstractTruffleException {
      */
     @TruffleBoundary
     public static AbstractTruffleException positioned(Object errorObject, String displayMessage, Node location) {
-        LuaException exception = new LuaException(displayMessage, errorObject, location);
+        boolean handledNow = hasHandler();
+        Object handledObject = handledNow ? applyHandler(errorObject) : errorObject;
+        LuaException exception = new LuaException(handledNow ? displayOf(handledObject) : displayMessage, handledObject, location);
         exception.positioned = true;
+        exception.handled = handledNow;
         return exception;
     }
 
@@ -171,7 +217,11 @@ public final class LuaException extends AbstractTruffleException {
 
     @TruffleBoundary
     public static AbstractTruffleException create(Object errorObject, Node location) {
-        return new LuaException(String.valueOf(errorObject), errorObject, location);
+        boolean handledNow = hasHandler();
+        Object handledObject = handledNow ? applyHandler(errorObject) : errorObject;
+        LuaException exception = new LuaException(displayOf(handledObject), handledObject, location);
+        exception.handled = handledNow;
+        return exception;
     }
 
     /**
@@ -180,11 +230,20 @@ public final class LuaException extends AbstractTruffleException {
      */
     @TruffleBoundary
     public static AbstractTruffleException create(Object errorObject, String displayMessage, Node location) {
-        return new LuaException(displayMessage, errorObject, location);
+        boolean handledNow = hasHandler();
+        Object handledObject = handledNow ? applyHandler(errorObject) : errorObject;
+        LuaException exception = new LuaException(handledNow ? displayOf(handledObject) : displayMessage, handledObject, location);
+        exception.handled = handledNow;
+        return exception;
     }
 
     public Object getErrorObject() {
         return errorObject;
+    }
+
+    /** 消息处理函数是否已在抛出点被调用。 */
+    public boolean isHandled() {
+        return handled;
     }
 
     @TruffleBoundary
@@ -209,7 +268,7 @@ public final class LuaException extends AbstractTruffleException {
         StringBuilder result = new StringBuilder();
         result.append("Type error");
 
-        AbstractTruffleException ex = LuaException.create("", location);
+        AbstractTruffleException ex = LuaException.createUnhandled("", location);
         if (location != null) {
             SourceSection ss = ex.getEncapsulatingSourceSection();
             if (ss != null && ss.isAvailable()) {

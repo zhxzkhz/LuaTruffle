@@ -1095,7 +1095,8 @@ public final class LuaContext {
     private boolean stackOverflow;
     /** 当前生效的 xpcall 消息处理函数（在抛出点调用，复刻 luaG_errormsg 行为）。 */
     private Object errorHandler;
-
+    /** 消息处理函数是否正在执行（处理函数内再次出错时为 LUA_ERRERR）。 */
+    private boolean handlingError;
     private static final com.oracle.truffle.api.interop.InteropLibrary UNCACHED_INTEROP =
             com.oracle.truffle.api.interop.InteropLibrary.getFactory().getUncached();
 
@@ -1205,35 +1206,52 @@ public final class LuaContext {
 
     private RuntimeException stackError(String message, com.oracle.truffle.api.nodes.Node location) {
         if (stackOverflow) {
-            return LuaException.create("error in error handling", location);
+            return LuaException.createUnhandled("error in error handling", location);
         }
         stackOverflow = true;
+        // runtimeError 会在抛出点（栈仍很深时）调用消息处理函数。
         LuaException error = (LuaException) LuaException.runtimeError(message, location);
-        Object handler = errorHandler;
-        if (handler != null) {
-            // 标准 Lua：消息处理函数在展开栈之前、栈仍然很深时被调用，
-            // 因此 debug.traceback 能看到完整的递归调用链。
-            try {
-                Object messageObject = error.getErrorObject();
-                if (messageObject instanceof String string) {
-                    messageObject = toTruffleString(string);
-                }
-                enterNonYieldable();
-                Object handled;
-                try {
-                    handled = UNCACHED_INTEROP.execute(handler, messageObject);
-                } finally {
-                    exitNonYieldable();
-                }
-                throw new LuaHandledError(handled);
-            } catch (LuaHandledError handled) {
-                throw handled;
-            } catch (Exception handlerError) {
-                stackOverflow = false;
-                return LuaException.create("error in error handling", location);
-            }
+        if (error.isHandled()) {
+            throw new LuaHandledError(error.getErrorObject());
         }
         return error;
+    }
+
+    /** 是否设置了 xpcall 的消息处理函数。 */
+    public boolean hasErrorHandler() {
+        return errorHandler != null;
+    }
+
+    /**
+     * 复刻 {@code luaG_errormsg}：在错误抛出点（栈尚未展开）调用 xpcall 的消息处理函数。
+     * <p>
+     * 这样处理函数内的 {@code debug.traceback} 能看到出错点的完整调用栈
+     * （包括 {@code [C]: in function 'error'}）。处理函数自身出错时返回
+     * {@code "error in error handling"}（LUA_ERRERR），且不会递归调用自身。
+     */
+    public Object handleErrorObject(Object errorObject) {
+        Object handler = errorHandler;
+        if (handler == null) {
+            return errorObject;
+        }
+        if (handlingError) {
+            return toTruffleString("error in error handling");
+        }
+        handlingError = true;
+        try {
+            Object message = errorObject instanceof String string ? toTruffleString(string) : errorObject;
+            // 与 luaD_callnoyield 一致：处理函数不可 yield。
+            enterNonYieldable();
+            try {
+                return UNCACHED_INTEROP.execute(handler, message);
+            } finally {
+                exitNonYieldable();
+            }
+        } catch (Exception handlerError) {
+            return toTruffleString("error in error handling");
+        } finally {
+            handlingError = false;
+        }
     }
 
     /** 由 pcall/xpcall 在捕获错误后调用，重置栈溢出状态。 */

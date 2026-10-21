@@ -35,6 +35,13 @@ public abstract class LuaXpcallBuiltinNode extends LuaBuiltinNode {
             // 栈溢出等错误已在抛出点调用过 handler，直接返回其结果。
             return new LuaMultiValue(new Object[]{false, LuaMultiValue.firstValue(handled.getHandled())});
         } catch (Exception exception) {
+            if (exception instanceof LuaException luaError && luaError.isHandled()) {
+                // 消息处理函数已在抛出点执行（栈尚未展开），其结果即错误对象。
+                if (context != null) {
+                    context.clearStackOverflow();
+                }
+                return new LuaMultiValue(new Object[]{false, LuaMultiValue.firstValue(luaError.getErrorObject())});
+            }
             try {
                 // 参考实现经 luaD_callnoyield 调用消息处理函数：nny>0，不可 yield。
                 if (context != null) {

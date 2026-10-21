@@ -133,9 +133,9 @@ java -ea --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allo
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！目前主要待完善的功能包括：
-*   `debug.getinfo(thread, ...)` / `getlocal(thread, ...)` 尚未切换到目标协程的栈。
-*   `xpcall` 消息处理函数内看不到出错点的 C 帧（Truffle 异常展开时机所致）。
-*   更多官方测试脚本（`db.lua`、`errors.lua` 等）的字节码 VM 覆盖。
+*   跨线程调试只支持字节码 VM 协程；AST 协程的挂起栈无法读取（Truffle 没有跨线程栈枚举 API）。
+*   `debug.traceback` 对“由 C 函数调用”的 Lua 帧显示函数自身名字，参考实现显示 `<源文件:定义行>`。
+*   更多官方测试脚本（`errors.lua`、`db.lua` 等）的字节码 VM 覆盖。
 
 ## 📄 许可证
 

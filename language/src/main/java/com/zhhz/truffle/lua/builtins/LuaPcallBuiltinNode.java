@@ -24,9 +24,12 @@ public abstract class LuaPcallBuiltinNode extends LuaBuiltinNode {
         }
         Object[] callArguments = new Object[arguments.length - 1];
         System.arraycopy(arguments, 1, callArguments, 0, callArguments.length);
+        LuaContext context = LuaContext.get(this);
+        // 标准 Lua 的 luaD_pcall 在受保护调用期间把 errfunc 置 0，
+        // 因此 pcall 内部的错误不会触发外层 xpcall 的消息处理函数。
+        Object previousHandler = context != null ? context.setErrorHandler(null) : null;
         try {
             Object result = success(interop.execute(arguments[0], callArguments));
-            LuaContext context = LuaContext.get(this);
             if (context != null) {
                 context.clearStackOverflow();
             }
@@ -35,11 +38,14 @@ public abstract class LuaPcallBuiltinNode extends LuaBuiltinNode {
             // 已由外层的 xpcall 消息处理函数处理，交回给该 xpcall。
             throw handled;
         } catch (Exception exception) {
-            LuaContext context = LuaContext.get(this);
             if (context != null) {
                 context.clearStackOverflow();
             }
             return new LuaMultiValue(new Object[]{false, errorObject(exception)});
+        } finally {
+            if (context != null) {
+                context.restoreErrorHandler(previousHandler);
+            }
         }
     }
 

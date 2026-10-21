@@ -1489,18 +1489,22 @@ public final class DebugLibrary {
                 SourceSection callSection = info.callNode() != null
                         ? info.callNode().getEncapsulatingSourceSection()
                         : null;
+                // 栈顶帧没有调用节点时退回该帧的当前行（函数定义起始行），
+                // 避免 traceback 里出现参考实现不会输出的 "?" 行号。
+                int callLineNumber = callSection != null ? callSection.getStartLine() : info.currentLine(null);
+                String callLine = callLineNumber >= 0 ? Integer.toString(callLineNumber) : "?";
                 // 钩子函数被触发执行时，level 1 帧在 traceback 中显示为 "in hook"
                 if (inHook && current[0] == 1) {
                     builder.append("\n\t").append(info.shortSource()).append(":")
-                            .append(callSection != null ? callSection.getStartLine() : '?')
+                            .append(callLine)
                             .append(": in hook");
                 } else if ("main chunk".equals(info.functionName())) {
                     builder.append("\n\t").append(info.shortSource()).append(":")
-                            .append(callSection != null ? callSection.getStartLine() : '?')
+                            .append(callLine)
                             .append(": in main chunk");
                 } else {
                     builder.append("\n\t").append(info.shortSource()).append(":")
-                            .append(callSection != null ? callSection.getStartLine() : '?')
+                            .append(callLine)
                             .append(": in function '").append(info.functionName()).append("'");
                 }
             } else {
