@@ -212,9 +212,20 @@ public final class LuaTable extends LuaValue {
         return true;
     }
 
-    @ExportMessage boolean isMemberModifiable(String member) { return true; }
+    // 已存在的成员可修改，不存在的成员可插入；二者互斥是 interop 的契约。
+    @ExportMessage
+    boolean isMemberModifiable(String member,
+                               @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                               @CachedLibrary("this") DynamicObjectLibrary objLib) {
+        return objLib.containsKey(this, fromJavaStringNode.execute(member, LuaLanguage.STRING_ENCODING));
+    }
 
-    @ExportMessage boolean isMemberInsertable(String member) { return true; }
+    @ExportMessage
+    boolean isMemberInsertable(String member,
+                               @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
+                               @CachedLibrary("this") DynamicObjectLibrary objLib) {
+        return !objLib.containsKey(this, fromJavaStringNode.execute(member, LuaLanguage.STRING_ENCODING));
+    }
 
     @ExportMessage
     Object getMembers(boolean includeInternal, @CachedLibrary("this") DynamicObjectLibrary objLib) {

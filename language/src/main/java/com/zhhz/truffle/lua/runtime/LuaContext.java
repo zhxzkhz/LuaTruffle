@@ -92,6 +92,8 @@ public final class LuaContext {
 
     // 【核心】全局变量表
     private final LuaTable globals;
+    // 供 polyglot 嵌入方读写的全局作用域视图
+    private final LuaScope scope;
     private final Shape tableShape;
     private final Shape functionShape;
     private final Shape booleanShape;
@@ -329,6 +331,7 @@ public final class LuaContext {
         this.threadShape = Shape.newBuilder().layout(LuaThread.class, MethodHandles.lookup()).build();
 
         this.globals = new LuaTable(tableShape);
+        this.scope = new LuaScope(this.globals);
         // 2. 将全局表自身放入全局表中，键为 "_G"
         //    这是标准的 Lua 行为
         this.globals.rawset(toTruffleString("_G"), this.globals, DynamicObjectLibrary.getUncached());
@@ -1047,6 +1050,10 @@ public final class LuaContext {
 
     public LuaTable getGlobals() {
         return this.globals;
+    }
+
+    public LuaScope getScope() {
+        return this.scope;
     }
 
     // =================================================================================

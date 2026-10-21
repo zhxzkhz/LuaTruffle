@@ -314,7 +314,7 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
 
     @Override
     protected Object getScope(LuaContext context) {
-        return context.getGlobals();
+        return context.getScope();
     }
 
     private static final LanguageReference<LuaLanguage> REFERENCE = LanguageReference.create(LuaLanguage.class);

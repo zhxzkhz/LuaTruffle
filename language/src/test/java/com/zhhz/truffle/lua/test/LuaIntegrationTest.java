@@ -602,4 +602,22 @@ public class LuaIntegrationTest extends AbstractLuaTest {
         assertEquals(3L, result.getArrayElement(4).asLong());
         assertEquals(0L, result.getArrayElement(5).asLong());
     }
+
+    // --- 与宿主共享全局变量 (Context.getBindings) ---
+
+    @Test
+    public void testBindingsReadWrite() {
+        Value bindings = context.getBindings("lua");
+        bindings.putMember("hostX", 3);
+        assertEquals(3, bindings.getMember("hostX").asInt());
+        assertTrue(bindings.hasMember("hostX"));
+        assertTrue(bindings.getMemberKeys().contains("hostX"));
+
+        eval("guestY = 11");
+        assertEquals(11, bindings.getMember("guestY").asInt());
+
+        bindings.putMember("hostZ", 22);
+        assertEquals("22", eval("return tostring(hostZ)").asString());
+        assertEquals(3, eval("return math.min(hostX, 5)").asInt());
+    }
 }
