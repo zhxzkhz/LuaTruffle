@@ -214,6 +214,12 @@ public final class LuaContext {
     public void setInHook(boolean value) { LuaThread t = currentThread(); if (t != null) t.setInHook(value); }
     public int getInstructionCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getInstructionCount(); }
     public void setInstructionCount(int count) { LuaThread t = currentThread(); if (t != null) t.setInstructionCount(count); }
+    /** 标记/取消“下一次函数进入来自尾调用”（AST 尾调用重试循环使用）。 */
+    public void setPendingTailCall(boolean value) { LuaThread t = currentThread(); if (t != null) t.setPendingTailCall(value); }
+    public boolean takePendingTailCall() {
+        LuaThread t = currentThread();
+        return t != null && t.takePendingTailCall();
+    }
 
     // ---- 上下文级绑定状态 ----
     public com.oracle.truffle.api.instrumentation.EventBinding<?> getHookBinding() { return hookBinding; }
@@ -233,7 +239,22 @@ public final class LuaContext {
     // VM 整条调用栈运行在单个 Truffle 帧内，因此显式维护此列表供 debug 库做层级查询。
     private final java.util.List<com.zhhz.truffle.lua.vm.VmFrame> vmFrames = new java.util.ArrayList<>();
 
+    // 当前活跃的 VM 容器（每个 LuaVmRootNode 帧一个，外层在前）。
+    // 嵌套容器（VM → C 函数 → VM 回调）需要据此把逻辑帧归到正确的 Truffle 帧下。
+    private final java.util.List<com.zhhz.truffle.lua.vm.LuaVm> vmContainers = new java.util.ArrayList<>();
+
     public java.util.List<com.zhhz.truffle.lua.vm.VmFrame> getVmFrames() { return vmFrames; }
+
+    public java.util.List<com.zhhz.truffle.lua.vm.LuaVm> getVmContainers() { return vmContainers; }
+
+    public void enterVmContainer(com.zhhz.truffle.lua.vm.LuaVm vm) { vmContainers.add(vm); }
+
+    public void exitVmContainer(com.zhhz.truffle.lua.vm.LuaVm vm) {
+        int last = vmContainers.size() - 1;
+        if (last >= 0 && vmContainers.get(last) == vm) {
+            vmContainers.remove(last);
+        }
+    }
 
     // coroutine 线程跟踪
     public LuaThread getCurrentCoroutine() { return currentCoroutine.get(); }
@@ -1045,6 +1066,8 @@ public final class LuaContext {
     private static final int LUA_ERROR_HEADROOM = 25;
 
     private int cCallDepth;
+    /** 活跃内建 RootNode 栈（外层在前），用于 debug 库跳过自身的 C 帧。 */
+    private final java.util.List<com.oracle.truffle.api.nodes.RootNode> builtinRoots = new java.util.ArrayList<>();
     private int luaCallDepth;
     /** 是否正处于一次栈溢出错误处理过程中（用于生成 "error in error handling"）。 */
     private boolean stackOverflow;
@@ -1070,9 +1093,19 @@ public final class LuaContext {
             cCallDepth--;
             throw stackError("C stack overflow", location);
         }
+        builtinRoots.add(location instanceof com.oracle.truffle.api.nodes.RootNode root ? root : null);
+    }
+
+    /** 当前正在执行的内建（C 函数）RootNode；debug 库据此跳过自身的栈帧。 */
+    public com.oracle.truffle.api.nodes.RootNode getCurrentBuiltinRoot() {
+        int last = builtinRoots.size() - 1;
+        return last >= 0 ? builtinRoots.get(last) : null;
     }
 
     public void exitBuiltin() {
+        if (!builtinRoots.isEmpty()) {
+            builtinRoots.remove(builtinRoots.size() - 1);
+        }
         if (--cCallDepth <= 0) {
             cCallDepth = 0;
             // 栈已完全展开：清除溢出标记，避免后续调用误判为“错误处理中”。

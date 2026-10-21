@@ -35,6 +35,7 @@ import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 import com.zhhz.truffle.lua.runtime.LuaThread;
+import com.zhhz.truffle.lua.vm.LuaVm;
 import com.zhhz.truffle.lua.vm.VmFrame;
 
 /**
@@ -53,10 +54,9 @@ import com.zhhz.truffle.lua.vm.VmFrame;
  *
  * <p>限制（与宿主实现相关的取舍）：
  * <ul>
- *   <li>C 函数帧没有 {@code func} 身份（{@code getinfo(..., 'f')} 返回 nil），
- *       以 C 函数为键的调试代码（官方 db.lua 的部分自检）无法完全通过。</li>
- *   <li>AST 的尾调用仍报告为调用者的 {@code "return"} + 被调者的 {@code "call"}，
- *       尚未合并为 {@code "tail call"}；字节码 VM 已按参考实现报告。</li>
+ *   <li>宿主入口帧（Truffle 的 interop 分发帧）不计入层级，因此主块之上的层级为 nil，
+ *       而参考实现会显示为 {@code [C]: in ?}。</li>
+ *   <li>traceback 不区分尾调用链（参考实现会压缩并显示 {@code (...tail calls...)}）。</li>
  *   <li>{@code getupvalue}/{@code setupvalue} 基于闭包的父帧命名槽位枚举，
  *       可能包含未被捕获的父函数局部变量（无精确的 upvalue 调试信息）。</li>
  * </ul>
@@ -158,7 +158,10 @@ public final class DebugLibrary {
             // 非激活函数：只返回静态可得的信息；若该函数正出现在调用栈中，
             // 则补充 currentline 等动态信息。
             LuaFrameInfo active = findActiveFrame(function);
-            return new LuaFrameInfo(null, null, null, function, null).toInfoTable(context, what, active, false);
+            RootNode functionRoot = function.getCallTarget() instanceof RootCallTarget rootCallTarget
+                    ? rootCallTarget.getRootNode() : null;
+            return new LuaFrameInfo(null, null, null, function, null, functionRoot)
+                    .toInfoTable(context, what, active, false);
         }
 
         throw LuaException.create("bad argument #1 to 'getinfo' (number or function expected)", null);
@@ -902,11 +905,12 @@ public final class DebugLibrary {
      * （currentline 的来源，帧每次嵌套调用都会更新）；{@code entryCallNode}
      * 是进入该帧的那次调用（来自调用者帧的 callNode，name/namewhat 的来源）。
      */
-    private record LuaFrameInfo(Node callNode, Node entryCallNode, Frame frame, LuaFunction function, VmFrame vmFrame) {
+    private record LuaFrameInfo(Node callNode, Node entryCallNode, Frame frame, LuaFunction function, VmFrame vmFrame,
+                    RootNode frameRoot) {
 
         /** 构造一个字节码 VM 调用帧的帧信息。 */
         static LuaFrameInfo forVm(VmFrame vmFrame, Node entryCallNode) {
-            return new LuaFrameInfo(null, entryCallNode, null, vmFrame.function(), vmFrame);
+            return new LuaFrameInfo(null, entryCallNode, null, vmFrame.function(), vmFrame, null);
         }
 
         private RootNode root() {
@@ -922,7 +926,15 @@ public final class DebugLibrary {
         }
 
         private boolean isLuaFrame() {
-            return vmFrame != null || isVmClosure() || root() instanceof LuaRootNode;
+            if (vmFrame != null || isVmClosure()) {
+                return true;
+            }
+            // 帧自身的 RootNode 才是判断依据：callNode 属于调用方，
+            // 内建（C 函数）帧的 callNode 同样指向某个 Lua 调用点。
+            if (frameRoot != null) {
+                return frameRoot instanceof LuaRootNode;
+            }
+            return root() instanceof LuaRootNode;
         }
 
         /** 若该函数是字节码 VM 闭包，返回其 {@link Proto}；否则返回 null。 */
@@ -950,6 +962,16 @@ public final class DebugLibrary {
             if (isVmClosure()) {
                 return function.getName() != null ? function.getName().toJavaStringUncached() : "?";
             }
+            if (!isLuaFrame()) {
+                // C 函数：调用点的 callNode 属于调用方，只能用函数自身注册的名字。
+                return function != null && function.getName() != null
+                        ? function.getName().toJavaStringUncached()
+                        : "?";
+            }
+            // 主块（main chunk / load / dofile）在标准 Lua 的 traceback 中显示为 "main chunk"
+            if ("main".equals(what())) {
+                return "main chunk";
+            }
             RootNode root = root();
             if (root == null) {
                 return function != null && function.getName() != null
@@ -975,6 +997,11 @@ public final class DebugLibrary {
                 // 复刻 ldebug.c:funcinfo —— 主块（linedefined == 0）报告为 "main"。
                 return proto().linedefined == 0 ? "main" : "Lua";
             }
+            // AST 的顶层入口（main chunk / load / dofile）同样是主块。
+            RootNode root = frameRoot != null ? frameRoot : root();
+            if (root instanceof com.zhhz.truffle.lua.nodes.LuaAstRootNode astRoot && astRoot.isTopLevel()) {
+                return "main";
+            }
             return "Lua";
         }
 
@@ -985,7 +1012,8 @@ public final class DebugLibrary {
             }
             SourceSection section = sourceSection();
             if (section != null) {
-                return section.getSource().getName();
+                // 与 luaO_chunkid 一致：文件源去掉 '@'，字符串源显示为 [string "..."]
+                return chunkId(section.getSource().getName());
             }
             return "=?";
         }
@@ -1005,6 +1033,10 @@ public final class DebugLibrary {
             LuaFrameInfo target = active != null ? active : this;
             if (target.vmFrame != null) {
                 return target.vmFrame.currentLine();
+            }
+            // 参考实现 lua_getinfo 'l'：C 函数没有当前行。
+            if (!target.isLuaFrame()) {
+                return -1;
             }
             Node node = target.callNode();
             if (node == null && target.function() != null) {
@@ -1053,8 +1085,8 @@ public final class DebugLibrary {
                 switch (what.charAt(i)) {
                     case 'S' -> {
                         boolean lua = isLuaFrame();
-                        // C 函数：source/short_src 为 "[C]"，无定义行
-                        String source = "[C]";
+                        // C 函数：source 为 "=[C]"（短源 "[C]"），无定义行
+                        String source = "=[C]";
                         String shortSrc = "[C]";
                         long lineDefined = -1L;
                         long lastLineDefined = -1L;
@@ -1071,9 +1103,10 @@ public final class DebugLibrary {
                             if (section != null) {
                                 // 文件型 Source 视为 "@path"（真实 Lua 的源名格式），
                                 // 其余用 Source 的名字（load 传入的 chunk 名或 chunk 文本）
-                                String rawName = section.getSource().getPath() != null
-                                        ? "@" + section.getSource().getName()
-                                        : section.getSource().getName();
+                                String rawName = section.getSource().getName();
+                                if (section.getSource().getPath() != null && !rawName.startsWith("@")) {
+                                    rawName = "@" + rawName;
+                                }
                                 source = rawName;
                                 shortSrc = chunkId(rawName);
                                 lineDefined = section.getStartLine();
@@ -1174,23 +1207,31 @@ public final class DebugLibrary {
         }
         LuaFrameInfo[] result = {null};
         Node[] entryCall = {null};
-        boolean[] started = {false};
         long[] current = {0};
+        int[] containersSeen = {0};
+        RootNode ownBuiltin = context().getCurrentBuiltinRoot();
         Truffle.getRuntime().iterateFrames(frameInstance -> {
-            if (!started[0]) {
-                if (!isLuaStackFrame(frameInstance)) {
-                    return null; // 最内层的分发/内建帧，跳过
-                }
-                started[0] = true; // 第一个 Lua 帧 = level 1
+            // 只跳过 interop 分发包装帧和 debug 库自身的帧；其他内建（C 函数）帧
+            // 是真实栈层，需要计数（例如回调里 getinfo(2) 的调用者可能正是 C 函数）。
+            if (!isLanguageStackFrame(frameInstance) || isOwnBuiltinFrame(frameInstance, ownBuiltin)) {
+                return null;
             }
-            // 字节码 VM 容器帧：其内部的所有 VM 帧逻辑上位于此处（自内向外展开），
+            // 字节码 VM 容器帧：展开属于该容器的逻辑帧（自内向外），
             // 展开完后继续遍历 Truffle 帧（VM 根的外层调用者）。
             if (isVmRootFrame(frameInstance)) {
+                LuaVm owner = vmContainerFor(containersSeen);
+                if (owner == null) {
+                    return null;
+                }
                 java.util.List<VmFrame> vmFrames = context().getVmFrames();
                 for (int k = vmFrames.size() - 1; k >= 0; k--) {
+                    VmFrame vmFrame = vmFrames.get(k);
+                    if (vmFrame.owner() != owner) {
+                        continue;
+                    }
                     current[0]++;
                     if (current[0] == level) {
-                        result[0] = LuaFrameInfo.forVm(vmFrames.get(k), frameInstance.getCallNode());
+                        result[0] = LuaFrameInfo.forVm(vmFrame, frameInstance.getCallNode());
                         return Boolean.TRUE;
                     }
                 }
@@ -1212,7 +1253,7 @@ public final class DebugLibrary {
         });
         if (result[0] != null && entryCall[0] != null) {
             return new LuaFrameInfo(result[0].callNode(), entryCall[0], result[0].frame(), result[0].function(),
-                    result[0].vmFrame());
+                    result[0].vmFrame(), result[0].frameRoot());
         }
         return result[0];
     }
@@ -1225,10 +1266,40 @@ public final class DebugLibrary {
     }
 
     /**
-     * 是否为 Lua 语言的栈帧。以帧自身的 CallTarget 判定：
-     * target 为 LuaRootNode → Lua 帧；BuiltinRootNode → 内建（C 函数）帧；
-     * 无 target（interop 分发帧）→ 跳过。
-     * （不能用 callNode 的 root 判定——callNode 属于调用方的 AST。）
+     * 把第 n 个遇到的 VM 容器帧（自内向外）映射到 {@link LuaContext} 中对应的 {@link LuaVm}。
+     * 容器按外层→内层入栈，而 Truffle 帧按内层→外层遍历，故从列表末尾倒序取。
+     */
+    private static LuaVm vmContainerFor(int[] containersSeen) {
+        java.util.List<LuaVm> containers = context().getVmContainers();
+        int index = containers.size() - 1 - containersSeen[0];
+        containersSeen[0]++;
+        return index >= 0 ? containers.get(index) : null;
+    }
+
+    /** 该帧是否是 debug 库自身正在执行的内建帧（level 0，不计入调用栈）。 */
+    private static boolean isOwnBuiltinFrame(FrameInstance frameInstance, RootNode ownBuiltin) {
+        return ownBuiltin != null
+                && frameInstance.getCallTarget() instanceof RootCallTarget rootCallTarget
+                && rootCallTarget.getRootNode() == ownBuiltin;
+    }
+
+    /**
+     * 是否为 Lua 语言的栈帧：Lua 函数、内建（C 函数）或字节码 VM 容器。
+     * interop 分发包装帧不属于任何一层 Lua 栈，查询层级时跳过。
+     */
+    private static boolean isLanguageStackFrame(FrameInstance frameInstance) {
+        CallTarget target = frameInstance.getCallTarget();
+        if (target instanceof RootCallTarget rootCallTarget) {
+            RootNode root = rootCallTarget.getRootNode();
+            return root instanceof LuaRootNode || root instanceof BuiltinRootNode
+                    || root instanceof com.zhhz.truffle.lua.vm.LuaVmRootNode;
+        }
+        return false;
+    }
+
+    /**
+     * 是否为“Lua 帧”（用于入口调用点 name 解析）：Lua 函数帧是，内建（C 函数）帧不是
+     * （C 帧的 callNode 属于调用方，不能用来解析被调查帧的调用名）。
      */
     private static boolean isLuaStackFrame(FrameInstance frameInstance) {
         CallTarget target = frameInstance.getCallTarget();
@@ -1250,12 +1321,12 @@ public final class DebugLibrary {
         }
         LuaFrameInfo[] result = {null};
         Truffle.getRuntime().iterateFrames(frameInstance -> {
-            Node callNode = frameInstance.getCallNode();
-            if (callNode != null && callNode.getRootNode() instanceof LuaRootNode luaRoot) {
-                if (luaRoot.getCallTarget() == function.getCallTarget()) {
-                    result[0] = toFrameInfo(frameInstance);
-                    return Boolean.TRUE;
-                }
+            // 帧自身执行的 CallTarget 才能标识“这一帧是哪个函数”
+            // （内建 C 函数帧的 callNode 属于调用方，指向的是调用它的 Lua 节点）。
+            // VM 闭包共用同一个 LuaVmRootNode 目标，需先按 VM 栈匹配，避免误判。
+            if (!isVmRootFrame(frameInstance) && frameInstance.getCallTarget() == function.getCallTarget()) {
+                result[0] = toFrameInfo(frameInstance);
+                return Boolean.TRUE;
             }
             return null;
         });
@@ -1265,20 +1336,25 @@ public final class DebugLibrary {
     private static LuaFrameInfo toFrameInfo(FrameInstance frameInstance) {
         Node callNode = frameInstance.getCallNode();
         Frame frame = frameInstance.getFrame(FrameAccess.MATERIALIZE);
+        RootNode frameRoot = frameInstance.getCallTarget() instanceof RootCallTarget rootCallTarget
+                ? rootCallTarget.getRootNode() : null;
         // 优先取帧参数里的真实闭包（LuaFunction.Execute 把它放在 arguments[0]）：
-        // 这样 debug.getinfo(..., 'f').func 与原函数是同一对象；同时某些经 interop
-        // 进入的帧没有 callNode，也能据此判断它是不是 Lua 帧。
+        // 这样 debug.getinfo(..., 'f').func 与原函数是同一对象；内建（C 函数）
+        // 帧同样如此，其 func 就是 Lua 侧持有/调用的那个函数对象。
         LuaFunction function = null;
         Object[] frameArguments = frame.getArguments();
         if (frameArguments.length > 0 && frameArguments[0] instanceof LuaFunction fn
-                && fn.getCallTarget() instanceof RootCallTarget rootCallTarget
-                && rootCallTarget.getRootNode() instanceof LuaRootNode) {
+                && fn.getCallTarget() == frameInstance.getCallTarget()) {
             function = fn;
+        } else if (frameRoot instanceof LuaRootNode luaRoot) {
+            function = new LuaFunction(context().getFunctionShape(), luaRoot.getCallTarget(), null,
+                    luaRoot.getTSName());
         } else if (callNode != null && callNode.getRootNode() instanceof LuaRootNode luaRoot) {
-            TruffleString name = luaRoot.getTSName();
-            function = new LuaFunction(context().getFunctionShape(), luaRoot.getCallTarget(), null, name);
+            // 经 interop 进入、帧参数不含闭包的 Lua 帧（如内部 chunk 调用）。
+            function = new LuaFunction(context().getFunctionShape(), luaRoot.getCallTarget(), null,
+                    luaRoot.getTSName());
         }
-        return new LuaFrameInfo(callNode, null, frame, function, null);
+        return new LuaFrameInfo(callNode, null, frame, function, null, frameRoot);
     }
 
     private static boolean isBuiltinRoot(FrameInstance frameInstance) {
@@ -1287,25 +1363,31 @@ public final class DebugLibrary {
     }
 
     private static void appendFrames(StringBuilder builder, long startLevel) {
-        boolean[] started = {false};
         long[] current = {0};
+        int[] containersSeen = {0};
         LuaContext ctx = context();
         boolean inHook = ctx.isInHook();
+        RootNode ownBuiltin = ctx.getCurrentBuiltinRoot();
         Truffle.getRuntime().iterateFrames(frameInstance -> {
-            // 跳过最内层的非 Lua 帧（interop 分发帧 / debug 内建自身的帧）
-            if (!started[0]) {
-                if (!isLuaStackFrame(frameInstance)) {
+            // 只跳过 interop 分发包装帧和 debug 库自身的帧；其他内建帧是真实栈层。
+            if (!isLanguageStackFrame(frameInstance) || isOwnBuiltinFrame(frameInstance, ownBuiltin)) {
+                return null;
+            }
+            // 字节码 VM 容器帧：自内向外展开属于该容器的逻辑帧
+            if (isVmRootFrame(frameInstance)) {
+                LuaVm owner = vmContainerFor(containersSeen);
+                if (owner == null) {
                     return null;
                 }
-                started[0] = true;
-            }
-            // 字节码 VM 容器帧：自内向外展开所有 VM 帧
-            if (isVmRootFrame(frameInstance)) {
                 java.util.List<VmFrame> vmFrames = ctx.getVmFrames();
                 for (int k = vmFrames.size() - 1; k >= 0; k--) {
+                    VmFrame vmFrame = vmFrames.get(k);
+                    if (vmFrame.owner() != owner) {
+                        continue;
+                    }
                     current[0]++;
                     if (current[0] >= startLevel) {
-                        appendVmFrame(builder, vmFrames.get(k), current[0], inHook);
+                        appendVmFrame(builder, vmFrame, current[0], inHook);
                     }
                 }
                 return null;
@@ -1334,7 +1416,12 @@ public final class DebugLibrary {
                             .append(": in function '").append(info.functionName()).append("'");
                 }
             } else {
-                builder.append("\n\t[C]: in function '").append(info.functionName()).append("'");
+                String name = info.functionName();
+                if (name == null || "?".equals(name)) {
+                    builder.append("\n\t[C]: in ?");
+                } else {
+                    builder.append("\n\t[C]: in function '").append(name).append("'");
+                }
             }
             return null;
         });

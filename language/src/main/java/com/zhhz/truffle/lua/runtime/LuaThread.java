@@ -66,6 +66,13 @@ public final class LuaThread extends LuaValue {
     private boolean inHook;
     private int instructionCount;
 
+    /**
+     * 下一个进入的 Lua 函数是否由尾调用产生。AST 的尾调用通过异常在固定 Java 栈深度下
+     * 重新派发；重试循环在调用目标前置位，目标根节点在入口消费它，从而触发
+     * "tail call" 而不是 "call"（参考实现依据前一条指令是否为 OP_TAILCALL 判断）。
+     */
+    private boolean pendingTailCall;
+
     public Object getHookFunction() { return hookFunction; }
     public void setHookFunction(Object function) { this.hookFunction = function; }
     public String getHookMask() { return hookMask; }
@@ -82,6 +89,16 @@ public final class LuaThread extends LuaValue {
 
     /** 该线程是否设置了任意钩子（函数非空）。 */
     public boolean hasHook() { return hookFunction != null; }
+
+    /** 标记/取消“下一次函数进入来自尾调用”。 */
+    public void setPendingTailCall(boolean value) { this.pendingTailCall = value; }
+
+    /** 消费“下一次函数进入来自尾调用”标记（读取后清零）。 */
+    public boolean takePendingTailCall() {
+        boolean value = pendingTailCall;
+        pendingTailCall = false;
+        return value;
+    }
 
     /** 清空该线程的钩子状态。 */
     public void clearHook() {

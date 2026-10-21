@@ -96,6 +96,11 @@ public final class LuaAstRootNode extends LuaRootNode {
         return name;
     }
 
+    /** 是否为顶层入口（main chunk / dofile / load 的 chunk）：其 {@code what} 为 "main"。 */
+    public boolean isTopLevel() {
+        return topLevel;
+    }
+
     @Override
     protected boolean isInstrumentable() {
         return super.isInstrumentable();
@@ -105,19 +110,32 @@ public final class LuaAstRootNode extends LuaRootNode {
     public Object execute(VirtualFrame frame) {
         com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(this);
         if (context != null) {
+            // 只在有钩子时读写尾调用标记，避免热路径上的额外线程局部访问。
+            // 标记只可能由钩子活跃时的调用方设置，故无钩子时不会遗留。
+            boolean hooksActive = context.isAnyHookActive();
+            boolean tailEntry = hooksActive && context.takePendingTailCall();
             context.enterLuaCall(this);
             // 与参考实现一致：call 钩子在函数帧建立之后触发，
             // 因此钩子内 debug.getinfo(2) 看到的是被调用的函数（而不是调用点）。
-            if (context.isAnyHookActive()) {
-                LuaLineHook.fireCall(context);
+            // 由尾调用进入时报告 "tail call"（ldo.c:callhook 检查前一条指令）。
+            if (hooksActive) {
+                if (tailEntry) {
+                    LuaLineHook.fireTailCall(context);
+                } else {
+                    LuaLineHook.fireCall(context);
+                }
             }
         }
+        boolean tailExit = false;
         try {
             try {
                 bodyNode.executeVoid(frame);
             } catch (LuaReturnException e) {
                 return e.getResult();
             } catch (LuaTailCallException e) {
+                // 本函数的返回被尾调用取代：不再单独触发 return（参考实现复用 CallInfo），
+                // 由链尾函数负责唯一一次 return。
+                tailExit = true;
                 if (topLevel) {
                     return doTailCall(e);
                 }
@@ -133,7 +151,7 @@ public final class LuaAstRootNode extends LuaRootNode {
         } finally {
             if (context != null) {
                 // return 钩子在帧销毁之前触发，level 2 仍是将返回的函数。
-                if (context.isAnyHookActive()) {
+                if (!tailExit && context.isAnyHookActive()) {
                     LuaLineHook.fireReturn(context);
                 }
                 context.exitLuaCall();
@@ -159,10 +177,20 @@ public final class LuaAstRootNode extends LuaRootNode {
             } else if (tailCallNode.getCallTarget() != callTarget) {
                 tailCallNode = DirectCallNode.create(callTarget);
             }
+            com.zhhz.truffle.lua.runtime.LuaContext context =
+                    com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+            boolean marked = context != null && context.isAnyHookActive();
+            if (marked) {
+                context.setPendingTailCall(true);
+            }
             try {
                 return tailCallNode.call(frameArguments);
             } catch (LuaTailCallException next) {
                 e = next;
+            } finally {
+                if (marked) {
+                    context.setPendingTailCall(false);
+                }
             }
         }
     }

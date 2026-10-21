@@ -172,7 +172,7 @@ public final class LuaVm {
                 f.varargs = varargs;
             }
 
-            VmFrame dbg = new VmFrame(function, p, f.regs);
+            VmFrame dbg = new VmFrame(function, p, f.regs, this);
             dbg.varargs = f.varargs;
             dbg.name = name;
             dbg.namewhat = namewhat;

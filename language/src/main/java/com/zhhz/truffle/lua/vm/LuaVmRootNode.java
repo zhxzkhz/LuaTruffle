@@ -30,7 +30,13 @@ public final class LuaVmRootNode extends RootNode {
 
         LuaContext context = LuaContext.get(this);
         LuaVm vm = new LuaVm(context);
-        Object[] results = vm.execute(function, userArguments);
+        context.enterVmContainer(vm);
+        Object[] results;
+        try {
+            results = vm.execute(function, userArguments);
+        } finally {
+            context.exitVmContainer(vm);
+        }
 
         if (results.length == 0) {
             return LuaNil.SINGLETON;

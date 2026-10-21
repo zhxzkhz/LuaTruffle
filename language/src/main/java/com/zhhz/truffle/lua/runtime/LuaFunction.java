@@ -129,10 +129,19 @@ public final class LuaFunction extends LuaValue {
                 Object[] frameArgs = new Object[args.length + 1];
                 frameArgs[0] = target;
                 System.arraycopy(args, 0, frameArgs, 1, args.length);
+                LuaContext context = LuaContext.get(null);
+                boolean marked = context != null && context.isAnyHookActive();
+                if (marked) {
+                    context.setPendingTailCall(true);
+                }
                 try {
                     return target.getCallTarget().call(frameArgs);
                 } catch (LuaTailCallException next) {
                     e = next;
+                } finally {
+                    if (marked) {
+                        context.setPendingTailCall(false);
+                    }
                 }
             }
         }
@@ -337,10 +346,19 @@ public final class LuaFunction extends LuaValue {
                 Object[] frameArguments = new Object[args.length + 1];
                 frameArguments[0] = target;
                 System.arraycopy(args, 0, frameArguments, 1, args.length);
+                LuaContext context = LuaContext.get(null);
+                boolean marked = context != null && context.isAnyHookActive();
+                if (marked) {
+                    context.setPendingTailCall(true);
+                }
                 try {
                     return callNode.call(target.getCallTarget(), frameArguments);
                 } catch (LuaTailCallException next) {
                     tce = next;
+                } finally {
+                    if (marked) {
+                        context.setPendingTailCall(false);
+                    }
                 }
             }
         }

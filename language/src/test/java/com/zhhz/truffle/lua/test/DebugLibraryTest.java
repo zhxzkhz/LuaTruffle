@@ -490,15 +490,57 @@ class DebugLibraryTest extends AbstractLuaTest {
     void getinfoReportsCFunctionAtBuiltinLevel() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """
-                    local what
+                    local what, source, line, ispcall
                     local function target()
-                        what = debug.getinfo(2, 'S').what
+                        local info = debug.getinfo(2, 'Sfl')
+                        what, source, line, ispcall = info.what, info.source, info.currentline, info.func == pcall
                     end
                     pcall(target)
-                    return what
+                    return what, source, line, ispcall
                     """);
             // level 2 from inside target(): target 的调用者是 pcall（C 函数）
-            assertFalse(result.asString().isEmpty());
+            assertEquals("C", result.getArrayElement(0).asString());
+            assertEquals("=[C]", result.getArrayElement(1).asString());
+            assertEquals(-1L, result.getArrayElement(2).asLong(), "C functions have no current line");
+            assertTrue(result.getArrayElement(3).asBoolean(), "func is the Lua function that was called");
+        }
+    }
+
+    @Test
+    void tailCallHooksSkipTheCallerReturnForAstFunctions() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local events = {}
+                    local function hook(e) events[#events + 1] = e end
+                    local function inner(x) return x end
+                    local function outer(x) return inner(x) end
+                    debug.sethook(hook, 'cr')
+                    outer(1)
+                    debug.sethook()
+                    return table.concat(events, ',')
+                    """);
+            // 与参考实现一致：outer 的 return 被 tail call 取代，链尾只报一次 return。
+            assertEquals("return,call,tail call,return,call", result.asString());
+        }
+    }
+
+    @Test
+    void getinfoReportsMainForAstChunks() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local f = function(x) return x * 2 end
+                    local chunk = load("return f(21)", "chunk", "t", {f = f})
+                    local what
+                    debug.sethook(function(e)
+                        local info = debug.getinfo(2, 'Sf')
+                        if info and info.func == chunk then what = info.what end
+                    end, 'c')
+                    local r = chunk()
+                    debug.sethook()
+                    return r, what
+                    """);
+            assertEquals(42L, result.getArrayElement(0).asLong());
+            assertEquals("main", result.getArrayElement(1).asString());
         }
     }
 }

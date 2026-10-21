@@ -18,6 +18,13 @@ public final class VmFrame {
 
     private final LuaFunction function;
     private final Proto proto;
+    /**
+     * 执行本帧的 {@link LuaVm} 实例。每个 {@code LuaVmRootNode} 帧对应一个容器，
+     * 嵌套容器（如 VM → C 函数 → VM 回调）各自拥有独立的逻辑帧集合；
+     * debug 库据此把 {@link com.zhhz.truffle.lua.runtime.LuaContext#getVmFrames()}
+     * 中的帧归到正确的 Truffle 容器帧下。
+     */
+    private final LuaVm owner;
     Object[] regs;
 
     /** vararg 参数（不含固定参数）；无 vararg 时为空数组。 */
@@ -35,14 +42,19 @@ public final class VmFrame {
     /** 调用点解析出的 namewhat（"local"/"global"/"field"/"upvalue"/"method"/""）。 */
     String namewhat;
 
-    VmFrame(LuaFunction function, Proto proto, Object[] regs) {
+    VmFrame(LuaFunction function, Proto proto, Object[] regs, LuaVm owner) {
         this.function = function;
         this.proto = proto;
         this.regs = regs;
+        this.owner = owner;
     }
 
     public LuaFunction function() {
         return function;
+    }
+
+    public LuaVm owner() {
+        return owner;
     }
 
     public Proto proto() {
