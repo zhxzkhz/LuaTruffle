@@ -61,6 +61,9 @@ mvn package
 # 需要安装 native-image 工具: gu install native-image
 mvn package -Pnative
 # 产物: standalone/target/luanative(.exe)
+# 冒烟测试：标准库安装、位运算、尾调用、协程、debug 钩子与错误处理
+./standalone/target/luanative standalone/native-smoke.lua
+# 官方测试套件（需先准备 all.lua 等测试文件）
 ./standalone/target/luanative --portable-tests all.lua
 ```
 

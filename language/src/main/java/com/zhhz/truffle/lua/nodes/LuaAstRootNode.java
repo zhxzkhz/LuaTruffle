@@ -43,7 +43,7 @@ package com.zhhz.truffle.lua.nodes;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaLanguage;
@@ -70,8 +70,11 @@ public final class LuaAstRootNode extends LuaRootNode {
      */
     private final boolean topLevel;
 
-    /** 顶层尾调用重试缓存。 */
-    @Child private DirectCallNode tailCallNode;
+    /**
+     * 顶层尾调用重试缓存。构造期创建并 adopt，使尾调用循环本身可以参与编译，
+     * 同时避免运行期编译代码里创建 Node（native image 会因此拒绝运行期编译）。
+     */
+    @Child private IndirectCallNode tailCallNode;
 
     public LuaAstRootNode(LuaLanguage language, FrameDescriptor frameDescriptor, LuaStatementNode bodyNode,
                           SourceSection sourceSection, TruffleString name) {
@@ -85,6 +88,7 @@ public final class LuaAstRootNode extends LuaRootNode {
         this.sourceSection = sourceSection;
         this.name = name;
         this.topLevel = topLevel;
+        this.tailCallNode = topLevel ? insert(IndirectCallNode.create()) : null;
     }
 
     @Override
@@ -164,7 +168,6 @@ public final class LuaAstRootNode extends LuaRootNode {
     /**
      * 顶层尾调用重试循环：在固定 Java 栈深度下反复执行尾递归目标，直到正常返回。
      */
-    @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private Object doTailCall(LuaTailCallException initial) {
         LuaTailCallException e = initial;
         while (true) {
@@ -175,11 +178,6 @@ public final class LuaAstRootNode extends LuaRootNode {
             frameArguments[0] = target;
             System.arraycopy(args, 0, frameArguments, 1, args.length);
 
-            if (tailCallNode == null) {
-                tailCallNode = DirectCallNode.create(callTarget);
-            } else if (tailCallNode.getCallTarget() != callTarget) {
-                tailCallNode = DirectCallNode.create(callTarget);
-            }
             com.zhhz.truffle.lua.runtime.LuaContext context =
                     com.zhhz.truffle.lua.runtime.LuaContext.get(this);
             // 无条件标记：目标帧需要知道自己是尾调用进入的（钩子事件与 traceback 标记共用）。
@@ -187,7 +185,7 @@ public final class LuaAstRootNode extends LuaRootNode {
                 context.setPendingTailCall(true);
             }
             try {
-                return tailCallNode.call(frameArguments);
+                return tailCallNode.call(callTarget, frameArguments);
             } catch (LuaTailCallException next) {
                 e = next;
             } finally {
