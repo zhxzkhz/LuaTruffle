@@ -37,8 +37,10 @@ public final class CoroutineLibrary {
         LuaContext context = LuaContext.get(null);
         Env env = context.getEnv();
         TruffleString name = func.getName();
-        return new LuaThread(context.getThreadShape(), func.getCallTarget(), func.getCallParent(),
+        LuaThread thread = new LuaThread(context.getThreadShape(), func.getCallTarget(), func.getCallParent(),
                 name, func, env, false);
+        context.registerCoroutine(thread);
+        return thread;
     }
 
     /**
@@ -151,7 +153,9 @@ public final class CoroutineLibrary {
     public static boolean isyieldable(@SuppressWarnings("unused") Object[] arguments) {
         LuaContext context = LuaContext.get(null);
         LuaThread current = context.getCurrentCoroutine();
-        return current != null && !current.isMain();
+        // 主线程不可 yield；经内建（C）函数回调进入（nny>0，例如 gsub 替换函数、
+        // table.sort 比较器）时同样不可（参考实现 lua_isyieldable 检查 L->nny）。
+        return current != null && !current.isMain() && !context.isNonYieldable();
     }
 
     /**

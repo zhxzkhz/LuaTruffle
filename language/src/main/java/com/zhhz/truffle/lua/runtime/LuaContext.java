@@ -264,6 +264,26 @@ public final class LuaContext {
     public LuaThread getCurrentCoroutine() { return currentCoroutine.get(); }
     public void setCurrentCoroutine(LuaThread thread) { currentCoroutine.set(thread); }
 
+    /** 本上下文创建的所有协程（用于关闭时唤醒/回收其线程）。 */
+    private final java.util.Set<LuaThread> coroutineThreads =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    public void registerCoroutine(LuaThread thread) { coroutineThreads.add(thread); }
+
+    /**
+     * 关闭时回收所有协程线程：唤醒阻塞在 yield/resume 交换上的线程并等待其结束。
+     * Truffle 在 dispose 完成后要求语言线程已全部退出，否则上下文关闭失败。
+     */
+    public void disposeCoroutines() {
+        for (LuaThread thread : coroutineThreads) {
+            thread.dispose();
+        }
+        for (LuaThread thread : coroutineThreads) {
+            thread.awaitTermination(2000L);
+        }
+        coroutineThreads.clear();
+    }
+
     // tostring 内建函数对象：error() 格式化非字符串错误对象时经由它调用
     // __tostring（保持标准 lua message handler 的帧深度），不能被用户替换的全局覆盖
     private LuaFunction tostringFunction;
@@ -1182,7 +1202,13 @@ public final class LuaContext {
                 if (messageObject instanceof String string) {
                     messageObject = toTruffleString(string);
                 }
-                Object handled = UNCACHED_INTEROP.execute(handler, messageObject);
+                enterNonYieldable();
+                Object handled;
+                try {
+                    handled = UNCACHED_INTEROP.execute(handler, messageObject);
+                } finally {
+                    exitNonYieldable();
+                }
                 throw new LuaHandledError(handled);
             } catch (LuaHandledError handled) {
                 throw handled;

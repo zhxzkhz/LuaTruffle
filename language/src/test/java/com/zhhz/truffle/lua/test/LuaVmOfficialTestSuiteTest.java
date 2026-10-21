@@ -39,6 +39,10 @@ class LuaVmOfficialTestSuiteTest extends AbstractLuaTest {
             "vararg.lua",
             "goto.lua",
             "math.lua",
+            "coroutine.lua",
+            "attrib.lua",
+            "sort.lua",
+            "gc.lua",
     };
 
     /** Same preamble all.lua installs before running the individual test files. */

@@ -328,6 +328,12 @@ public final class StringLibrary {
             Object[] captures = match.capturesOrWholeMatch();
             value = com.zhhz.truffle.lua.nodes.access.LuaReadTableNode.readUncached(null, table, captures[0]);
         } else if (InteropLibrary.getUncached().isExecutable(replacement)) {
+            // 参考实现 lstrlib.c 通过 lua_call 调用替换函数：不可跨此 C 边界 yield。
+            com.zhhz.truffle.lua.runtime.LuaContext context =
+                    com.zhhz.truffle.lua.runtime.LuaContext.get(null);
+            if (context != null) {
+                context.enterNonYieldable();
+            }
             try {
                 value = InteropLibrary.getUncached().execute(replacement, match.capturesOrWholeMatch());
                 value = LuaMultiValue.firstValue(value);
@@ -335,6 +341,10 @@ public final class StringLibrary {
                 throw exception;
             } catch (Exception exception) {
                 throw LuaException.create("error in string.gsub replacement function\n" + exception.getMessage(), null);
+            } finally {
+                if (context != null) {
+                    context.exitNonYieldable();
+                }
             }
         } else {
             byte[] replacementBytes = LuaStringSupport.toBytes(replacement, 3, "gsub");

@@ -36,7 +36,18 @@ public abstract class LuaXpcallBuiltinNode extends LuaBuiltinNode {
             return new LuaMultiValue(new Object[]{false, LuaMultiValue.firstValue(handled.getHandled())});
         } catch (Exception exception) {
             try {
-                Object handled = interop.execute(arguments[1], LuaPcallBuiltinNode.errorObject(exception));
+                // 参考实现经 luaD_callnoyield 调用消息处理函数：nny>0，不可 yield。
+                if (context != null) {
+                    context.enterNonYieldable();
+                }
+                Object handled;
+                try {
+                    handled = interop.execute(arguments[1], LuaPcallBuiltinNode.errorObject(exception));
+                } finally {
+                    if (context != null) {
+                        context.exitNonYieldable();
+                    }
+                }
                 if (context != null) {
                     context.clearStackOverflow();
                 }

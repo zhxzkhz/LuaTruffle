@@ -325,6 +325,14 @@ public final class LuaLanguage extends TruffleLanguage<LuaContext> {
 
     @Override
     protected void exitContext(LuaContext context, ExitMode exitMode, int exitCode) {
+        // 协程运行在独立 Java 线程上：关闭上下文前必须唤醒并等待其结束，
+        // 否则 Truffle 会因为“语言线程未全部完成”而拒绝关闭。
+        // 注意要在这里（而不是 disposeContext）做：Truffle 在 dispose 之前就检查线程。
+        context.disposeCoroutines();
+    }
 
+    @Override
+    protected void disposeContext(LuaContext context) {
+        context.disposeCoroutines();
     }
 }

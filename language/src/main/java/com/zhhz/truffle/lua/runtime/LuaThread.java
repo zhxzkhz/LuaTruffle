@@ -55,6 +55,9 @@ public final class LuaThread extends LuaValue {
     /** 标记是否是主线程 */
     private final boolean main;
 
+    /** 上下文关闭时置位：唤醒挂起的协程线程并让其直接退出，不再交换结果。 */
+    private volatile boolean disposed;
+
     // =================================================================================
     // 每线程调试钩子状态（对应标准 Lua 的 L->hook / L->hookmask / L->hookcount /
     // L->oldpc / L->allowhook）。协程各有独立钩子；主线程使用 mainThread 实例。
@@ -202,6 +205,9 @@ public final class LuaThread extends LuaValue {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             state = State.DEAD;
+            if (disposed) {
+                throw new AbortExecution();
+            }
             return new Object[]{Boolean.FALSE, LuaContext.toTruffleString("coroutine interrupted")};
         }
 
@@ -255,6 +261,10 @@ public final class LuaThread extends LuaValue {
             return resumeArgs;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (disposed) {
+                // 上下文正在关闭：直接展开调用栈，避免协程继续执行后再次阻塞。
+                throw new AbortExecution();
+            }
             return new Object[0];
         }
     }
@@ -285,6 +295,9 @@ public final class LuaThread extends LuaValue {
             try {
                 // 等待第一次 resume 的参数
                 Object[] firstArgs = exchanger.exchange(null);
+                if (disposed) {
+                    return; // 创建后未运行即关闭
+                }
                 // 构建调用参数: 被调用的 LuaFunction + user args
                 Object[] frameArgs = new Object[firstArgs.length + 1];
                 frameArgs[0] = function;
@@ -303,8 +316,14 @@ public final class LuaThread extends LuaValue {
                             retValues = new Object[]{"return",
                                     result == null ? LuaNil.SINGLETON : result};
                         }
+                    if (disposed) {
+                        return; // 上下文已关闭：不再与（已停止等待的）调用者交换结果
+                    }
                     exchanger.exchange(retValues);
                 } catch (Throwable e) {
+                    if (disposed) {
+                        return; // 关闭时的取消/中断：静默退出
+                    }
                     Object errObj;
                     if (e instanceof com.zhhz.truffle.lua.LuaException le) {
                         errObj = le.getErrorObject();
@@ -334,6 +353,41 @@ public final class LuaThread extends LuaValue {
         }
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /**
+     * 关闭协程：唤醒阻塞在 {@link Exchanger} 上的线程并令其退出。
+     * 由上下文销毁时调用（Truffle 要求语言线程在 dispose 前全部结束）。
+     */
+    public void dispose() {
+        disposed = true;
+        Thread t = thread;
+        if (t != null) {
+            t.interrupt();
+        }
+    }
+
+    /** 等待协程线程结束（主线程对象没有底层线程，直接返回）。 */
+    public void awaitTermination(long millis) {
+        Thread t = thread;
+        if (t == null || t == Thread.currentThread()) {
+            return;
+        }
+        try {
+            t.join(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * 取消执行：上下文关闭时从 {@link #yield} 抛出，展开协程的 Lua 调用栈。
+     * 不填充栈轨迹（纯控制流）。
+     */
+    private static final class AbortExecution extends RuntimeException {
+        AbortExecution() {
+            super(null, null, false, false);
+        }
     }
 
     /**
