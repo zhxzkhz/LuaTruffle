@@ -73,6 +73,26 @@ public final class LuaThread extends LuaValue {
      */
     private boolean pendingTailCall;
 
+    /**
+     * 每线程的调试簿记：VM 逻辑帧、活跃 VM 容器与活跃内建 RootNode。
+     *
+     * <p>这些栈描述的是<b>当前执行线程</b>的调用栈（Truffle 帧与 VM 栈都按线程区分）。
+     * 协程在独立 Java 线程上交错执行（resume 阻塞等待 yield），若存放在
+     * {@link LuaContext} 上会互相串栈：一个协程挂起时其条目仍留在全局列表里，
+     * 另一个线程的增删与层级映射都会错位。
+     */
+    public static final class DebugStacks {
+        final java.util.List<com.zhhz.truffle.lua.vm.VmFrame> vmFrames = new java.util.ArrayList<>();
+        final java.util.List<com.zhhz.truffle.lua.vm.LuaVm> vmContainers = new java.util.ArrayList<>();
+        final java.util.List<com.oracle.truffle.api.nodes.RootNode> builtinRoots = new java.util.ArrayList<>();
+    }
+
+    private final DebugStacks debugStacks = new DebugStacks();
+
+    public DebugStacks debugStacks() {
+        return debugStacks;
+    }
+
     public Object getHookFunction() { return hookFunction; }
     public void setHookFunction(Object function) { this.hookFunction = function; }
     public String getHookMask() { return hookMask; }

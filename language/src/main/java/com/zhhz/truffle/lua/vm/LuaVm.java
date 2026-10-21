@@ -48,6 +48,12 @@ public final class LuaVm {
 
     private final LuaContext context;
 
+    /**
+     * 本容器所属线程的调试帧栈（构造时绑定：一个 LuaVm 实例只在一个 Java 线程上运行）。
+     * 缓存引用避免每次 VM 调用都做线程局部查找。
+     */
+    private final java.util.List<VmFrame> vmStack;
+
     /** 当前正在解释的帧（用于错误位置信息）。进入 runFrame 时设置，退出时恢复。 */
     private Frame curFrame;
 
@@ -59,6 +65,7 @@ public final class LuaVm {
 
     public LuaVm(LuaContext context) {
         this.context = context;
+        this.vmStack = context.getVmFrames();
     }
 
     // =================================================================================
@@ -178,7 +185,7 @@ public final class LuaVm {
             dbg.namewhat = namewhat;
             f.dbg = dbg;
 
-            java.util.List<VmFrame> stack = context.getVmFrames();
+            java.util.List<VmFrame> stack = vmStack;
             stack.add(dbg);
             try {
                 // 与参考实现一致：call 钩子在压入被调帧之后触发，
@@ -199,7 +206,7 @@ public final class LuaVm {
                         LuaLineHook.fireReturn(context);
                     }
                 } finally {
-                    stack.remove(stack.size() - 1);
+                    removeDebugFrame(f);
                     releaseFrame(f);
                 }
             }
@@ -225,6 +232,28 @@ public final class LuaVm {
         f.sinkWanted = 0;
         f.tailDelegated = false;
         return f;
+    }
+
+    /**
+     * 从调试栈移除本帧的 {@link VmFrame}（幂等）。尾调用会用被调帧替换调用者帧，
+     * 调用者帧在链尾 RETURN 之前就已从参考实现的层级中消失，这里同步移除。
+     */
+    private void removeDebugFrame(Frame f) {
+        VmFrame dbg = f.dbg;
+        if (dbg == null) {
+            return;
+        }
+        f.dbg = null;
+        int last = vmStack.size() - 1;
+        if (last >= 0 && vmStack.get(last) == dbg) {
+            vmStack.remove(last);
+            return;
+        }
+        // 尾调用移除后，本帧不再是栈顶：按身份查找（仅在异常/嵌套场景发生）。
+        int pos = vmStack.lastIndexOf(dbg);
+        if (pos >= 0) {
+            vmStack.remove(pos);
+        }
     }
 
     private void releaseFrame(Frame f) {
@@ -515,8 +544,10 @@ public final class LuaVm {
                         if (f.p.sizep() > 0) {
                             closeUpvals(f, 0);
                         }
-                        // 参考实现中尾调用替换调用者帧：不再单独触发本帧的 return。
+                        // 参考实现中尾调用替换调用者帧：不再单独触发本帧的 return，
+                        // 并从调试栈移除——参考实现的层级里该帧已不存在（复用 CallInfo）。
                         f.tailDelegated = true;
+                        removeDebugFrame(f);
                         if (f.sinkCaller != null) {
                             // 尾调用直接延续当前帧的结果去向，无需再经中间寄存器。
                             executeInto(fn, f.regs, a + 1, nargs, nw[0], nw[1],

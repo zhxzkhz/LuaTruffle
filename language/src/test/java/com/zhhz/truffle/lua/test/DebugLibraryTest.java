@@ -525,6 +525,44 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void getinfoInsideCoroutineResumedFromVmSeesOwnFrames() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    seen = {}
+                    local src = function ()
+                        local function inner()
+                            coroutine.yield('y')
+                            local d = debug.getinfo(1, 'Sf')
+                            return d.what, d.func == seen.self, debug.getinfo(2, 'S'),
+                                debug.traceback('tb')
+                        end
+                        seen.self = inner
+                        return inner()
+                    end
+                    co = coroutine.create(assert(load(string.dump(src))))
+                    local ok1, v1 = coroutine.resume(co)
+                    local resumer = function ()
+                        return coroutine.resume(co)
+                    end
+                    local vm = assert(load(string.dump(resumer)))
+                    local ok2, what, same, above, tb = vm()
+                    return ok1, v1, ok2, what, same, above == nil, tb
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean(), "first resume ok");
+            assertEquals("y", result.getArrayElement(1).asString());
+            assertTrue(result.getArrayElement(2).asBoolean(), "second resume ok");
+            assertEquals("Lua", result.getArrayElement(3).asString());
+            // 协程线程的调试栈必须只含自身帧：恢复者是 VM 容器也不能串栈。
+            assertTrue(result.getArrayElement(4).asBoolean(), "level 1 is the coroutine's inner function");
+            // inner 经尾调用进入，被替换的 chunk 帧不应再出现在层级里（参考实现同为 nil）。
+            assertTrue(result.getArrayElement(5).asBoolean(), "tail-called chunk frame is not visible");
+            String traceback = result.getArrayElement(6).asString();
+            assertTrue(traceback.contains("inner"), traceback);
+            assertFalse(traceback.contains("resumer"), traceback);
+        }
+    }
+
+    @Test
     void getinfoReportsMainForAstChunks() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """
