@@ -1167,6 +1167,22 @@ public final class LuaContext {
         }
     }
 
+    /** 记录一个 AST 帧进入（供 traceback 判定尾调用链）。 */
+    public void pushAstFrame(com.oracle.truffle.api.nodes.Node root, boolean tailEntry) {
+        LuaThread thread = currentThread();
+        if (thread != null) {
+            thread.pushAstFrame((com.oracle.truffle.api.nodes.RootNode) root, tailEntry);
+        }
+    }
+
+    /** 与 {@link #pushAstFrame} 配对。 */
+    public void popAstFrame() {
+        LuaThread thread = currentThread();
+        if (thread != null) {
+            thread.popAstFrame();
+        }
+    }
+
     // =================================================================================
     // 可让出性（复刻标准 Lua 的 L->nny：non-yieldable 层数）
     // =================================================================================

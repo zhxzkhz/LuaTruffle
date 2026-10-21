@@ -563,6 +563,66 @@ class DebugLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    void tracebackMarksTailCallsAndHostFrame() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local function inner()
+                        return debug.traceback('tb')
+                    end
+                    local function outer()
+                        return inner()
+                    end
+                    return outer()
+                    """);
+            String traceback = result.asString();
+            // outer 尾调用 inner：参考实现会在 inner 之后标出 (...tail calls...)。
+            assertTrue(traceback.contains("(...tail calls...)"), traceback);
+            assertTrue(traceback.contains("in main chunk"), traceback);
+            // 主线程栈底是宿主 C 入口。
+            assertTrue(traceback.trim().endsWith("[C]: in ?"), traceback);
+        }
+    }
+
+    @Test
+    void tracebackMarksTailCallsForVmFrames() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local src = [==[
+                        local function inner() return debug.traceback('tb') end
+                        local function outer() return inner() end
+                        return outer()
+                    ]==]
+                    local chunk = assert(load(string.dump(assert(load(src, 'vm_tb'))), 'vm_tb'))
+                    return chunk()
+                    """);
+            String traceback = result.asString();
+            assertTrue(traceback.contains("(...tail calls...)"), traceback);
+            assertTrue(traceback.trim().endsWith("[C]: in ?"), traceback);
+        }
+    }
+
+    @Test
+    void tracebackInsideCoroutineOmitsHostFrame() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local function inner()
+                        return debug.traceback('tb')
+                    end
+                    local co = coroutine.create(function ()
+                        return inner()
+                    end)
+                    local ok, traceback = coroutine.resume(co)
+                    return ok, traceback
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean());
+            String traceback = result.getArrayElement(1).asString();
+            // 协程栈底是自身入口块，不属于主线程，故没有宿主 [C] 帧。
+            assertTrue(traceback.contains("(...tail calls...)"), traceback);
+            assertFalse(traceback.contains("[C]: in ?"), traceback);
+        }
+    }
+
+    @Test
     void getinfoReportsMainForAstChunks() {
         try (var context = newContextBuilder("lua").build()) {
             Value result = context.eval("lua", """

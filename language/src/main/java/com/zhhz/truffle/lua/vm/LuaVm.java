@@ -183,6 +183,7 @@ public final class LuaVm {
             dbg.varargs = f.varargs;
             dbg.name = name;
             dbg.namewhat = namewhat;
+            dbg.tailEntry = tailEntry;
             f.dbg = dbg;
 
             java.util.List<VmFrame> stack = vmStack;

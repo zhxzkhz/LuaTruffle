@@ -42,6 +42,9 @@ public final class VmFrame {
     /** 调用点解析出的 namewhat（"local"/"global"/"field"/"upvalue"/"method"/""）。 */
     String namewhat;
 
+    /** 本帧是否由 TAILCALL 进入（参考实现 CallInfo.istailcall，用于 traceback 标记）。 */
+    boolean tailEntry;
+
     VmFrame(LuaFunction function, Proto proto, Object[] regs, LuaVm owner) {
         this.function = function;
         this.proto = proto;
@@ -75,6 +78,10 @@ public final class VmFrame {
 
     public String namewhat() {
         return namewhat;
+    }
+
+    public boolean tailEntry() {
+        return tailEntry;
     }
 
     /**

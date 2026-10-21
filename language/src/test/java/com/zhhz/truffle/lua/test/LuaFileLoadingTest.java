@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LuaFileLoadingTest extends AbstractLuaTest {
@@ -70,6 +71,26 @@ class LuaFileLoadingTest extends AbstractLuaTest {
             Files.deleteIfExists(child);
             Files.deleteIfExists(entry);
             Files.deleteIfExists(directory);
+        }
+    }
+
+    @Test
+    void errorMessageUsesNormalizedChunkId() throws Exception {
+        var file = Files.createTempFile("lua-error-", ".lua");
+        Files.writeString(file, "error('boom')");
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local ok, err = pcall(dofile, [[%s]])
+                    return ok, err
+                    """.formatted(file));
+            assertEquals(false, result.getArrayElement(0).asBoolean());
+            String message = result.getArrayElement(1).asString();
+            // luaL_where 经 luaO_chunkid 规范化源码名：不带 '@' 前缀，过长路径按 LUA_IDSIZE 截断。
+            assertFalse(message.startsWith("@"), message);
+            assertTrue(message.endsWith(":1: boom"), message);
+            assertTrue(message.contains(file.getFileName().toString()), message);
+        } finally {
+            Files.deleteIfExists(file);
         }
     }
 

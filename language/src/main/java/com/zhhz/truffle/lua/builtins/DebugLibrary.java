@@ -54,9 +54,13 @@ import com.zhhz.truffle.lua.vm.VmFrame;
  *
  * <p>限制（与宿主实现相关的取舍）：
  * <ul>
- *   <li>宿主入口帧（Truffle 的 interop 分发帧）不计入层级，因此主块之上的层级为 nil，
- *       而参考实现会显示为 {@code [C]: in ?}。</li>
- *   <li>traceback 不区分尾调用链（参考实现会压缩并显示 {@code (...tail calls...)}）。</li>
+ *   <li>宿主入口帧（Truffle 的 interop 分发帧）不计入层级，因此主块之上的层级为 nil；
+ *       {@code debug.traceback} 会在主线程栈底补一行 {@code [C]: in ?} 以对齐参考输出，
+ *       但协程栈没有该帧。</li>
+ *   <li>{@code xpcall} 的消息处理函数在 Truffle 异常展开之后才执行，因此处理函数内
+ *       {@code debug.traceback} 看不到出错点的 {@code [C]: in function 'error'} 帧。</li>
+ *   <li>{@code debug.getinfo(thread, ...)}/{@code getlocal(thread, ...)} 暂不切换到目标
+ *       协程的栈，按当前线程处理。</li>
  *   <li>{@code getupvalue}/{@code setupvalue} 基于闭包的父帧命名槽位枚举，
  *       可能包含未被捕获的父函数局部变量（无精确的 upvalue 调试信息）。</li>
  * </ul>
@@ -1368,6 +1372,9 @@ public final class DebugLibrary {
         LuaContext ctx = context();
         boolean inHook = ctx.isInHook();
         RootNode ownBuiltin = ctx.getCurrentBuiltinRoot();
+        com.zhhz.truffle.lua.runtime.LuaThread thread = ctx.currentThread();
+        // AST 帧的尾调用标记按进入顺序记录在线程上（最内层在末尾）。
+        int[] astIndex = {thread != null ? thread.astFrameDepth() - 1 : -1};
         Truffle.getRuntime().iterateFrames(frameInstance -> {
             // 只跳过 interop 分发包装帧和 debug 库自身的帧；其他内建帧是真实栈层。
             if (!isLanguageStackFrame(frameInstance) || isOwnBuiltinFrame(frameInstance, ownBuiltin)) {
@@ -1393,10 +1400,19 @@ public final class DebugLibrary {
                 return null;
             }
             current[0]++;
+            LuaFrameInfo info = toFrameInfo(frameInstance);
+            boolean tailEntry = false;
+            if (info.isLuaFrame()) {
+                if (astIndex[0] >= 0) {
+                    if (thread.astFrameRoot(astIndex[0]) == info.frameRoot()) {
+                        tailEntry = thread.astFrameIsTailEntry(astIndex[0]);
+                    }
+                    astIndex[0]--;
+                }
+            }
             if (current[0] < startLevel) {
                 return null;
             }
-            LuaFrameInfo info = toFrameInfo(frameInstance);
             if (info.isLuaFrame()) {
                 SourceSection callSection = info.callNode() != null
                         ? info.callNode().getEncapsulatingSourceSection()
@@ -1423,8 +1439,15 @@ public final class DebugLibrary {
                     builder.append("\n\t[C]: in function '").append(name).append("'");
                 }
             }
+            if (tailEntry) {
+                builder.append("\n\t(...tail calls...)");
+            }
             return null;
         });
+        // 主线程的栈底是宿主的 C 入口（参考实现里 lua.c 的 main 调用 chunk 的帧）。
+        if (thread != null && thread.isMain() && current[0] + 1 >= startLevel) {
+            builder.append("\n\t[C]: in ?");
+        }
     }
 
     /** 把一个字节码 VM 帧追加到 traceback 文本。 */
@@ -1438,6 +1461,9 @@ public final class DebugLibrary {
             builder.append(": in main chunk");
         } else {
             builder.append(": in function '").append(info.functionName()).append("'");
+        }
+        if (vf.tailEntry()) {
+            builder.append("\n\t(...tail calls...)");
         }
     }
 

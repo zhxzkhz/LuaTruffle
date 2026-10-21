@@ -110,11 +110,12 @@ public final class LuaAstRootNode extends LuaRootNode {
     public Object execute(VirtualFrame frame) {
         com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(this);
         if (context != null) {
-            // 只在有钩子时读写尾调用标记，避免热路径上的额外线程局部访问。
-            // 标记只可能由钩子活跃时的调用方设置，故无钩子时不会遗留。
+            // 尾调用标记必须无条件消费：traceback 需要区分尾调用帧
+            // （参考实现 CallInfo.istailcall），不能只在钩子活跃时记录。
             boolean hooksActive = context.isAnyHookActive();
-            boolean tailEntry = hooksActive && context.takePendingTailCall();
+            boolean tailEntry = context.takePendingTailCall();
             context.enterLuaCall(this);
+            context.pushAstFrame(this, tailEntry);
             // 与参考实现一致：call 钩子在函数帧建立之后触发，
             // 因此钩子内 debug.getinfo(2) 看到的是被调用的函数（而不是调用点）。
             // 由尾调用进入时报告 "tail call"（ldo.c:callhook 检查前一条指令）。
@@ -154,6 +155,7 @@ public final class LuaAstRootNode extends LuaRootNode {
                 if (!tailExit && context.isAnyHookActive()) {
                     LuaLineHook.fireReturn(context);
                 }
+                context.popAstFrame();
                 context.exitLuaCall();
             }
         }
@@ -179,8 +181,8 @@ public final class LuaAstRootNode extends LuaRootNode {
             }
             com.zhhz.truffle.lua.runtime.LuaContext context =
                     com.zhhz.truffle.lua.runtime.LuaContext.get(this);
-            boolean marked = context != null && context.isAnyHookActive();
-            if (marked) {
+            // 无条件标记：目标帧需要知道自己是尾调用进入的（钩子事件与 traceback 标记共用）。
+            if (context != null) {
                 context.setPendingTailCall(true);
             }
             try {
@@ -188,7 +190,7 @@ public final class LuaAstRootNode extends LuaRootNode {
             } catch (LuaTailCallException next) {
                 e = next;
             } finally {
-                if (marked) {
+                if (context != null) {
                     context.setPendingTailCall(false);
                 }
             }

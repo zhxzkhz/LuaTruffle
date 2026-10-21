@@ -52,9 +52,10 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
             if (level > 0 && errorLocation != null) {
                 SourceSection section = errorLocation.getEncapsulatingSourceSection();
                 if (section != null && section.isAvailable()) {
+                    // 与 luaL_where 一致：源码名先经 luaO_chunkid 规范化（去掉 '@' 前缀等）。
                     Object errorObject = LuaContext.toTruffleString(
-                            section.getSource().getName() + ":" + section.getStartLine() + ": "
-                                    + messageText);
+                            LuaException.chunkId(section.getSource().getName()) + ":"
+                                    + section.getStartLine() + ": " + messageText);
                     throw LuaException.positioned(errorObject, String.valueOf(errorObject), errorLocation);
                 }
             }

@@ -115,6 +115,18 @@ public final class LuaFunction extends LuaValue {
      * 故这里直接使用 CallTarget。
      */
     public Object callFromHook(Object... arguments) {
+        return invoke(arguments);
+    }
+
+    /**
+     * 从非 Lua 调用点（宿主、内建函数、协程线程入口）调用本函数。
+     * <p>
+     * 与 {@link #callFromHook} 相同，但语义更通用：目标函数内部若发生尾调用，
+     * {@link LuaTailCallException} 会冒泡到本方法，由固定深度的重试循环接续执行。
+     * 直接从 CallTarget 调用会把这个控制流异常泄漏给宿主（例如协程体
+     * {@code return f()} 会让 {@code coroutine.resume} 返回异常对象）。
+     */
+    public Object invoke(Object... arguments) {
         Object[] frameArguments = new Object[arguments.length + 1];
         frameArguments[0] = this;
         System.arraycopy(arguments, 0, frameArguments, 1, arguments.length);
@@ -130,8 +142,7 @@ public final class LuaFunction extends LuaValue {
                 frameArgs[0] = target;
                 System.arraycopy(args, 0, frameArgs, 1, args.length);
                 LuaContext context = LuaContext.get(null);
-                boolean marked = context != null && context.isAnyHookActive();
-                if (marked) {
+                if (context != null) {
                     context.setPendingTailCall(true);
                 }
                 try {
@@ -139,7 +150,7 @@ public final class LuaFunction extends LuaValue {
                 } catch (LuaTailCallException next) {
                     e = next;
                 } finally {
-                    if (marked) {
+                    if (context != null) {
                         context.setPendingTailCall(false);
                     }
                 }
@@ -347,8 +358,7 @@ public final class LuaFunction extends LuaValue {
                 frameArguments[0] = target;
                 System.arraycopy(args, 0, frameArguments, 1, args.length);
                 LuaContext context = LuaContext.get(null);
-                boolean marked = context != null && context.isAnyHookActive();
-                if (marked) {
+                if (context != null) {
                     context.setPendingTailCall(true);
                 }
                 try {
@@ -356,7 +366,7 @@ public final class LuaFunction extends LuaValue {
                 } catch (LuaTailCallException next) {
                     tce = next;
                 } finally {
-                    if (marked) {
+                    if (context != null) {
                         context.setPendingTailCall(false);
                     }
                 }

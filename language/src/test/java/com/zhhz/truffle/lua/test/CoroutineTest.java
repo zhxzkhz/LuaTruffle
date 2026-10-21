@@ -152,6 +152,23 @@ class CoroutineTest extends AbstractLuaTest {
     }
 
     @Test
+    void coroutineBodyMayTailCallWithoutLeakingControlException() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local function target(x) return x * 2 end
+                    local function body() return target(21) end
+                    local ok, value = coroutine.resume(coroutine.create(body))
+                    local wrapped = coroutine.wrap(body)
+                    return ok, value, wrapped()
+                    """);
+            // 协程体的尾调用在固定深度循环里接续执行，resume 不应看到内部控制流异常。
+            assertTrue(result.getArrayElement(0).asBoolean(), "resume succeeded");
+            assertEquals(42L, result.getArrayElement(1).asLong());
+            assertEquals(42L, result.getArrayElement(2).asLong());
+        }
+    }
+
+    @Test
     void wrapPropagatesErrors() {
         try (var context = newContextBuilder("lua").build()) {
             var error = assertThrows(org.graalvm.polyglot.PolyglotException.class, () ->

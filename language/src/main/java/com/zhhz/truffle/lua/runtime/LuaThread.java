@@ -88,12 +88,53 @@ public final class LuaThread extends LuaValue {
         final java.util.List<com.zhhz.truffle.lua.vm.VmFrame> vmFrames = new java.util.ArrayList<>();
         final java.util.List<com.zhhz.truffle.lua.vm.LuaVm> vmContainers = new java.util.ArrayList<>();
         final java.util.List<com.oracle.truffle.api.nodes.RootNode> builtinRoots = new java.util.ArrayList<>();
+
+        /**
+         * 活跃的 AST 帧（按进入顺序，栈顶为最内层）。traceback 需要知道某一层是否由
+         * 尾调用进入（参考实现 CallInfo.istailcall），而 Truffle 帧本身不携带该信息，
+         * 因此在 AST 根节点进入/退出时平行记录。用数组避免热路径上的分配。
+         */
+        com.oracle.truffle.api.nodes.RootNode[] astRoots = new com.oracle.truffle.api.nodes.RootNode[16];
+        boolean[] astTailEntries = new boolean[16];
+        int astDepth;
     }
 
     private final DebugStacks debugStacks = new DebugStacks();
 
     public DebugStacks debugStacks() {
         return debugStacks;
+    }
+
+    public void pushAstFrame(com.oracle.truffle.api.nodes.RootNode root, boolean tailEntry) {
+        DebugStacks stacks = debugStacks;
+        if (stacks.astDepth == stacks.astRoots.length) {
+            int capacity = stacks.astDepth * 2;
+            stacks.astRoots = java.util.Arrays.copyOf(stacks.astRoots, capacity);
+            stacks.astTailEntries = java.util.Arrays.copyOf(stacks.astTailEntries, capacity);
+        }
+        stacks.astRoots[stacks.astDepth] = root;
+        stacks.astTailEntries[stacks.astDepth] = tailEntry;
+        stacks.astDepth++;
+    }
+
+    public void popAstFrame() {
+        DebugStacks stacks = debugStacks;
+        if (stacks.astDepth > 0) {
+            stacks.astDepth--;
+            stacks.astRoots[stacks.astDepth] = null;
+        }
+    }
+
+    public int astFrameDepth() {
+        return debugStacks.astDepth;
+    }
+
+    public com.oracle.truffle.api.nodes.RootNode astFrameRoot(int index) {
+        return debugStacks.astRoots[index];
+    }
+
+    public boolean astFrameIsTailEntry(int index) {
+        return debugStacks.astTailEntries[index];
     }
 
     public Object getHookFunction() { return hookFunction; }
@@ -298,13 +339,11 @@ public final class LuaThread extends LuaValue {
                 if (disposed) {
                     return; // 创建后未运行即关闭
                 }
-                // 构建调用参数: 被调用的 LuaFunction + user args
-                Object[] frameArgs = new Object[firstArgs.length + 1];
-                frameArgs[0] = function;
-                System.arraycopy(firstArgs, 0, frameArgs, 1, firstArgs.length);
                     Object result;
                     try {
-                        result = callTarget.call(frameArgs);
+                        // 经 invoke 进入：协程体内的尾调用（return f()）会在固定深度循环中
+                        // 接续执行，而不是把 LuaTailCallException 泄漏给 resume 的调用者。
+                        result = function.invoke(firstArgs);
                         // 发送返回值
                         Object[] retValues;
                         if (result instanceof LuaMultiValue mv) {
