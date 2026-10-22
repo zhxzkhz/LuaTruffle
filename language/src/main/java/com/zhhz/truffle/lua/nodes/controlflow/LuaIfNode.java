@@ -126,7 +126,11 @@ public final class LuaIfNode extends LuaStatementNode {
 
     @Override
     public void executeVoid(VirtualFrame frame) {
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, false);
+        // 未启用任何钩子（绝大多数运行）时，跳过本节点全部行事件调用。
+        boolean hooksActive = com.zhhz.truffle.lua.runtime.LuaLineHook.isAnyActiveContext();
+        if (hooksActive) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, false);
+        }
         /*
          * 1. 计算条件并进行 Profile 记录。
          * evaluateCondition(frame) 计算出 boolean 结果。
@@ -136,7 +140,9 @@ public final class LuaIfNode extends LuaStatementNode {
         // thenLine 对应标准 Lua 字节码中的 OP_TEST 指令（then 关键字行），
         // 无论条件真假都会触发：条件真时 VM 继续执行 then 块；条件假时
         // OP_JMP 跳转到 else 块。两者指令均归属 then 关键字行。
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, thenLine, false);
+        if (hooksActive) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, thenLine, false);
+        }
         if (condResult) {
             /* 2. 执行 Then 分支 */
             thenPartNode.executeVoid(frame);
@@ -146,7 +152,9 @@ public final class LuaIfNode extends LuaStatementNode {
                 elsePartNode.executeVoid(frame);
             }
         }
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, endLine, false);
+        if (hooksActive) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, endLine, false);
+        }
     }
 
     private boolean evaluateCondition(VirtualFrame frame) {

@@ -62,7 +62,9 @@ public class LuaRepeatRepeatingNode extends Node implements RepeatingNode {
             return false;
         }
 
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, untilLine, false);
+        if (com.zhhz.truffle.lua.runtime.LuaLineHook.isAnyActiveContext()) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, untilLine, false);
+        }
         boolean conditionMet = evaluateCondition(frame);
         return !conditionMet;
     }

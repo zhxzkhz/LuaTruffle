@@ -96,7 +96,9 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
     public boolean executeRepeating(VirtualFrame frame) {
         TruffleSafepoint.poll(this);
         com.zhhz.truffle.lua.runtime.LuaInterrupt.check(this);
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, headerLine, true);
+        if (com.zhhz.truffle.lua.runtime.LuaLineHook.isAnyActiveContext()) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, headerLine, true);
+        }
         Object[] loopVarValues;
         Object iteratorFunc = frame.getObject(iteratorFuncIndex);
         Object state = frame.getObject(stateIndex);

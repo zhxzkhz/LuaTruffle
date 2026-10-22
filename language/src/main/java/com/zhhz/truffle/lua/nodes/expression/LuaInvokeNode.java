@@ -143,14 +143,18 @@ public final class LuaInvokeNode extends LuaExpressionNode {
      * 不做尾调用优化——它们对应 Lua 语义中的 C 调用，不应替换栈帧（Lua 5.3 手册 3.4.10）。
      */
     private Object dispatchCall(VirtualFrame frame, Object functionValue, Object[] finalArguments, boolean instantiate) {
-        if (tailCall && functionValue instanceof LuaFunction luaFunction
+        LuaFunction luaFunction = functionValue instanceof LuaFunction lf ? lf : null;
+        // 以 CallTarget 的根节点区分 Lua 函数与内建（C）函数。
+        boolean luaCall = luaFunction != null
                 && luaFunction.getCallTarget() instanceof com.oracle.truffle.api.RootCallTarget rct
-                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode) {
+                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode;
+        if (luaCall && tailCall) {
             throw new LuaTailCallException(luaFunction, finalArguments == null ? new Object[0] : finalArguments);
         }
         // 记录调用点，供内建函数的参数错误消息（luaL_argerror / pushglobalfuncname）解析函数名。
+        // Lua 函数调用不需要该信息，直接跳过上下文查询与字段读写（递归调用的最热路径）。
         com.zhhz.truffle.lua.runtime.LuaContext callContext =
-                com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+                luaCall ? null : com.zhhz.truffle.lua.runtime.LuaContext.get(this);
         com.oracle.truffle.api.nodes.Node previousCallSite =
                 callContext != null ? callContext.getPendingCallSite() : null;
         if (callContext != null) {

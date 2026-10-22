@@ -53,13 +53,14 @@ public final class LuaLineHook {
         ACTIVE_CONTEXTS.addAndGet(delta);
     }
 
-    private static boolean anyActiveContext() {
+    /** 是否有任意上下文启用了钩子（无钩子时控制流节点可跳过事件调用）。 */
+    public static boolean isAnyActiveContext() {
         return ACTIVE_CONTEXTS.get() != 0;
     }
 
     /** 触发一次行事件（line <= 0 表示无行信息，忽略）。 */
     public static void fireLine(Node location, int line, boolean force) {
-        if (line <= 0 || !anyActiveContext()) {
+        if (line <= 0 || !isAnyActiveContext()) {
             return;
         }
         LuaContext context = LuaContext.get(location);
@@ -90,7 +91,7 @@ public final class LuaLineHook {
 
     /** 触发一次 call 事件。调用前调用。 */
     public static void fireCall(Node location) {
-        if (!anyActiveContext()) {
+        if (!isAnyActiveContext()) {
             return;
         }
         fireCall(LuaContext.get(location));
@@ -110,7 +111,7 @@ public final class LuaLineHook {
 
     /** 触发一次 tail call 事件（参考实现：尾调用进入被调 Lua 函数，仍属 'c' 掩码）。 */
     public static void fireTailCall(Node location) {
-        if (!anyActiveContext()) {
+        if (!isAnyActiveContext()) {
             return;
         }
         fireTailCall(LuaContext.get(location));
@@ -130,7 +131,7 @@ public final class LuaLineHook {
 
     /** 触发一次 return 事件。调用返回后调用。 */
     public static void fireReturn(Node location) {
-        if (!anyActiveContext()) {
+        if (!isAnyActiveContext()) {
             return;
         }
         fireReturn(LuaContext.get(location));
@@ -150,7 +151,7 @@ public final class LuaLineHook {
 
     /** 触发一次 count 事件。语句计数达到阈值时调用。 */
     public static void fireCount(Node location) {
-        if (!anyActiveContext()) {
+        if (!isAnyActiveContext()) {
             return;
         }
         fireCount(LuaContext.get(location));

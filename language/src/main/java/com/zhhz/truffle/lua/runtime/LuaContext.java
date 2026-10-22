@@ -1217,6 +1217,10 @@ public final class LuaContext {
     /** 进入一个 Lua 函数调用；超过 luaMaxDepth 抛 "stack overflow"。 */
     public void enterLuaCall(com.oracle.truffle.api.nodes.Node location) {
         int depth = ++luaCallDepth;
+        // 热路径：未接近上限时只做一次比较即返回。
+        if (depth < luaMaxDepth) {
+            return;
+        }
         // 硬上限：与标准 Lua 一致，在错误处理期间再次溢出时报 "error in error handling"。
         if (depth >= luaMaxDepth + LUA_ERROR_HEADROOM) {
             luaCallDepth--;
@@ -1224,7 +1228,7 @@ public final class LuaContext {
             throw LuaException.create("error in error handling", location);
         }
         // 软上限：首次达到上限时报 "stack overflow"（消息处理函数尚可在余量内运行）。
-        if (depth >= luaMaxDepth && !stackOverflow) {
+        if (!stackOverflow) {
             luaCallDepth--;
             throw stackError("stack overflow", location);
         }

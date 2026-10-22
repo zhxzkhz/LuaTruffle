@@ -116,7 +116,9 @@ public final class LuaWhileRepeatingNode extends Node implements RepeatingNode {
         // 每轮迭代都在安全点轮询：使 context.interrupt()（如 Ctrl-C）能打断死循环
         TruffleSafepoint.poll(this);
         com.zhhz.truffle.lua.runtime.LuaInterrupt.check(this);
-        com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, true);
+        if (com.zhhz.truffle.lua.runtime.LuaLineHook.isAnyActiveContext()) {
+            com.zhhz.truffle.lua.runtime.LuaLineHook.fireLine(this, condLine, true);
+        }
         // 1. 【前置条件检查】
         // 如果条件为假，直接退出循环 (return false)。
         if (!evaluateCondition(frame)) {
