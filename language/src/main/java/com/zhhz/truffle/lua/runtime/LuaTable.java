@@ -499,15 +499,14 @@ public final class LuaTable extends LuaValue {
     @TruffleBoundary
     private Object getMembersBoundary(DynamicObjectLibrary objLib) {
         Object[] hashKeys = objLib.getKeyArray(this);
-        List<Object> allKeys = new ArrayList<>(hashKeys.length + this.arraySize);
+        List<Object> allKeys = new ArrayList<>(hashKeys.length);
         for (Object key : hashKeys) {
+            // 成员协议只接受字符串键；数字键属于数组协议，不能出现在成员列表中。
+            if (!(key instanceof TruffleString) && !(key instanceof LuaString)) {
+                continue;
+            }
             if (objLib.getOrDefault(this, key, LuaNil.SINGLETON) != LuaNil.SINGLETON) {
                 allKeys.add(key);
-            }
-        }
-        for (int i = 0; i < this.arraySize; i++) {
-            if (this.arrayPart[i] != null) {
-                allKeys.add((double) (i + 1));
             }
         }
         return new LuaTableKeys(allKeys.toArray());

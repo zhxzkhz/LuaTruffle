@@ -3,8 +3,14 @@ package com.zhhz.truffle.lua.builtins;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaMetatables;
+import com.zhhz.truffle.lua.runtime.LuaNil;
+import com.zhhz.truffle.lua.runtime.LuaTable;
+import com.zhhz.truffle.lua.runtime.LuaTableKeys;
 import com.zhhz.truffle.lua.runtime.LuaValue;
 
 import java.io.IOException;
@@ -209,11 +215,6 @@ public final class LuaFileHandle extends LuaValue {
         return closed ? "file (closed)" : "file (" + Integer.toHexString(System.identityHashCode(this)) + ")";
     }
 
-    @ExportMessage
-    boolean hasMembers() {
-        return true;
-    }
-
     // 导出语言身份：标识此宿主对象归属 Lua 语言（工具与调试器依赖）
     @ExportMessage
     boolean hasLanguageId() {
@@ -225,8 +226,46 @@ public final class LuaFileHandle extends LuaValue {
         return com.zhhz.truffle.lua.LuaLanguage.ID;
     }
 
+    // 文件方法是共享 FILE* 元表 __index 中的 Lua 函数；宿主可以读取并调用它们。
+    private static final String[] FILE_METHODS = {"close", "flush", "read", "write", "seek", "setvbuf", "lines"};
+
+    @ExportMessage
+    boolean hasMembers() {
+        return true;
+    }
+
     @ExportMessage
     Object getMembers(boolean includeInternal) {
-        return new String[]{"close", "flush", "read", "write", "seek", "setvbuf", "lines"};
+        Object[] keys = new Object[FILE_METHODS.length];
+        for (int i = 0; i < FILE_METHODS.length; i++) {
+            keys[i] = LuaContext.toTruffleString(FILE_METHODS[i]);
+        }
+        return new LuaTableKeys(keys);
+    }
+
+    @ExportMessage
+    boolean isMemberReadable(String member) {
+        return findMember(member) != null;
+    }
+
+    @ExportMessage
+    Object readMember(String member) throws UnknownIdentifierException {
+        Object value = findMember(member);
+        if (value == null) {
+            throw UnknownIdentifierException.create(member);
+        }
+        return value;
+    }
+
+    @TruffleBoundary
+    private Object findMember(String member) {
+        LuaContext context = LuaContext.get(null);
+        if (context == null) return null;
+        LuaTable metatable = context.getEffectiveMetatable(this);
+        if (metatable == null) return null;
+        Object index = metatable.rawget(LuaMetatables.__INDEX);
+        if (!(index instanceof LuaTable methods)) return null;
+        Object value = methods.rawget(member);
+        return value == LuaNil.SINGLETON ? null : value;
     }
 }
