@@ -113,23 +113,27 @@ public final class LuaAstRootNode extends LuaRootNode {
     @Override
     public Object execute(VirtualFrame frame) {
         com.zhhz.truffle.lua.runtime.LuaContext context = com.zhhz.truffle.lua.runtime.LuaContext.get(this);
-        if (context != null) {
+        // 每次调用只解析一次当前 LuaThread：尾调用标记、调试帧入栈/出栈都复用它，
+        // 避免在热路径上反复穿过 TruffleBoundary 查询 ThreadLocal。
+        com.zhhz.truffle.lua.runtime.LuaThread thread = context != null ? context.currentThreadFast() : null;
+        if (thread != null) {
             // 尾调用标记必须无条件消费：traceback 需要区分尾调用帧
             // （参考实现 CallInfo.istailcall），不能只在钩子活跃时记录。
-            boolean hooksActive = context.isAnyHookActive();
-            boolean tailEntry = context.takePendingTailCall();
+            boolean tailEntry = thread.takePendingTailCall();
             context.enterLuaCall(this);
-            context.pushAstFrame(this, tailEntry);
+            thread.pushAstFrame(this, tailEntry);
             // 与参考实现一致：call 钩子在函数帧建立之后触发，
             // 因此钩子内 debug.getinfo(2) 看到的是被调用的函数（而不是调用点）。
             // 由尾调用进入时报告 "tail call"（ldo.c:callhook 检查前一条指令）。
-            if (hooksActive) {
+            if (context.isAnyHookActive()) {
                 if (tailEntry) {
                     LuaLineHook.fireTailCall(context);
                 } else {
                     LuaLineHook.fireCall(context);
                 }
             }
+        } else if (context != null) {
+            context.enterLuaCall(this);
         }
         boolean tailExit = false;
         try {
@@ -154,12 +158,14 @@ public final class LuaAstRootNode extends LuaRootNode {
             }
             return new LuaMultiValue(new Object[0]);
         } finally {
-            if (context != null) {
+            if (thread != null) {
                 // return 钩子在帧销毁之前触发，level 2 仍是将返回的函数。
                 if (!tailExit && context.isAnyHookActive()) {
                     LuaLineHook.fireReturn(context);
                 }
-                context.popAstFrame();
+                thread.popAstFrame();
+                context.exitLuaCall();
+            } else if (context != null) {
                 context.exitLuaCall();
             }
         }

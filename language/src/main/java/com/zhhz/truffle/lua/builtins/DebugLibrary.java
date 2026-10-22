@@ -788,6 +788,10 @@ public final class DebugLibrary {
             }
         }
         boolean active = needStatement || needCall;
+        if (active != context.isAnyHookActive()) {
+            // 维护全局计数：控制流节点的行钩子入口据此零成本跳过上下文查询。
+            LuaLineHook.adjustActiveContexts(active ? 1 : -1);
+        }
         context.setAnyHookActive(active);
         if (needStatement == context.isHookBindingStatement() && needCall == context.isHookBindingCall()) {
             return;

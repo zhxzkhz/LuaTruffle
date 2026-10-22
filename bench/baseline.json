@@ -1,0 +1,15 @@
+﻿{
+    "updated":  "2026-10-22",
+    "minSeconds":  0.08,
+    "native":  {
+                   "fib35":  0.1875,
+                   "loop100m":  0.046875,
+                   "concat1m":  0.1875
+               },
+    "tolerance":  1.25,
+    "jvm":  {
+                "fib35":  0.21875,
+                "loop100m":  0.0625,
+                "concat1m":  0.109375
+            }
+}

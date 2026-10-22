@@ -44,6 +44,12 @@
 
 *(注：这是基于消除 `LuaNumber` 包装对象、打通原生 `long` 通道后的测试结果)*
 
+> 上表是早期实现的实测结果，当前实现尚未达到该水平：本机复测 `fib(40)` 为
+> native ~2.1s、JVM(JIT) ~2.7s（解释模式 ~140s）。已为热路径上的钩子/线程簿记
+> 增加快速路径，native/JVM 相对上一版（~7.6s/~7.7s）分别提升约 3.6x/2.8x，
+> 但距早期数据仍有差距，性能对齐/优化仍在进行中。
+> 回归基线使用 `fib(35)` 等较短用例，见“测试与回归”。
+
 ## 🛠️ 构建与运行
 
 ### 前置要求
@@ -107,10 +113,24 @@ mvn -q -pl standalone package -DskipTests
 java -ea --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \
   -cp "$(Get-Content standalone/cp.txt)" com.zhhz.truffle.lua.launcher.LuaMain --portable-tests all.lua
 
-# 性能基准
+# 性能基准（CPU 时间；参数为每个用例的测量轮数）
+./standalone/target/luanative bench/bench.lua 3
 java -ea --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \
-  -cp "$(Get-Content standalone/cp.txt)" com.zhhz.truffle.lua.launcher.LuaMain bench_run.lua
+  -cp "$(Get-Content standalone/cp.txt)" com.zhhz.truffle.lua.launcher.LuaMain bench/bench.lua 3
+
+# 与基线比较：native 与 JVM 各取最快样本，超过容差（默认 25%）时退出码为 1
+powershell -File scripts/bench-baseline.ps1
+# 机器或实现变化后重新记录基线（写入 bench/baseline.json）
+powershell -File scripts/bench-baseline.ps1 -Update
 ```
+
+基线检查使用 `os.clock()`（当前线程 CPU 时间）排除 JIT 编译线程与 GC 线程的干扰，
+每个用例取多轮最小值以减少噪声；可用 `-Runs`、`-Tolerance`、`-SkipNative`、`-SkipJvm`
+调整。脚本依赖已构建的 `standalone/target/luanative(.exe)` 与 `launcher` jar。
+
+基线用例为 `fib(35)`、`loop100m`、`concat1m`：Windows 上 `os.clock()` 的粒度约为
+15.6ms，用例太短会让噪声占比过高。基线只用于同一口径下的相对回归，与上文
+`fib(40)` 性能表的数值不可直接比较。
 
 `LuaVmOfficialTestSuiteTest` 会用 `string.dump`/`load` 把官方脚本转成字节码后执行，
 覆盖 `coroutine.lua`、`attrib.lua`、`sort.lua`、`gc.lua` 等；调试库的已知取舍见

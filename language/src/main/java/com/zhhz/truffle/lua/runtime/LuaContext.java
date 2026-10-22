@@ -194,28 +194,86 @@ public final class LuaContext {
     private final ThreadLocal<LuaThread> currentCoroutine = new ThreadLocal<>();
     /** 主线程对象 */
     private LuaThread mainThread;
+    /** 是否创建过协程。为 false 时所有执行都在主线程，可跳过 ThreadLocal 查询。 */
+    private volatile boolean anyCoroutine;
 
     /** 当前执行线程对应的 LuaThread（协程或主线程）。 */
     @TruffleBoundary
     public LuaThread currentThread() {
+        if (!anyCoroutine) {
+            return mainThread;
+        }
         LuaThread thread = currentCoroutine.get();
         return thread != null ? thread : mainThread;
     }
 
+    /**
+     * 热路径版本：无协程时直接返回主线程，避免 ThreadLocal 与 {@link TruffleBoundary}。
+     * 一旦创建过协程才回退到 {@link #currentThread()}。
+     */
+    public LuaThread currentThreadFast() {
+        return anyCoroutine ? currentThread() : mainThread;
+    }
+
     // ---- 钩子状态：委托到当前线程 ----
-    public Object getHookFunction() { LuaThread t = currentThread(); return t == null ? null : t.getHookFunction(); }
+    // 读路径先检查 anyHookActive（普通 volatile 字段），未启用钩子时完全跳过
+    // ThreadLocal 查询；写路径（setHookFunction/setHookMask/...）必须无条件执行，
+    // 否则 sethook 建立状态时会被自身的快速路径吞掉。
+    public Object getHookFunction() {
+        if (!anyHookActive) {
+            return null;
+        }
+        LuaThread t = currentThread();
+        return t == null ? null : t.getHookFunction();
+    }
     public void setHookFunction(Object hook) { LuaThread t = currentThread(); if (t != null) t.setHookFunction(hook); }
-    public String getHookMask() { LuaThread t = currentThread(); return t == null ? "" : t.getHookMask(); }
+    public String getHookMask() {
+        if (!anyHookActive) {
+            return "";
+        }
+        LuaThread t = currentThread();
+        return t == null ? "" : t.getHookMask();
+    }
     public void setHookMask(String mask) { LuaThread t = currentThread(); if (t != null) t.setHookMask(mask); }
-    public int getHookCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getHookCount(); }
+    public int getHookCount() {
+        if (!anyHookActive) {
+            return 0;
+        }
+        LuaThread t = currentThread();
+        return t == null ? 0 : t.getHookCount();
+    }
     public void setHookCount(int count) { LuaThread t = currentThread(); if (t != null) t.setHookCount(count); }
     /** 判断掩码中是否包含指定字符（'l'/'c'/'r'）。 */
-    public boolean isHookMask(char c) { LuaThread t = currentThread(); return t != null && t.isHookMask(c); }
-    public int getLastHookLine() { LuaThread t = currentThread(); return t == null ? -1 : t.getLastHookLine(); }
+    public boolean isHookMask(char c) {
+        if (!anyHookActive) {
+            return false;
+        }
+        LuaThread t = currentThread();
+        return t != null && t.isHookMask(c);
+    }
+    public int getLastHookLine() {
+        if (!anyHookActive) {
+            return -1;
+        }
+        LuaThread t = currentThread();
+        return t == null ? -1 : t.getLastHookLine();
+    }
     public void setLastHookLine(int line) { LuaThread t = currentThread(); if (t != null) t.setLastHookLine(line); }
-    public boolean isInHook() { LuaThread t = currentThread(); return t != null && t.isInHook(); }
+    public boolean isInHook() {
+        if (!anyHookActive) {
+            return false;
+        }
+        LuaThread t = currentThread();
+        return t != null && t.isInHook();
+    }
     public void setInHook(boolean value) { LuaThread t = currentThread(); if (t != null) t.setInHook(value); }
-    public int getInstructionCount() { LuaThread t = currentThread(); return t == null ? 0 : t.getInstructionCount(); }
+    public int getInstructionCount() {
+        if (!anyHookActive) {
+            return 0;
+        }
+        LuaThread t = currentThread();
+        return t == null ? 0 : t.getInstructionCount();
+    }
     public void setInstructionCount(int count) { LuaThread t = currentThread(); if (t != null) t.setInstructionCount(count); }
     /** 标记/取消“下一次函数进入来自尾调用”（AST 尾调用重试循环使用）。 */
     @TruffleBoundary
@@ -273,7 +331,10 @@ public final class LuaContext {
     private final java.util.Set<LuaThread> coroutineThreads =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    public void registerCoroutine(LuaThread thread) { coroutineThreads.add(thread); }
+    public void registerCoroutine(LuaThread thread) {
+        coroutineThreads.add(thread);
+        anyCoroutine = true;
+    }
 
     /**
      * 关闭时回收所有协程线程：唤醒阻塞在 yield/resume 交换上的线程并等待其结束。

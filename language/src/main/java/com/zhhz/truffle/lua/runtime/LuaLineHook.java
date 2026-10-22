@@ -41,9 +41,32 @@ public final class LuaLineHook {
     private LuaLineHook() {
     }
 
+    /**
+     * 当前存在钩子的上下文数量。未启用钩子（绝大多数运行）时为零，
+     * 控制流节点可据此用一次静态字段读取跳过 {@link LuaContext} 查询。
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger ACTIVE_CONTEXTS =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 由 DebugLibrary 在上下文的钩子状态变化时调用（delta 为 +1/-1）。 */
+    public static void adjustActiveContexts(int delta) {
+        ACTIVE_CONTEXTS.addAndGet(delta);
+    }
+
+    private static boolean anyActiveContext() {
+        return ACTIVE_CONTEXTS.get() != 0;
+    }
+
     /** 触发一次行事件（line <= 0 表示无行信息，忽略）。 */
     public static void fireLine(Node location, int line, boolean force) {
-        fireLine(LuaContext.get(location), line, force);
+        if (line <= 0 || !anyActiveContext()) {
+            return;
+        }
+        LuaContext context = LuaContext.get(location);
+        if (context == null || !context.isAnyHookActive()) {
+            return;
+        }
+        fireLine(context, line, force);
     }
 
     /** 触发一次行事件（VM 解释器循环直接调用，无需 Node）。 */
@@ -67,6 +90,9 @@ public final class LuaLineHook {
 
     /** 触发一次 call 事件。调用前调用。 */
     public static void fireCall(Node location) {
+        if (!anyActiveContext()) {
+            return;
+        }
         fireCall(LuaContext.get(location));
     }
 
@@ -84,6 +110,9 @@ public final class LuaLineHook {
 
     /** 触发一次 tail call 事件（参考实现：尾调用进入被调 Lua 函数，仍属 'c' 掩码）。 */
     public static void fireTailCall(Node location) {
+        if (!anyActiveContext()) {
+            return;
+        }
         fireTailCall(LuaContext.get(location));
     }
 
@@ -101,6 +130,9 @@ public final class LuaLineHook {
 
     /** 触发一次 return 事件。调用返回后调用。 */
     public static void fireReturn(Node location) {
+        if (!anyActiveContext()) {
+            return;
+        }
         fireReturn(LuaContext.get(location));
     }
 
@@ -118,6 +150,9 @@ public final class LuaLineHook {
 
     /** 触发一次 count 事件。语句计数达到阈值时调用。 */
     public static void fireCount(Node location) {
+        if (!anyActiveContext()) {
+            return;
+        }
         fireCount(LuaContext.get(location));
     }
 
