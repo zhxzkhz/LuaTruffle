@@ -52,4 +52,13 @@ check("debug hook", hookLines > 0 and sum == 55)
 local ok2, message = pcall(function() error("boom") end)
 check("pcall", not ok2 and tostring(message):find("boom", 1, true) ~= nil)
 
+-- Lua 5.4 特性：warn（默认关闭，可 @on 开启）与 coroutine.close。
+check("warn and coroutine.close", type(warn) == "function" and type(coroutine.close) == "function")
+local co = coroutine.create(function()
+    local handle = setmetatable({}, {__close = function() end})
+    coroutine.yield()
+end)
+check("coroutine resume", coroutine.resume(co))
+check("coroutine close", coroutine.close(co) == true and coroutine.status(co) == "dead")
+
 print("native smoke OK: " .. checks .. " checks")

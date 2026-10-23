@@ -189,7 +189,9 @@ public final class LuaInvokeNode extends LuaExpressionNode {
             result = library.execute(functionValue, finalArguments);
         }
 
-        return result;
+        return functionValue instanceof com.zhhz.truffle.lua.runtime.LuaValue
+                ? result
+                : com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(result);
     }
 
     @TruffleBoundary

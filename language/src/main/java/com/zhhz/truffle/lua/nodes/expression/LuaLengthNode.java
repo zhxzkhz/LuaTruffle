@@ -55,6 +55,21 @@ public abstract class LuaLengthNode extends LuaExpressionNode {
         return operand.getArraySize();
     }
 
+    // --- 宿主数组（interop array elements）的长度 ---
+    @Specialization(guards = "isForeignArray(operand)")
+    @TruffleBoundary
+    protected long lengthOfForeignArray(Object operand) {
+        try {
+            return InteropLibrary.getUncached().getArraySize(operand);
+        } catch (com.oracle.truffle.api.interop.UnsupportedMessageException e) {
+            throw LuaException.create("attempt to get length of a userdata value", this);
+        }
+    }
+
+    protected static boolean isForeignArray(Object value) {
+        return !(value instanceof LuaValue) && InteropLibrary.getUncached().hasArrayElements(value);
+    }
+
     // --- 后备/回退方法，处理错误情况 ---
     @Fallback
     @CompilerDirectives.TruffleBoundary

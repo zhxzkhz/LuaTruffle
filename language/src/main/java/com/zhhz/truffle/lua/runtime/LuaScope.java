@@ -63,7 +63,7 @@ public final class LuaScope implements TruffleObject {
 
     @ExportMessage
     Object readMember(String member) throws UnknownIdentifierException, UnsupportedMessageException {
-        return GLOBALS.readMember(globals, member);
+        return com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(GLOBALS.readMember(globals, member));
     }
 
     @ExportMessage
@@ -80,7 +80,7 @@ public final class LuaScope implements TruffleObject {
     @ExportMessage
     void writeMember(String member, Object value)
             throws UnknownIdentifierException, UnsupportedTypeException, UnsupportedMessageException {
-        GLOBALS.writeMember(globals, member, value);
+        GLOBALS.writeMember(globals, member, com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(value));
     }
 
     @ExportMessage

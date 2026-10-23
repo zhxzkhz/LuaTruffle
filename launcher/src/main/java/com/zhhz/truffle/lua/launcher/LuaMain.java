@@ -114,6 +114,7 @@ public final class LuaMain {
         boolean ignoreEnv = false;
         boolean interactive = false;
         boolean showVersion = false;
+        boolean warnEnabled = false;
         List<String> evalStatements = new ArrayList<>();
         List<String> loadModules = new ArrayList<>();
         // Preserve raw option tokens for the arg table (everything before script path)
@@ -131,6 +132,11 @@ public final class LuaMain {
                 scriptIndex++;
             } else if (opt.equals("-i")) {
                 interactive = true;
+                rawOptions.add(opt);
+                scriptIndex++;
+            } else if (opt.equals("-W")) {
+                // Lua 5.4: 打开警告输出（默认关闭）。
+                warnEnabled = true;
                 rawOptions.add(opt);
                 scriptIndex++;
             } else if (opt.equals("-v") || opt.equals("--version")) {
@@ -235,10 +241,11 @@ public final class LuaMain {
         final String runResourcesPath = resourcesPath;
         final boolean runNoScript = noScript;
         final boolean runShowVersion = showVersion;
+        final boolean runWarnEnabled = warnEnabled;
         final int[] exitCode = {0};
         Thread runner = new Thread(null, () -> exitCode[0] = executeSource(runSource, runArguments,
                 runPortableTests, runEvalStatements, runLoadModules, runInteractive, runResourcesPath,
-                runNoScript, runShowVersion), "lua-main", 64L * 1024 * 1024);
+                runNoScript, runShowVersion, runWarnEnabled), "lua-main", 64L * 1024 * 1024);
         runner.start();
         try {
             runner.join();
@@ -293,7 +300,7 @@ public final class LuaMain {
     private static int executeSource(Source source, String[] arguments, boolean portableTests,
                                      List<String> evalStatements, List<String> loadModules,
                                      boolean interactive, String resourcesPath, boolean noScript,
-                                     boolean showVersion) {
+                                     boolean showVersion, boolean warnEnabled) {
         // stdin 直接共享给 Context：io.read、debug.debug 等通过 env.in() 读取。
         // 注意不能给空流——否则 -e 中的 debug.debug() 会立即读到 EOF。
         // REPL 的 BufferedReader 在 -e/-l 语句之后才创建，顺序读取不会互相抢占。
@@ -315,6 +322,9 @@ public final class LuaMain {
         }
 
         try {
+            if (warnEnabled) {
+                context.eval(Lua, "warn('@on')");
+            }
             if (portableTests) {
                 context.eval(Lua, "_port = true");
             }

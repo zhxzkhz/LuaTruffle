@@ -179,4 +179,79 @@ class CoroutineTest extends AbstractLuaTest {
             assertTrue(error.getMessage().contains("from coroutine"), error.getMessage());
         }
     }
+    @Test
+    void closeRunsToBeClosedHandlers() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local closed, errObj
+                    local co = coroutine.create(function ()
+                        local x <close> = setmetatable({}, {__close = function (_, e)
+                            closed, errObj = true, e
+                        end})
+                        coroutine.yield(1)
+                    end)
+                    local ok, v = coroutine.resume(co)
+                    local closedOk = coroutine.close(co)
+                    local again = coroutine.close(co)
+                    return ok, v, closedOk, again, coroutine.status(co), closed, errObj
+                    """);
+            assertTrue(result.getArrayElement(0).asBoolean(), "resume succeeded");
+            assertEquals(1L, result.getArrayElement(1).asLong());
+            assertTrue(result.getArrayElement(2).asBoolean(), "close succeeded");
+            assertTrue(result.getArrayElement(3).asBoolean(), "closing a dead coroutine succeeds");
+            assertEquals("dead", result.getArrayElement(4).asString());
+            assertTrue(result.getArrayElement(5).asBoolean(), "__close ran");
+            assertTrue(result.getArrayElement(6).isNull(), "no error passed to __close");
+        }
+    }
+
+    @Test
+    void closeReportsErrorFromCloseHandler() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local co = coroutine.create(function ()
+                        local x <close> = setmetatable({}, {__close = function () error('boom') end})
+                        coroutine.yield()
+                    end)
+                    coroutine.resume(co)
+                    local ok, err = coroutine.close(co)
+                    return ok, err
+                    """);
+            assertEquals(false, result.getArrayElement(0).asBoolean());
+            assertTrue(result.getArrayElement(1).asString().contains("boom"),
+                    result.getArrayElement(1).asString());
+        }
+    }
+
+    @Test
+    void closeRejectsRunningAndNormalCoroutines() {
+        try (var context = newContextBuilder("lua").build()) {
+            Value result = context.eval("lua", """
+                    local self
+                    self = coroutine.create(function ()
+                        return pcall(coroutine.close, self)
+                    end)
+                    local rok, cok, cerr = coroutine.resume(self)
+                    local outer
+                    outer = coroutine.create(function ()
+                        local inner = coroutine.create(function ()
+                            local ok, err = pcall(coroutine.close, outer)
+                            return ok, err
+                        end)
+                        return coroutine.resume(inner)
+                    end)
+                    local orok, iok, iok2, ierr = coroutine.resume(outer)
+                    return rok, cok, cerr, orok, iok, iok2, ierr
+                    """);
+            assertEquals(true, result.getArrayElement(0).asBoolean());
+            assertEquals(false, result.getArrayElement(1).asBoolean());
+            assertTrue(result.getArrayElement(2).asString().contains("running"),
+                    result.getArrayElement(2).asString());
+            assertEquals(true, result.getArrayElement(3).asBoolean());
+            assertEquals(true, result.getArrayElement(4).asBoolean());
+            assertEquals(false, result.getArrayElement(5).asBoolean());
+            assertTrue(result.getArrayElement(6).asString().contains("normal"),
+                    result.getArrayElement(6).asString());
+        }
+    }
 }

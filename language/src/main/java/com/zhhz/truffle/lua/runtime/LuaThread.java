@@ -38,6 +38,22 @@ public final class LuaThread extends LuaValue {
     /** 是否已经启动过（用于区分“尚未 resume”与“yield 挂起”）。 */
     private volatile boolean started;
 
+    /** 是否正在被 coroutine.close 关闭（唤醒 yield 后展开调用栈）。 */
+    private volatile boolean closing;
+    /** 协程因错误终止时保存的错误对象，供 coroutine.close 再次报告。 */
+    private Object deadError;
+
+    /** 唤醒阻塞中的协程并要求其展开调用栈的标记。 */
+    private static final Object CLOSE_TOKEN = new Object();
+    private static final Object[] CLOSE_REQUEST = new Object[]{CLOSE_TOKEN};
+
+    /** 展开协程栈用的控制流异常；继承 Error 以免被 pcall/xpcall 的 catch(Exception) 吞掉。 */
+    private static final class CloseRequest extends Error {
+        CloseRequest() {
+            super(null, null, false, false);
+        }
+    }
+
     /** 协程函数的 CallTarget */
     private final CallTarget callTarget;
     /** 传递给协程函数的 parentFrame（第一个参数） */
@@ -318,8 +334,50 @@ public final class LuaThread extends LuaValue {
             Object[] ret = new Object[2];
             ret[0] = Boolean.FALSE;
             ret[1] = result.length > 1 ? result[1] : LuaContext.toTruffleString("error in coroutine");
+            deadError = ret[1];
             return ret;
         }
+    }
+
+    /**
+     * 关闭协程（coroutine.close）：让挂起的协程展开调用栈，执行待关闭变量的
+     * {@code __close} 处理器。返回 {@code [true]} 或 {@code [false, error]}。
+     */
+    @CompilerDirectives.TruffleBoundary
+    public Object[] close() {
+        if (state == State.DEAD) {
+            return deadError == null
+                    ? new Object[]{Boolean.TRUE}
+                    : new Object[]{Boolean.FALSE, deadError};
+        }
+        if (state == State.RUNNING || state == State.NORMAL) {
+            return new Object[]{Boolean.FALSE,
+                    LuaContext.toTruffleString("cannot close a " + state.name().toLowerCase() + " coroutine")};
+        }
+        // 尚未启动：没有需要关闭的栈。
+        if (thread == null || !started) {
+            state = State.DEAD;
+            return new Object[]{Boolean.TRUE};
+        }
+
+        closing = true;
+        state = State.NORMAL;
+        Object[] result;
+        try {
+            exchanger.exchange(CLOSE_REQUEST);
+            result = exchanger.exchange(null);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            state = State.DEAD;
+            return new Object[]{Boolean.FALSE, LuaContext.toTruffleString("coroutine interrupted")};
+        }
+        state = State.DEAD;
+        Object error = result.length > 1 ? result[1] : null;
+        if (error != null && error != LuaNil.SINGLETON) {
+            deadError = error;
+            return new Object[]{Boolean.FALSE, error};
+        }
+        return new Object[]{Boolean.TRUE};
     }
 
     /**
@@ -337,8 +395,11 @@ public final class LuaThread extends LuaValue {
         System.arraycopy(values, 0, yieldResult, 1, values.length);
         try {
             exchanger.exchange(yieldResult);
-            // 等待 resume 传来的参数
+            // 等待 resume 传来的参数（或 coroutine.close 的关闭请求）
             Object[] resumeArgs = exchanger.exchange(null);
+            if (resumeArgs != null && resumeArgs.length == 1 && resumeArgs[0] == CLOSE_TOKEN) {
+                throw new CloseRequest();
+            }
             return resumeArgs;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -348,6 +409,16 @@ public final class LuaThread extends LuaValue {
             }
             return new Object[0];
         }
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static Object errorObjectOf(Throwable e) {
+        if (e instanceof com.zhhz.truffle.lua.LuaException le) {
+            Object error = le.getErrorObject();
+            return error != null ? error : LuaContext.toTruffleString(LuaException.messageOf(le));
+        }
+        String message = LuaException.messageOf(e);
+        return LuaContext.toTruffleString(message != null ? message : LuaException.descriptionOf(e));
     }
 
     /**
@@ -375,8 +446,12 @@ public final class LuaThread extends LuaValue {
                 // 上下文不可用时退化为无 ThreadLocal 状态（yield 会明确报错）
             }
             try {
-                // 等待第一次 resume 的参数
+                // 等待第一次 resume 的参数（或启动前的 coroutine.close）
                 Object[] firstArgs = exchanger.exchange(null);
+                if (firstArgs != null && firstArgs.length == 1 && firstArgs[0] == CLOSE_TOKEN) {
+                    exchanger.exchange(new Object[]{"close", LuaNil.SINGLETON});
+                    return;
+                }
                 if (disposed) {
                     return; // 创建后未运行即关闭
                 }
@@ -404,14 +479,13 @@ public final class LuaThread extends LuaValue {
                     if (disposed) {
                         return; // 关闭时的取消/中断：静默退出
                     }
-                    Object errObj;
-                    if (e instanceof com.zhhz.truffle.lua.LuaException le) {
-                        errObj = le.getErrorObject();
-                        if (errObj == null) errObj = LuaContext.toTruffleString(LuaException.messageOf(le));
-                    } else {
-                        errObj = LuaContext.toTruffleString(LuaException.messageOf(e) != null ? LuaException.messageOf(e) : LuaException.descriptionOf(e));
+                    if (closing) {
+                        // coroutine.close 触发的展开：报告关闭结果（__close 抛错则带回错误）。
+                        Object closeErr = e instanceof CloseRequest ? LuaNil.SINGLETON : errorObjectOf(e);
+                        exchanger.exchange(new Object[]{"close", closeErr});
+                        return;
                     }
-                    exchanger.exchange(new Object[]{"error", errObj});
+                    exchanger.exchange(new Object[]{"error", errorObjectOf(e)});
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

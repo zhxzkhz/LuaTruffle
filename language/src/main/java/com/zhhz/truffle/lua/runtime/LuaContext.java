@@ -537,6 +537,37 @@ public final class LuaContext {
         return error;
     }
 
+    /** 警告输出开关（Lua 5.4 默认关闭，warn("@on") 打开）。 */
+    private volatile boolean warningsEnabled;
+    private final StringBuilder warningBuffer = new StringBuilder();
+
+    /** 输出一条警告消息（{@code complete=false} 表示还有后续片段）。 */
+    @TruffleBoundary
+    public void warning(String message, boolean complete) {
+        if (message.length() > 1 && message.charAt(0) == '@') {
+            if (message.equals("@on")) {
+                warningsEnabled = true;
+            } else if (message.equals("@off")) {
+                warningsEnabled = false;
+            }
+            return;
+        }
+        if (!warningsEnabled) {
+            return;
+        }
+        synchronized (warningBuffer) {
+            warningBuffer.append(message);
+            if (complete) {
+                PrintWriter err = getError();
+                err.print("Lua warning: ");
+                err.print(warningBuffer);
+                err.print('\n');
+                err.flush();
+                warningBuffer.setLength(0);
+            }
+        }
+    }
+
     @TruffleBoundary
     public Object getImportedSymbol(String name) {
         return importedSymbols.get(name);
@@ -647,6 +678,7 @@ public final class LuaContext {
 
         installBuiltin(LuaToNumberBuiltinNodeGen.create());
         installBuiltin(LuaToStringBuiltinNodeGen.create());
+        installBuiltin(com.zhhz.truffle.lua.builtins.LuaWarnBuiltinNodeGen.create());
 
 
         // 【关键】调用通用的批量安装方法

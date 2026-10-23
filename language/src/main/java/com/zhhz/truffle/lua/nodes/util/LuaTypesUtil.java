@@ -26,6 +26,21 @@ public final class LuaTypesUtil {
     public static final TruffleString T_THREAD = toTruffleString("thread");
 
     /**
+     * 把宿主 interop 值转换成 Lua 值：宿主的 null 映射为 Lua nil。
+     */
+    public static Object normalizeHostValue(Object value) {
+        if (value == null) {
+            return LuaNil.SINGLETON;
+        }
+        if (value instanceof LuaValue) {
+            return value;
+        }
+        if (com.oracle.truffle.api.interop.InteropLibrary.getUncached().isNull(value)) {
+            return LuaNil.SINGLETON;
+        }
+        return value;
+    }
+    /**
      * 【核心】实现 Lua 的“真值”判断规则。
      * 在 Lua 中，只有 false 和 nil 被认为是假 (falsy)。
      *

@@ -52,11 +52,18 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
     }
 
     @Override
-    @ExplodeLoop
     public Object executeMultiValue(VirtualFrame frame) {
         Object receiverValue = receiverNode.executeGeneric(frame);
 
         Object methodKey = methodKeyNode.executeGeneric(frame);
+
+        Object[] explicitArguments = evaluateArguments(frame);
+
+        // 宿主对象：按 interop 约定调用成员方法（成员函数已绑定接收者，不能再补 self）。
+        if (!(receiverValue instanceof LuaValue) && receiverValue instanceof com.oracle.truffle.api.interop.TruffleObject) {
+            return dispatchHostCall(receiverValue, methodKey, explicitArguments);
+        }
+
         // 方法调用读路径的 "attempt to index a ... value" 错误需要带上接收者表达式的
         // 变量来源后缀（如 aaa.bbb:ddd() -> (field 'bbb')）。
         Object functionValue = unpackResult(
@@ -67,29 +74,49 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
             throw LuaException.runtimeError(message, this);
         }
 
+        Object[] finalArguments = new Object[explicitArguments.length + 1];
+        finalArguments[0] = receiverValue;
+        System.arraycopy(explicitArguments, 0, finalArguments, 1, explicitArguments.length);
+
+        return dispatchCall(functionValue, finalArguments);
+    }
+
+    @ExplodeLoop
+    private Object[] evaluateArguments(VirtualFrame frame) {
         int explicitArgCount = this.argumentNodes.length;
-
         if (explicitArgCount == 0) {
-            return dispatchCall(functionValue, new Object[]{receiverValue});
+            return new Object[0];
         }
-
-        final Object[] prefixArgs = new Object[explicitArgCount - 1 + 1];
-        prefixArgs[0] = receiverValue;
+        final Object[] prefixArgs = new Object[explicitArgCount - 1];
         for (int i = 0; i < explicitArgCount - 1; i++) {
             Object rawArg = this.argumentNodes[i].executeGeneric(frame);
             if (rawArg == null) {
                 throw LuaException.create("unexpected multi-return or nil in method call argument", this);
             }
-            prefixArgs[i + 1] = LuaMultiValue.firstValue(rawArg);
+            prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
         }
 
         Object lastResult = this.argumentNodes[explicitArgCount - 1].executeMultiValue(frame);
         if (lastResult == null) {
             throw LuaException.create("unexpected multi-return or nil in method call argument", this);
         }
-        Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
+        return LuaMultiValue.collect(prefixArgs, lastResult);
+    }
 
-        return dispatchCall(functionValue, finalArguments);
+    private Object dispatchHostCall(Object receiver, Object methodKey, Object[] arguments) {
+        String member;
+        try {
+            member = com.zhhz.truffle.lua.nodes.util.LuaToMemberNodeGen.getUncached().execute(this, methodKey);
+        } catch (com.oracle.truffle.api.interop.UnknownIdentifierException e) {
+            throw LuaException.undefinedProperty(this, methodKey);
+        }
+        try {
+            return com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(
+                    library.invokeMember(receiver, member, arguments));
+        } catch (ArityException | UnsupportedTypeException | UnsupportedMessageException
+                | com.oracle.truffle.api.interop.UnknownIdentifierException e) {
+            throw LuaException.undefinedFunction(this, e);
+        }
     }
 
     /**

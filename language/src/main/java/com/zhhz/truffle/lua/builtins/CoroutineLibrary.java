@@ -130,6 +130,27 @@ public final class CoroutineLibrary {
     }
 
     /**
+     * coroutine.close(co): 关闭挂起/已结束的协程，执行其待关闭变量。
+     * 返回 true，或 false + 错误对象。
+     */
+    @LuaBuiltin(name = "close")
+    @TruffleBoundary
+    public static Object close(Object[] arguments) {
+        if (arguments.length == 0 || !(arguments[0] instanceof LuaThread thread)) {
+            throw LuaException.create("bad argument #1 to 'close' (thread expected)", null);
+        }
+        LuaContext context = LuaContext.get(null);
+        LuaThread current = context.getCurrentCoroutine();
+        if (current == thread || thread.getState() == LuaThread.State.RUNNING) {
+            throw LuaException.create("cannot close a running coroutine", null);
+        }
+        if (thread.getState() == LuaThread.State.NORMAL) {
+            throw LuaException.create("cannot close a normal coroutine", null);
+        }
+        return new LuaMultiValue(thread.close());
+    }
+
+    /**
      * coroutine.running(): 返回当前正在运行的协程和是否是主线程。
      */
     @LuaBuiltin(name = "running")

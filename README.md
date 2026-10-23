@@ -17,10 +17,10 @@
     *   **函数**：支持闭包 (Closures)、Upvalues、多返回值。
     *   **数据结构**：基于 `DynamicObject` 优化的高性能 Table 实现（混合数组部分与哈希部分）。
     *   **元机制**：完整支持 `setmetatable`/`getmetatable`，以及算术 (`__add` 等)、比较 (`__eq` 等)、访问 (`__index`/`__newindex`) 和调用 (`__call`) 元方法。
-*   **协程**：`coroutine.create/resume/yield/status/wrap/running/isyieldable`，
+*   **协程**：`coroutine.create/resume/yield/status/wrap/running/isyieldable/close`，
     复刻标准 Lua 的 `nny`（不可让出层数）语义，支持嵌套 resume、`pcall` 内让出与挂起协程的清理。
 *   **标准库支持**：
-    *   `basic`: `print`, `type`, `tostring`, `tonumber`, `error`, `pcall`, `xpcall`, `assert`, `select`, `load`, `loadfile`, `dofile`, `rawget`, `rawset`, `collectgarbage`...
+    *   `basic`: `print`, `type`, `tostring`, `tonumber`, `error`, `pcall`, `xpcall`, `assert`, `select`, `load`, `loadfile`, `dofile`, `rawget`, `rawset`, `collectgarbage`, `warn`...
     *   `string`: `len`, `sub`, `upper`, `lower`, `rep`, `format`, `find`, `match`, `gmatch`, `gsub`, `dump`（含 Lua 模式匹配）。
     *   `table`: 构造、`insert`, `remove`, `concat`, `sort`（可让出性对齐参考实现）、`unpack`, `pack`，以及 `pairs`/`ipairs`/`next`。
     *   `math`, `os`, `io`：常用函数与文件读写。
@@ -30,6 +30,19 @@
 *   **Polyglot 互操作**：
     *   实现了 `InteropLibrary`，允许 Java 直接调用 Lua 函数，或 Lua 访问 Java 对象。
     *   支持 GraalVM Native Image AOT 编译。
+
+## 🧩 兼容性与互操作
+
+*   **语言版本**：以 Lua 5.3 为基线（`_VERSION == "Lua 5.3"`，`string.dump` 与字节码 VM 使用 5.3 指令集），官方 Lua 5.3 测试套件（`all.lua`）通过。
+*   **已实现的 Lua 5.4 特性**：
+    *   `warn`：默认关闭，`warn("@on")` / `warn("@off")` 切换；启动参数 `-W` 直接开启，消息格式为 `Lua warning: ...`。
+    *   `coroutine.close`：关闭挂起协程会执行其 to-be-closed 变量并返回 `true`；`__close` 或协程自身出错时返回 `false, err`；运行中/普通协程按参考实现的错误信息拒绝。
+    *   `<const>` 赋值检查与 `<close>` to-be-closed 变量。
+*   **已知差异**：`_VERSION` 仍报告 `"Lua 5.3"`；字节码与 `string.dump` 为 5.3 格式；`math.random` 序列不保证与 PUC Lua 一致。
+*   **Java 互操作**：
+    *   宿主对象通过 `InteropLibrary` 暴露字段、方法与数组；Lua 下标从 1 开始映射到宿主 0 基下标，越界读取为 `nil`。
+    *   `obj:method(args)` 按宿主成员方法调用（不额外补 `self`）；宿主 `null` 统一映射为 Lua `nil`。
+    *   Lua 函数可作为宿主回调：宿主侧用 `Value.asValue(arg)` 包装后即可 `execute`。
 
 ## 🚀 性能基准
 

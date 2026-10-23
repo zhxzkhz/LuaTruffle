@@ -248,7 +248,7 @@ public final class LuaTable extends LuaValue {
         if (value == null) {
             throw UnknownIdentifierException.create(member);
         }
-        return value;
+        return com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(value);
     }
 
     @ExportMessage
@@ -256,9 +256,9 @@ public final class LuaTable extends LuaValue {
                      @Cached.Shared("fromStr") @Cached TruffleString.FromJavaStringNode fromJavaStringNode,
                      @CachedLibrary("this") DynamicObjectLibrary objLib) {
 
-        // 2. 写入
-        //    注意：这里可能还需要处理 value 的类型转换（如果需要的话）
-        objLib.put(this, fromJavaStringNode.execute(member,LuaLanguage.STRING_ENCODING), value);
+        // 2. 写入（宿主 null 统一存成 Lua nil）
+        objLib.put(this, fromJavaStringNode.execute(member,LuaLanguage.STRING_ENCODING),
+                com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(value));
     }
 
     // ... isMemberModifiable, isMemberInsertable, writeMember 的实现 ...
