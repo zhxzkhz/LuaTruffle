@@ -14,6 +14,8 @@ import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
@@ -163,6 +165,9 @@ public final class StringLibrary {
                 continue;
             }
             if (++position >= format.length) {
+                if (argumentIndex >= arguments.length) {
+                    throw LuaStringSupport.argumentError("format", argumentIndex + 1, "no value");
+                }
                 throw LuaException.create("invalid conversion '%' to 'format'", null);
             }
             if ((format[position] & 0xff) == '%') {
@@ -184,11 +189,14 @@ public final class StringLibrary {
                 }
             }
             if (position >= format.length) {
-                throw LuaException.create("invalid format (ends with '%')", null);
+                if (argumentIndex >= arguments.length) {
+                    throw LuaStringSupport.argumentError("format", argumentIndex + 1, "no value");
+                }
+                throw LuaException.create("invalid conversion '%' to 'format'", null);
             }
             int conversion = format[position] & 0xff;
             if (argumentIndex >= arguments.length) {
-                throw LuaException.create("bad argument #" + (argumentIndex + 1) + " to 'format' (no value)", null);
+                throw LuaStringSupport.argumentError("format", argumentIndex + 1, "no value");
             }
             Object argument = arguments[argumentIndex++];
             String directive = new String(format, directiveStart, position - directiveStart + 1, StandardCharsets.ISO_8859_1);
@@ -438,18 +446,21 @@ public final class StringLibrary {
             if (!directive.equals("%q")) {
                 throw LuaException.create("specifier '%q' cannot have modifiers", null);
             }
-            return quote(value);
+            return quote(value, argument);
+        }
+        if (conversion == 'a' || conversion == 'A') {
+            if (directive.length() != 2) {
+                throw LuaException.create("modifiers for format '%a'/'%A' not implemented", null);
+            }
+            return LuaNumberFormat.formatA(toDouble(value, argument, "format"), conversion == 'A')
+                    .getBytes(StandardCharsets.US_ASCII);
+        }
+        if (isSupportedConversion(conversion)) {
+            validateFormat(directive, conversion);
         }
         try {
             if (directive.indexOf('.') >= 0 && isIntegerConversion(conversion)) {
                 return formatIntegerPrecision(directive, conversion, value, argument);
-            }
-            if (conversion == 'a' || conversion == 'A') {
-                if (directive.length() != 2) {
-                    throw LuaException.create("modifiers for format '%a'/'%A' not implemented", null);
-                }
-                return LuaNumberFormat.formatA(toDouble(value, argument, "format"), conversion == 'A')
-                        .getBytes(StandardCharsets.US_ASCII);
             }
             if (conversion == 'p') {
                 return formatPointer(directive, value).getBytes(StandardCharsets.US_ASCII);
@@ -461,21 +472,46 @@ public final class StringLibrary {
             String javaDirective = directive;
             Object javaValue;
             switch (conversion) {
-                case 'c' -> javaValue = Math.toIntExact(toLong(value, argument, "format"));
+                case 'c' -> {
+                    int character = (int) (toLong(value, argument, "format") & 0xFF);
+                    return String.format(Locale.ROOT, normalizeJavaDirective(directive), (char) character)
+                            .getBytes(StandardCharsets.ISO_8859_1);
+                }
                 case 'd' -> javaValue = toLong(value, argument, "format");
                 case 'i' -> {
                     javaDirective = directive.substring(0, directive.length() - 1) + 'd';
                     javaValue = toLong(value, argument, "format");
                 }
-                case 'o', 'x', 'X' -> javaValue = toLong(value, argument, "format");
+                case 'o', 'x', 'X' -> {
+                    long integer = toLong(value, argument, "format");
+                    javaValue = integer;
+                    if (integer == 0 && directive.indexOf('#') >= 0) {
+                        javaDirective = directive.replace("#", "");
+                    }
+                }
                 case 'u' -> {
                     String unsigned = Long.toUnsignedString(toLong(value, argument, "format"));
                     return applyStringWidth(directive, unsigned).getBytes(StandardCharsets.US_ASCII);
                 }
-                case 's' -> javaValue = LuaStringSupport.toLatin1(toLuaStringBytes(value));
-                default -> throw LuaException.create("invalid conversion '%" + (char) conversion + "' to 'format'", null);
+                case 's' -> {
+                    byte[] stringBytes = toLuaStringBytes(value);
+                    if (directive.equals("%s")) {
+                        return stringBytes;
+                    }
+                    for (byte stringByte : stringBytes) {
+                        if (stringByte == 0) {
+                            throw LuaStringSupport.argumentError("format", argument, "string contains zeros");
+                        }
+                    }
+                    if (directive.indexOf('.') < 0 && stringBytes.length >= 100) {
+                        return stringBytes;
+                    }
+                    javaValue = LuaStringSupport.toLatin1(stringBytes);
+                }
+                default -> throw LuaException.create("invalid conversion '" + directive + "' to 'format'", null);
             }
-            return String.format(Locale.ROOT, javaDirective, javaValue).getBytes(StandardCharsets.ISO_8859_1);
+            return String.format(Locale.ROOT, normalizeJavaDirective(javaDirective), javaValue)
+                    .getBytes(StandardCharsets.ISO_8859_1);
         } catch (LuaException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -529,7 +565,7 @@ public final class StringLibrary {
             String text = Double.isNaN(number) ? (upper ? "NAN" : "nan") : (upper ? "INF" : "inf");
             body = number < 0 ? "-" + text : text;
         } else {
-            return String.format(Locale.ROOT, directive, number).getBytes(StandardCharsets.ISO_8859_1);
+            body = formatFiniteDecimal(number, conversion, precision < 0 ? 6 : precision, alternate);
         }
 
         if (!body.startsWith("-")) {
@@ -554,6 +590,56 @@ public final class StringLibrary {
             }
         }
         return body.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /**
+     * C {@code printf} 的 {@code %f/%e} 使用二进制 double 精确值并四舍五入到偶数；
+     * Java 的 {@code Formatter} 使用 HALF_UP，且 {@code %e} 的零填充/进位规则不同。
+     */
+    private static String formatFiniteDecimal(double number, int conversion, int precision, boolean alternate) {
+        boolean negative = number < 0 || (number == 0.0 && 1.0 / number < 0);
+        BigDecimal absolute = new BigDecimal(Math.abs(number));
+        String sign = negative ? "-" : "";
+        if (conversion == 'f') {
+            String digits = absolute.setScale(precision, RoundingMode.HALF_EVEN).toPlainString();
+            if (alternate && precision == 0) {
+                digits += ".";
+            }
+            return sign + digits;
+        }
+
+        int exponent;
+        BigDecimal mantissa;
+        if (absolute.signum() == 0) {
+            exponent = 0;
+            mantissa = absolute;
+        } else {
+            exponent = absolute.precision() - absolute.scale() - 1;
+            mantissa = absolute.setScale(precision - exponent, RoundingMode.HALF_EVEN);
+            if (mantissa.unscaledValue().abs().toString().length() > precision + 1) {
+                exponent++;
+                mantissa = absolute.setScale(precision - exponent, RoundingMode.HALF_EVEN);
+            }
+        }
+        String digits = mantissa.unscaledValue().abs().toString();
+        if (digits.length() < precision + 1) {
+            digits = "0".repeat(precision + 1 - digits.length()) + digits;
+        }
+        StringBuilder result = new StringBuilder(sign);
+        result.append(digits.charAt(0));
+        if (precision > 0) {
+            result.append('.').append(digits, 1, digits.length());
+        } else if (alternate) {
+            result.append('.');
+        }
+        result.append(conversion == 'E' ? 'E' : 'e');
+        result.append(exponent < 0 ? '-' : '+');
+        int absoluteExponent = Math.abs(exponent);
+        if (absoluteExponent < 10) {
+            result.append('0');
+        }
+        result.append(absoluteExponent);
+        return result.toString();
     }
 
     /** C 的 {@code %p}：引用类型输出地址样式的十六进制，标量输出 {@code (null)}。 */
@@ -640,18 +726,9 @@ public final class StringLibrary {
                 }
                 digits = raw;
             }
-            case 'o' -> {
-                digits = Long.toOctalString(number);
-                if (alternate && !digits.startsWith("0")) prefix = "0";
-            }
-            case 'x' -> {
-                digits = Long.toHexString(number);
-                if (alternate) prefix = "0x";
-            }
-            case 'X' -> {
-                digits = Long.toHexString(number).toUpperCase(Locale.ROOT);
-                if (alternate) prefix = "0X";
-            }
+            case 'o' -> digits = Long.toOctalString(number);
+            case 'x' -> digits = Long.toHexString(number);
+            case 'X' -> digits = Long.toHexString(number).toUpperCase(Locale.ROOT);
             default -> digits = Long.toUnsignedString(number);
         }
 
@@ -659,6 +736,28 @@ public final class StringLibrary {
             digits = "";
         } else if (digits.length() < precision) {
             digits = "0".repeat(precision - digits.length()) + digits;
+        }
+
+        if (alternate) {
+            switch (conversion) {
+                case 'o' -> {
+                    if (!digits.isEmpty() && !digits.startsWith("0")) {
+                        prefix = "0";
+                    }
+                }
+                case 'x' -> {
+                    if (number != 0) {
+                        prefix = "0x";
+                    }
+                }
+                case 'X' -> {
+                    if (number != 0) {
+                        prefix = "0X";
+                    }
+                }
+                default -> {
+                }
+            }
         }
 
         String sign = negative ? "-" : plus ? "+" : space ? " " : "";
@@ -670,14 +769,85 @@ public final class StringLibrary {
         return body.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static String applyStringWidth(String directive, String value) {
-        boolean left = directive.indexOf('-') >= 0;
-        boolean zero = directive.indexOf('0') >= 0;
-        int width = 0;
-        for (int i = 1; i < directive.length() - 1; i++) {
-            if (Character.isDigit(directive.charAt(i))) {
-                width = width * 10 + directive.charAt(i) - '0';
+    /**
+     * Java {@code Formatter} 拒绝重复 flags 以及 {@code '-'} 与 {@code '0'}、
+     * {@code '+'} 与 {@code ' '} 的组合；C 允许并忽略冲突项。先规范化再交给 Java。
+     */
+    private static String normalizeJavaDirective(String directive) {
+        int index = 1;
+        boolean left = false;
+        boolean plus = false;
+        boolean space = false;
+        boolean alternate = false;
+        boolean zero = false;
+        while (index < directive.length()) {
+            char flag = directive.charAt(index);
+            if (flag == '-') {
+                left = true;
+            } else if (flag == '+') {
+                plus = true;
+            } else if (flag == ' ') {
+                space = true;
+            } else if (flag == '#') {
+                alternate = true;
+            } else if (flag == '0') {
+                zero = true;
+            } else {
+                break;
             }
+            index++;
+        }
+        int width = 0;
+        int widthIndex = index;
+        while (widthIndex < directive.length() && isDigit(directive.charAt(widthIndex))) {
+            width = width * 10 + directive.charAt(widthIndex) - '0';
+            widthIndex++;
+        }
+        if (width == 0 || left) {
+            zero = false;
+        }
+        if (width == 0) {
+            left = false;
+        }
+        if (plus) {
+            space = false;
+        }
+        StringBuilder result = new StringBuilder(directive.length());
+        result.append('%');
+        if (left) {
+            result.append('-');
+        }
+        if (plus) {
+            result.append('+');
+        } else if (space) {
+            result.append(' ');
+        }
+        if (alternate) {
+            result.append('#');
+        }
+        if (zero) {
+            result.append('0');
+        }
+        result.append(directive, index, directive.length());
+        return result.toString();
+    }
+
+    private static String applyStringWidth(String directive, String value) {
+        int index = 1;
+        boolean left = false;
+        boolean zero = false;
+        while (index < directive.length() && isFormatFlag(directive.charAt(index))) {
+            if (directive.charAt(index) == '-') {
+                left = true;
+            } else if (directive.charAt(index) == '0') {
+                zero = true;
+            }
+            index++;
+        }
+        int width = 0;
+        while (index < directive.length() && isDigit(directive.charAt(index))) {
+            width = width * 10 + directive.charAt(index) - '0';
+            index++;
         }
         if (value.length() >= width) {
             return value;
@@ -686,7 +856,7 @@ public final class StringLibrary {
         return left ? value + padding : padding + value;
     }
 
-    private static byte[] quote(Object value) {
+    private static byte[] quote(Object value, int argument) {
         if (LuaStringSupport.isNil(value)) {
             return "nil".getBytes(StandardCharsets.US_ASCII);
         }
@@ -702,10 +872,13 @@ public final class StringLibrary {
         if (value instanceof LuaNumber number) {
             return LuaNumberFormat.formatQ(number.getValue()).getBytes(StandardCharsets.US_ASCII);
         }
-        if (value instanceof Long) {
-            return LuaStringSupport.toBytes(value, 2, "format");
+        if (value instanceof Long || value instanceof Integer) {
+            return LuaStringSupport.toBytes(value, argument, "format");
         }
-        byte[] bytes = LuaStringSupport.toBytes(value, 2, "format");
+        if (!(value instanceof TruffleString || value instanceof LuaString || value instanceof String)) {
+            throw LuaStringSupport.argumentError("format", argument, "value has no literal form");
+        }
+        byte[] bytes = LuaStringSupport.toBytes(value, argument, "format");
         ByteArrayOutputStream output = new ByteArrayOutputStream(bytes.length + 2);
         output.write('"');
         for (int i = 0; i < bytes.length; i++) {
@@ -737,16 +910,129 @@ public final class StringLibrary {
     }
 
     private static long toLong(Object value, int argument, String function) {
-        return LuaStringSupport.ensureInteger(new Object[]{value}, 0, function);
+        Object number = luaNumber(value);
+        if (number instanceof Long integer) {
+            return integer;
+        }
+        if (number instanceof Double floating) {
+            if (Double.isFinite(floating) && floating == Math.rint(floating)
+                    && floating >= -0x1p63 && floating < 0x1p63) {
+                return floating.longValue();
+            }
+            throw LuaStringSupport.argumentError(function, argument, "number has no integer representation");
+        }
+        if (isString(value)) {
+            throw LuaStringSupport.argumentError(function, argument, "number expected, got string");
+        }
+        throw LuaStringSupport.argumentError(function, argument, "number expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }
 
     private static double toDouble(Object value, int argument, String function) {
-        if (value instanceof Long number) {
-            return number.doubleValue();
+        Object number = luaNumber(value);
+        if (number instanceof Number numeric) {
+            return numeric.doubleValue();
         }
-        if (value instanceof Double number) {
-            return number;
+        if (isString(value)) {
+            throw LuaStringSupport.argumentError(function, argument, "number expected, got string");
         }
-        throw LuaException.create("bad argument #" + argument + " to '" + function + "' (number expected)", null);
+        throw LuaStringSupport.argumentError(function, argument, "number expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
+    }
+
+    private static Object luaNumber(Object value) {
+        if (value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof Double || value instanceof Float) {
+            return ((Number) value).doubleValue();
+        }
+        if (value instanceof LuaNumber number) {
+            return number.getValue();
+        }
+        if (value instanceof TruffleString string) {
+            return com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode.parseLuaNumber(
+                    string.toJavaStringUncached());
+        }
+        if (value instanceof LuaString string) {
+            return com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode.parseLuaNumber(
+                    string.getValue().toJavaStringUncached());
+        }
+        return null;
+    }
+
+    private static boolean isString(Object value) {
+        return value instanceof TruffleString || value instanceof LuaString || value instanceof String;
+    }
+
+    private static boolean isSupportedConversion(int conversion) {
+        return conversion == 'c' || conversion == 'd' || conversion == 'i' || conversion == 'o'
+                || conversion == 'u' || conversion == 'x' || conversion == 'X' || conversion == 'e'
+                || conversion == 'E' || conversion == 'f' || conversion == 'g' || conversion == 'G'
+                || conversion == 'p' || conversion == 's';
+    }
+
+    /**
+     * 复刻 lstrlib.c 的 {@code checkformat}：每种转换只接受固定 flags，宽度和精度最多两位数字，
+     * 且精度只在该转换支持时才能出现。
+     */
+    private static void validateFormat(String directive, int conversion) {
+        String flags;
+        boolean precisionAllowed;
+        switch (conversion) {
+            case 'd', 'i' -> {
+                flags = "-+0 ";
+                precisionAllowed = true;
+            }
+            case 'u' -> {
+                flags = "-0";
+                precisionAllowed = true;
+            }
+            case 'o', 'x', 'X' -> {
+                flags = "-#0";
+                precisionAllowed = true;
+            }
+            case 'c', 'p' -> {
+                flags = "-";
+                precisionAllowed = false;
+            }
+            case 's' -> {
+                if (directive.length() == 2) {
+                    return;
+                }
+                flags = "-";
+                precisionAllowed = true;
+            }
+            default -> {
+                flags = "-+#0 ";
+                precisionAllowed = true;
+            }
+        }
+        int index = 1;
+        while (index < directive.length() && flags.indexOf(directive.charAt(index)) >= 0) {
+            index++;
+        }
+        if (index < directive.length() && directive.charAt(index) != '0') {
+            int widthDigits = 0;
+            while (index < directive.length() && isDigit(directive.charAt(index)) && widthDigits < 2) {
+                index++;
+                widthDigits++;
+            }
+            if (index < directive.length() && directive.charAt(index) == '.' && precisionAllowed) {
+                index++;
+                int precisionDigits = 0;
+                while (index < directive.length() && isDigit(directive.charAt(index)) && precisionDigits < 2) {
+                    index++;
+                    precisionDigits++;
+                }
+            }
+        }
+        if (index >= directive.length() || !isAsciiLetter(directive.charAt(index))) {
+            throw LuaException.create("invalid conversion specification: '" + directive + "'", null);
+        }
+    }
+
+    private static boolean isAsciiLetter(char value) {
+        return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z';
     }
 }

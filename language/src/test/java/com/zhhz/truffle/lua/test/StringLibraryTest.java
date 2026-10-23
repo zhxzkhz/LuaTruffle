@@ -143,6 +143,43 @@ public class StringLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    public void testFormatMatchesCForEdgeCases() {
+        assertTrue(eval("""
+                local okNum, numErr = pcall(string.format, '%d', 'x')
+                local okInt, intErr = pcall(string.format, '%d', 1.5)
+                local okTable, tableErr = pcall(string.format, '%q', {})
+                local okPrec, precErr = pcall(string.format, '%10.123f', 1)
+                local okPlus, plusErr = pcall(string.format, '%+s', 'a')
+                local okZero, zeroErr = pcall(string.format, '%5s', 'a\\0b')
+                return string.format('%c', 300) == ','
+                    and string.format('%c', -1) == string.char(255)
+                    and string.format('%5c', 65) == '    A'
+                    and string.format('%.0f', 2.5) == '2'
+                    and string.format('%.0f', 3.5) == '4'
+                    and string.format('%.0f', -2.5) == '-2'
+                    and string.format('%.2f', 2.675) == '2.67'
+                    and string.format('%.0e', 2.5) == '2e+00'
+                    and string.format('%#x', 0) == '0'
+                    and string.format('%#o', 0) == '0'
+                    and string.format('%#.3o', 1) == '001'
+                    and string.format('%#.0o', 0) == ''
+                    and string.format('%000d', 1) == '1'
+                    and string.format('%-+0 d', 1) == '+1'
+                    and string.format('%d', '0x10') == '16'
+                    and string.format('%f', '1.5') == '1.500000'
+                    and string.format('%5.2s', 'abc') == '   ab'
+                    and string.format('%s', 'a\\0b') == 'a\\0b'
+                    and not okNum and numErr:find('bad argument #2', 1, true) ~= nil
+                    and numErr:find('number expected, got string', 1, true) ~= nil
+                    and not okInt and intErr:find('number has no integer representation', 1, true) ~= nil
+                    and not okTable and tableErr:find('value has no literal form', 1, true) ~= nil
+                    and not okPrec and precErr:find("invalid conversion specification: '%10.123f'", 1, true) ~= nil
+                    and not okPlus and not okZero
+                    and zeroErr:find('string contains zeros', 1, true) ~= nil
+                """).asBoolean());
+    }
+
+    @Test
     public void testNumberFormattingMatchesC() {
         assertTrue(eval("""
                 return tostring(1/3) == '0.33333333333333'
