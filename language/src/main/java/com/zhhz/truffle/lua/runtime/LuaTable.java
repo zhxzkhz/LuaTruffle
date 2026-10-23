@@ -289,6 +289,27 @@ public final class LuaTable extends LuaValue {
         return unwrapWeak(this.arrayPart[(int) index]);
     }
 
+    @ExportMessage
+    boolean isArrayElementModifiable(long index) {
+        long luaIndex = index + 1;
+        return luaIndex > 0 && luaIndex <= this.arraySize;
+    }
+
+    @ExportMessage
+    boolean isArrayElementInsertable(long index) {
+        return index >= 0 && index >= this.arraySize;
+    }
+
+    @ExportMessage
+    void writeArrayElement(long index, Object value)
+            throws InvalidArrayIndexException, com.oracle.truffle.api.interop.UnsupportedTypeException {
+        long luaIndex = index + 1;
+        if (luaIndex < 1) {
+            throw InvalidArrayIndexException.create(index);
+        }
+        rawset(luaIndex, com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.normalizeHostValue(value));
+    }
+
     // === 哈希表协议 (用于任意对象键) ===
     @ExportMessage
     boolean hasHashEntries() {

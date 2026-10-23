@@ -41,6 +41,41 @@ public abstract class WriteHelperNode extends Node {
     @Specialization(guards = "isForeignObject(object)", limit = "3")
     protected void writeHostObject(TruffleObject object, Object key, Object value,
                                    @CachedLibrary("object") InteropLibrary objects) {
+        long arrayIndex = LuaTypesUtil.hostArrayIndex(key);
+        if (arrayIndex != Long.MIN_VALUE && objects.hasArrayElements(object)) {
+            long hostIndex = arrayIndex - 1;
+            try {
+                if (arrayIndex < 1 || hostIndex >= objects.getArraySize(object)
+                        || !objects.isArrayElementWritable(object, hostIndex)) {
+                    throw cannotWriteArrayElement(this, key);
+                }
+                objects.writeArrayElement(object, hostIndex, value);
+                return;
+            } catch (UnsupportedMessageException e) {
+                throw cannotWriteMember(this, key);
+            } catch (com.oracle.truffle.api.interop.InvalidArrayIndexException e) {
+                throw cannotWriteArrayElement(this, key);
+            } catch (UnsupportedTypeException e) {
+                throw unsupportedTypeError(this, key, value);
+            }
+        }
+        // 宿主 Map 等以 hash entries 暴露键值，如 config.name = 'x'。
+        if (objects.hasHashEntries(object)) {
+            Object hashKey = LuaTypesUtil.hostHashKey(key);
+            try {
+                if (objects.isHashEntryModifiable(object, hashKey)
+                        || objects.isHashEntryInsertable(object, hashKey)) {
+                    objects.writeHashEntry(object, hashKey, value);
+                    return;
+                }
+            } catch (UnsupportedMessageException e) {
+                throw cannotWriteMember(this, key);
+            } catch (com.oracle.truffle.api.interop.UnknownKeyException e) {
+                throw LuaException.undefinedProperty(this, key);
+            } catch (UnsupportedTypeException e) {
+                throw unsupportedTypeError(this, key, value);
+            }
+        }
         try {
             objects.writeMember(object, toMemberName(key), value);
         } catch (UnsupportedMessageException e) {
@@ -50,6 +85,11 @@ public abstract class WriteHelperNode extends Node {
         } catch (UnsupportedTypeException e) {
             throw unsupportedTypeError(this, key, value);
         }
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private static RuntimeException cannotWriteArrayElement(Node node, Object key) {
+        return LuaException.create("cannot write to host object array element '" + key + "'", node);
     }
 
     @CompilerDirectives.TruffleBoundary

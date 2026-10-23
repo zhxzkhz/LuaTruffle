@@ -31,6 +31,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
     @Children private final LuaExpressionNode[] argumentNodes;
     @Child private InteropLibrary library;
     @Child private LuaMetatableNode metatableNode;
+    @Child private LuaCallNode luaCallNode;
 
     /** 是否处于尾调用位置（由 LuaReturnNode 在解析期标记）。 */
     private boolean tailCall;
@@ -43,6 +44,7 @@ public final class LuaInvokeNode extends LuaExpressionNode {
         this.argumentNodes = argumentNodes;
         this.library = InteropLibrary.getFactory().createDispatched(3);
         this.metatableNode = LuaMetatableNodeGen.create();
+        this.luaCallNode = LuaCallNodeGen.create();
     }
 
     /** 标记此调用处于尾调用位置（return f(...)）。 */
@@ -93,68 +95,84 @@ public final class LuaInvokeNode extends LuaExpressionNode {
 
 
 
-        // 2. 【参数处理优化】
-        int argCount = this.argumentNodes.length;
+        // 2. 实参求值：得到不含 self 的显式实参（最后一个参数可能展开多返回值）。
+        Object[] explicitArguments = evaluateArguments(frame);
 
-        // 优化：无参调用直接处理
-        if (argCount == 0) {
-            if (notCallable) {
-                throw LuaException.runtimeError(getMessage(functionValue), this);
+        if (notCallable) {
+            throw LuaException.runtimeError(getMessage(functionValue), this);
+        }
+
+        // Lua 函数：直接走专用调用节点，参数数组一次构造成 [function, receiver?, ...args]，
+        // 省掉 InteropLibrary 分发与一次额外的数组复制（递归调用最热路径）。
+        LuaFunction luaFunction = functionValue instanceof LuaFunction lf && isLuaRootCallTarget(lf)
+                ? lf : null;
+        if (luaFunction != null) {
+            if (tailCall) {
+                throw new LuaTailCallException(luaFunction, withReceiver(callableReceiver, explicitArguments));
             }
-            Object[] finalArguments = callableReceiver == null ? null : new Object[]{callableReceiver};
-            return dispatchCall(frame, functionValue, finalArguments, instantiate);
+            Object[] frameArguments = new Object[explicitArguments.length + 1
+                    + (callableReceiver == null ? 0 : 1)];
+            frameArguments[0] = luaFunction;
+            int offset = 1;
+            if (callableReceiver != null) {
+                frameArguments[offset++] = callableReceiver;
+            }
+            System.arraycopy(explicitArguments, 0, frameArguments, offset, explicitArguments.length);
+            return luaCallNode.execute(luaFunction, frameArguments);
         }
 
-        // 步骤 A: 计算前 N-1 个参数 (这些参数长度固定为 1)
-        // 我们先用一个临时数组存起来。JIT 编译器通常能将这个小数组虚拟化(scalarize)，
-        // 甚至直接在寄存器中传递，不会产生真实的堆分配。
-        int implicitArgCount = callableReceiver == null ? 0 : 1;
-        final Object[] prefixArgs = new Object[argCount - 1 + implicitArgCount];
-        if (callableReceiver != null) {
-            prefixArgs[0] = callableReceiver;
+        Object[] finalArguments = explicitArguments.length == 0 && callableReceiver == null
+                ? null
+                : withReceiver(callableReceiver, explicitArguments);
+        return dispatchInteropCall(functionValue, finalArguments, instantiate);
+    }
+
+    @ExplodeLoop
+    private Object[] evaluateArguments(VirtualFrame frame) {
+        int argCount = this.argumentNodes.length;
+        if (argCount == 0) {
+            return new Object[0];
         }
+        // 前 N-1 个参数长度固定为 1；JIT 通常能把这个小数组标量替换掉。
+        final Object[] prefixArgs = new Object[argCount - 1];
         for (int i = 0; i < argCount - 1; i++) {
             Object rawArg = this.argumentNodes[i].executeGeneric(frame);
             if (rawArg == null) {
                 throw new RuntimeException("unexpected array or null return value");
             }
-            prefixArgs[i + implicitArgCount] = LuaMultiValue.firstValue(rawArg);
+            prefixArgs[i] = LuaMultiValue.firstValue(rawArg);
         }
-        // 步骤 B: 计算最后一个参数 (可能返回多值)
+        // 最后一个参数可能返回多值。
         Object lastResult = this.argumentNodes[argCount - 1].executeMultiValue(frame);
-
         if (lastResult == null) {
             throw new RuntimeException("unexpected array or null return value");
         }
-        Object[] finalArguments = LuaMultiValue.collect(prefixArgs, lastResult);
+        return LuaMultiValue.collect(prefixArgs, lastResult);
+    }
 
-        if (notCallable) {
-            throw LuaException.runtimeError(getMessage(functionValue), this);
+    private static Object[] withReceiver(Object receiver, Object[] arguments) {
+        if (receiver == null) {
+            return arguments;
         }
-        return dispatchCall(frame, functionValue, finalArguments, instantiate);
+        Object[] result = new Object[arguments.length + 1];
+        result[0] = receiver;
+        System.arraycopy(arguments, 0, result, 1, arguments.length);
+        return result;
+    }
+
+    /** 以 CallTarget 的根节点区分 Lua 函数与内建（C）函数。 */
+    private static boolean isLuaRootCallTarget(LuaFunction function) {
+        return function.getCallTarget() instanceof com.oracle.truffle.api.RootCallTarget rct
+                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode;
     }
 
     /**
-     * 派发调用：若处于尾调用位置且目标为 Lua 函数，抛出 {@link LuaTailCallException}
-     * 由根节点循环重试，避免 Java 栈增长；否则走普通 InteropLibrary 调用路径。
-     * <p>
-     * 仅对真正的 Lua 函数（{@link com.zhhz.truffle.lua.nodes.LuaRootNode}）做 TCO；
-     * 内建函数（{@link com.zhhz.truffle.lua.builtins.BuiltinRootNode}，对应 C 函数）
-     * 不做尾调用优化——它们对应 Lua 语义中的 C 调用，不应替换栈帧（Lua 5.3 手册 3.4.10）。
+     * 非 Lua 调用的派发（内建函数、宿主可执行对象、实例化）：走 InteropLibrary，
+     * 并记录调用点，供内建函数的参数错误消息解析函数名。
      */
-    private Object dispatchCall(VirtualFrame frame, Object functionValue, Object[] finalArguments, boolean instantiate) {
-        LuaFunction luaFunction = functionValue instanceof LuaFunction lf ? lf : null;
-        // 以 CallTarget 的根节点区分 Lua 函数与内建（C）函数。
-        boolean luaCall = luaFunction != null
-                && luaFunction.getCallTarget() instanceof com.oracle.truffle.api.RootCallTarget rct
-                && rct.getRootNode() instanceof com.zhhz.truffle.lua.nodes.LuaRootNode;
-        if (luaCall && tailCall) {
-            throw new LuaTailCallException(luaFunction, finalArguments == null ? new Object[0] : finalArguments);
-        }
-        // 记录调用点，供内建函数的参数错误消息（luaL_argerror / pushglobalfuncname）解析函数名。
-        // Lua 函数调用不需要该信息，直接跳过上下文查询与字段读写（递归调用的最热路径）。
+    private Object dispatchInteropCall(Object functionValue, Object[] finalArguments, boolean instantiate) {
         com.zhhz.truffle.lua.runtime.LuaContext callContext =
-                luaCall ? null : com.zhhz.truffle.lua.runtime.LuaContext.get(this);
+                com.zhhz.truffle.lua.runtime.LuaContext.get(this);
         com.oracle.truffle.api.nodes.Node previousCallSite =
                 callContext != null ? callContext.getPendingCallSite() : null;
         if (callContext != null) {

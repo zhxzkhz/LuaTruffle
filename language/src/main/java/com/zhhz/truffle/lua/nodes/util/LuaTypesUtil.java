@@ -25,6 +25,30 @@ public final class LuaTypesUtil {
     public static final TruffleString T_USERDATA = toTruffleString("userdata");
     public static final TruffleString T_THREAD = toTruffleString("thread");
 
+    /** 把 Lua 字符串键转成 Java String，供宿主 Map（hash entries）使用。 */
+    public static Object hostHashKey(Object key) {
+        if (key instanceof TruffleString ts) {
+            return ts.toJavaStringUncached();
+        }
+        return key;
+    }
+
+    /**
+     * 把 Lua 数字键转成宿主数组下标（Lua 1 基 → 宿主 0 基）；非整数键返回
+     * {@link Long#MIN_VALUE}。
+     */
+    public static long hostArrayIndex(Object key) {
+        if (key instanceof Long longKey) {
+            return longKey;
+        }
+        if (key instanceof Double doubleKey) {
+            double value = doubleKey;
+            if (value == Math.rint(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
+                return (long) value;
+            }
+        }
+        return Long.MIN_VALUE;
+    }
     /**
      * 把宿主 interop 值转换成 Lua 值：宿主的 null 映射为 Lua nil。
      */

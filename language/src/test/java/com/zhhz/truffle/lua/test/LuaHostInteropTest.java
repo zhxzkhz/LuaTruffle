@@ -8,7 +8,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -105,6 +107,36 @@ public class LuaHostInteropTest extends AbstractLuaTest {
     void hostSuppliersAreCallable() {
         context.getBindings("lua").putMember("answer", (Supplier<Integer>) () -> 42);
         assertEquals(42, eval("return answer()").asInt());
+    }
+
+    @Test
+    void writesHostArrayElements() {
+        int[] arr = {10, 20, 30};
+        context.getBindings("lua").putMember("arr", arr);
+        eval("arr[2] = 42");
+        assertEquals(42, arr[1]);
+
+        PolyglotException error = assertThrows(PolyglotException.class, () -> eval("arr[4] = 1"));
+        assertTrue(error.getMessage().contains("array element"), error.getMessage());
+    }
+
+    @Test
+    void readsAndWritesHostMapMembers() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("name", "before");
+        context.getBindings("lua").putMember("config", config);
+        assertEquals("before", eval("return config.name").asString());
+        eval("config.name = 'after'");
+        assertEquals("after", config.get("name"));
+    }
+
+    @Test
+    void hostCanReadAndWriteLuaTableArrays() {
+        Value table = eval("return {10, 20}");
+        assertEquals(10, table.getArrayElement(0).asInt());
+        table.setArrayElement(1, 99);
+        assertEquals(99, table.getArrayElement(1).asInt());
+        assertEquals(2, table.getArraySize());
     }
 
     @Test

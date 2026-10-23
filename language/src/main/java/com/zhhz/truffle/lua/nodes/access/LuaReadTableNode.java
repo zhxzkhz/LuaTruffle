@@ -97,7 +97,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
                                           @CachedLibrary("object") InteropLibrary objects,
                                           @Cached LuaToMemberNode asMember) {
         try {
-            long arrayIndex = arrayIndex(key);
+            long arrayIndex = LuaTypesUtil.hostArrayIndex(key);
             if (arrayIndex != Long.MIN_VALUE && objects.hasArrayElements(object)) {
                 if (arrayIndex >= 1) {
                     long hostIndex = arrayIndex - 1;
@@ -107,24 +107,18 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
                 }
                 return LuaNil.SINGLETON;
             }
+            // 宿主 Map 等以 hash entries 暴露键值；先查 hash，再回退到成员（允许访问方法/字段）。
+            if (objects.hasHashEntries(object)) {
+                Object hashKey = LuaTypesUtil.hostHashKey(key);
+                if (objects.isHashEntryReadable(object, hashKey)) {
+                    return LuaTypesUtil.normalizeHostValue(objects.readHashValue(object, hashKey));
+                }
+            }
             return LuaTypesUtil.normalizeHostValue(objects.readMember(object, asMember.execute(node, key)));
-        } catch (UnsupportedMessageException | UnknownIdentifierException | com.oracle.truffle.api.interop.InvalidArrayIndexException e) {
+        } catch (UnsupportedMessageException | UnknownIdentifierException
+                | com.oracle.truffle.api.interop.InvalidArrayIndexException | com.oracle.truffle.api.interop.UnknownKeyException e) {
             throw LuaException.undefinedProperty(node, key);
         }
-    }
-
-    /** 把 Lua 数字键转成宿主数组下标；非整数键返回 {@link Long#MIN_VALUE}。 */
-    private static long arrayIndex(Object key) {
-        if (key instanceof Long longKey) {
-            return longKey;
-        }
-        if (key instanceof Double doubleKey) {
-            double value = doubleKey;
-            if (value == Math.rint(value) && value >= Long.MIN_VALUE && value <= Long.MAX_VALUE) {
-                return (long) value;
-            }
-        }
-        return Long.MIN_VALUE;
     }
 
     // --- 回退路径 (Fallback) ---
@@ -158,7 +152,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
             // 与 doHostObject 特化一致：宿主对象支持成员与（1 基映射的）数组元素。
             InteropLibrary interop = InteropLibrary.getUncached();
             try {
-                long arrayIndex = arrayIndex(key);
+                long arrayIndex = LuaTypesUtil.hostArrayIndex(key);
                 if (arrayIndex != Long.MIN_VALUE && interop.hasArrayElements(table)) {
                     if (arrayIndex >= 1) {
                         long hostIndex = arrayIndex - 1;
@@ -168,9 +162,16 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
                     }
                     return LuaNil.SINGLETON;
                 }
+                if (interop.hasHashEntries(table)) {
+                    Object hashKey = LuaTypesUtil.hostHashKey(key);
+                    if (interop.isHashEntryReadable(table, hashKey)) {
+                        return LuaTypesUtil.normalizeHostValue(interop.readHashValue(table, hashKey));
+                    }
+                }
                 String member = com.zhhz.truffle.lua.nodes.util.LuaToMemberNodeGen.getUncached().execute(node, key);
                 return LuaTypesUtil.normalizeHostValue(interop.readMember(table, member));
-            } catch (UnsupportedMessageException | UnknownIdentifierException | com.oracle.truffle.api.interop.InvalidArrayIndexException e) {
+            } catch (UnsupportedMessageException | UnknownIdentifierException
+                    | com.oracle.truffle.api.interop.InvalidArrayIndexException | com.oracle.truffle.api.interop.UnknownKeyException e) {
                 if (node != null) {
                     throw LuaException.undefinedProperty(node, key);
                 }
