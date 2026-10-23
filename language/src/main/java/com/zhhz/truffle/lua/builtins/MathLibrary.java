@@ -6,24 +6,73 @@ import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 
-import java.util.Random;
-
 /** Implementation of Lua 5.3's math standard library. */
 public final class MathLibrary {
     private static final double LONG_UPPER_BOUND = 0x1.0p63;
-    private static Random random;
+    private static final double RAND_SCALE = 0x1.0p-53;
+    private static final long[] RAND_STATE = new long[4];
 
     private MathLibrary() {
     }
 
-    @TruffleBoundary
-    private static Random random() {
-        Random value = random;
-        if (value == null) {
-            value = new Random();
-            random = value;
+    // --- 与 Lua 5.4 lmathlib.c 一致的 xoshiro256** 实现 ---
+
+    private static long rotl(long x, int n) {
+        return (x << n) | (x >>> (64 - n));
+    }
+
+    private static long nextRand(long[] state) {
+        long state0 = state[0];
+        long state1 = state[1];
+        long state2 = state[2] ^ state0;
+        long state3 = state[3] ^ state1;
+        long res = rotl(state1 * 5, 7) * 9;
+        state[0] = state0 ^ state3;
+        state[1] = state1 ^ state2;
+        state[2] = state2 ^ (state1 << 17);
+        state[3] = rotl(state3, 45);
+        return res;
+    }
+
+    /** 把随机整数的高 53 位转换为 [0,1) 的浮点数（C 的 I2d）。 */
+    private static double randToDouble(long value) {
+        return (double) (value >>> 11) * RAND_SCALE;
+    }
+
+    /** 把随机整数投影到 [0, n]（C 的 project）。 */
+    private static long project(long ran, long n, long[] state) {
+        if ((n & (n + 1)) == 0) {
+            return ran & n;
         }
-        return value;
+        long lim = n;
+        lim |= lim >>> 1;
+        lim |= lim >>> 2;
+        lim |= lim >>> 4;
+        lim |= lim >>> 8;
+        lim |= lim >>> 16;
+        lim |= lim >>> 32;
+        while (Long.compareUnsigned(ran & lim, n) > 0) {
+            ran = nextRand(state);
+        }
+        return ran & lim;
+    }
+
+    private static void setSeed(long[] state, long n1, long n2) {
+        state[0] = n1;
+        state[1] = 0xff;
+        state[2] = n2;
+        state[3] = 0;
+        for (int i = 0; i < 16; i++) {
+            nextRand(state);
+        }
+    }
+
+    private static long[] randState() {
+        long[] state = RAND_STATE;
+        if (state[0] == 0 && state[1] == 0 && state[2] == 0 && state[3] == 0) {
+            setSeed(state, System.currentTimeMillis() / 1000L, System.identityHashCode(state));
+        }
+        return state;
     }
 
     @LuaBuiltin(name = "abs")
@@ -108,43 +157,45 @@ public final class MathLibrary {
     @LuaBuiltin(name = "random")
     @TruffleBoundary
     public static Object random(Object[] args) {
+        long[] state = randState();
+        long rv = nextRand(state);
         if (args.length > 2) {
             throw LuaException.create("wrong number of arguments", null);
         }
         if (args.length == 0) {
-            return random().nextDouble();
+            return randToDouble(rv);
         }
         long lower = 1;
         long upper = integer(args, 0, "random");
+        if (args.length == 1 && upper == 0) {
+            return rv;
+        }
         if (args.length > 1) {
             lower = upper;
             upper = integer(args, 1, "random");
         }
         if (lower > upper) {
-            throw argumentError(2, "random", "interval is empty");
+            throw argumentError(1, "random", "interval is empty");
         }
-        if (!(lower >= 0 || upper <= Long.MAX_VALUE + lower)) {
-            throw argumentError(1, "random", "interval too large");
-        }
-        if (lower == Long.MIN_VALUE && upper == Long.MAX_VALUE) {
-            return random().nextLong();
-        }
-        long range = upper - lower + 1;
-        if (range > 0) {
-            return lower + random().nextLong(range);
-        }
-        long result;
-        do {
-            result = random().nextLong();
-        } while (result < lower || result > upper);
-        return result;
+        long p = project(rv, upper - lower, state);
+        return p + lower;
     }
 
     @LuaBuiltin(name = "randomseed")
     @TruffleBoundary
     public static Object randomseed(Object[] args) {
-        random().setSeed(integer(args, 0, "randomseed"));
-        return LuaNil.SINGLETON;
+        long seed1;
+        long seed2;
+        if (args.length == 0) {
+            seed1 = System.currentTimeMillis() / 1000L;
+            seed2 = System.identityHashCode(RAND_STATE);
+        } else {
+            seed1 = integer(args, 0, "randomseed");
+            seed2 = args.length > 1 && args[1] != LuaNil.SINGLETON
+                    ? integer(args, 1, "randomseed") : 0L;
+        }
+        setSeed(RAND_STATE, seed1, seed2);
+        return new LuaMultiValue(new Object[]{seed1, seed2});
     }
 
     @LuaBuiltin(name = "sin")

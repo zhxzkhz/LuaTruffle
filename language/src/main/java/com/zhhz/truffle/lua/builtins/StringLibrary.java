@@ -8,6 +8,9 @@ import com.zhhz.truffle.lua.runtime.LuaBoolean;
 import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
+import com.zhhz.truffle.lua.runtime.LuaNumber;
+import com.zhhz.truffle.lua.runtime.LuaNumberFormat;
+import com.zhhz.truffle.lua.runtime.LuaString;
 import com.zhhz.truffle.lua.runtime.LuaTable;
 
 import java.io.ByteArrayOutputStream;
@@ -441,6 +444,20 @@ public final class StringLibrary {
             if (directive.indexOf('.') >= 0 && isIntegerConversion(conversion)) {
                 return formatIntegerPrecision(directive, conversion, value, argument);
             }
+            if (conversion == 'a' || conversion == 'A') {
+                if (directive.length() != 2) {
+                    throw LuaException.create("modifiers for format '%a'/'%A' not implemented", null);
+                }
+                return LuaNumberFormat.formatA(toDouble(value, argument, "format"), conversion == 'A')
+                        .getBytes(StandardCharsets.US_ASCII);
+            }
+            if (conversion == 'p') {
+                return formatPointer(directive, value).getBytes(StandardCharsets.US_ASCII);
+            }
+            if (conversion == 'e' || conversion == 'E' || conversion == 'f'
+                    || conversion == 'g' || conversion == 'G') {
+                return formatFloat(directive, conversion, value, argument);
+            }
             String javaDirective = directive;
             Object javaValue;
             switch (conversion) {
@@ -455,8 +472,7 @@ public final class StringLibrary {
                     String unsigned = Long.toUnsignedString(toLong(value, argument, "format"));
                     return applyStringWidth(directive, unsigned).getBytes(StandardCharsets.US_ASCII);
                 }
-                case 'a', 'A', 'e', 'E', 'f', 'g', 'G' -> javaValue = toDouble(value, argument, "format");
-                case 's' -> javaValue = LuaStringSupport.toLatin1(LuaStringSupport.toBytes(value, argument, "format"));
+                case 's' -> javaValue = LuaStringSupport.toLatin1(toLuaStringBytes(value));
                 default -> throw LuaException.create("invalid conversion '%" + (char) conversion + "' to 'format'", null);
             }
             return String.format(Locale.ROOT, javaDirective, javaValue).getBytes(StandardCharsets.ISO_8859_1);
@@ -465,6 +481,110 @@ public final class StringLibrary {
         } catch (Exception exception) {
             throw LuaException.create("invalid format: " + LuaException.messageOf(exception), null);
         }
+    }
+
+    /**
+     * C 的 {@code %e/%f/%g} 语义。{@code %g} 与 {@code inf}/{@code nan} 需要与 C 完全一致的输出，
+     * 有限值上的 {@code %e/%f} 直接交给 Java（其指数/填充规则与 C 一致）。
+     */
+    private static byte[] formatFloat(String directive, int conversion, Object value, int argument) {
+        double number = toDouble(value, argument, "format");
+        boolean upper = conversion == 'E' || conversion == 'G';
+        int i = 1;
+        boolean leftAlign = false;
+        boolean plus = false;
+        boolean space = false;
+        boolean alternate = false;
+        boolean zero = false;
+        while (i < directive.length()) {
+            char c = directive.charAt(i);
+            if (c == '-') leftAlign = true;
+            else if (c == '+') plus = true;
+            else if (c == ' ') space = true;
+            else if (c == '#') alternate = true;
+            else if (c == '0') zero = true;
+            else break;
+            i++;
+        }
+        int width = 0;
+        while (i < directive.length() && Character.isDigit(directive.charAt(i))) {
+            width = width * 10 + (directive.charAt(i) - '0');
+            i++;
+        }
+        int precision = -1;
+        if (i < directive.length() && directive.charAt(i) == '.') {
+            precision = 0;
+            i++;
+            while (i < directive.length() && Character.isDigit(directive.charAt(i))) {
+                precision = precision * 10 + (directive.charAt(i) - '0');
+                i++;
+            }
+        }
+
+        boolean nonFinite = Double.isNaN(number) || Double.isInfinite(number);
+        String body;
+        if (conversion == 'g' || conversion == 'G') {
+            body = LuaNumberFormat.formatG(number, precision < 0 ? 6 : precision, alternate, upper);
+        } else if (nonFinite) {
+            String text = Double.isNaN(number) ? (upper ? "NAN" : "nan") : (upper ? "INF" : "inf");
+            body = number < 0 ? "-" + text : text;
+        } else {
+            return String.format(Locale.ROOT, directive, number).getBytes(StandardCharsets.ISO_8859_1);
+        }
+
+        if (!body.startsWith("-")) {
+            if (plus) {
+                body = "+" + body;
+            } else if (space) {
+                body = " " + body;
+            }
+        }
+        if (body.length() < width) {
+            int padding = width - body.length();
+            if (leftAlign) {
+                body = body + " ".repeat(padding);
+            } else if (zero && !nonFinite) {
+                if (body.startsWith("-") || body.startsWith("+") || body.startsWith(" ")) {
+                    body = body.charAt(0) + "0".repeat(padding) + body.substring(1);
+                } else {
+                    body = "0".repeat(padding) + body;
+                }
+            } else {
+                body = " ".repeat(padding) + body;
+            }
+        }
+        return body.getBytes(StandardCharsets.ISO_8859_1);
+    }
+
+    /** C 的 {@code %p}：引用类型输出地址样式的十六进制，标量输出 {@code (null)}。 */
+    private static String formatPointer(String directive, Object value) {
+        String text;
+        if (LuaStringSupport.isNil(value) || value instanceof Boolean || value instanceof LuaBoolean
+                || value instanceof Long || value instanceof Double || value instanceof LuaNumber) {
+            text = "(null)";
+        } else {
+            text = String.format(Locale.ROOT, "%016x", System.identityHashCode(value));
+        }
+        return applyStringWidth(directive, text);
+    }
+
+    /** Lua 的 {@code luaL_tolstring} 行为：{@code %s} 对 nil/boolean/数字也输出文本。 */
+    private static byte[] toLuaStringBytes(Object value) {
+        if (LuaStringSupport.isNil(value)) {
+            return "nil".getBytes(StandardCharsets.US_ASCII);
+        }
+        if (value instanceof Boolean booleanValue) {
+            return (booleanValue ? "true" : "false").getBytes(StandardCharsets.US_ASCII);
+        }
+        if (value instanceof LuaBoolean booleanValue) {
+            return (booleanValue.getValue() ? "true" : "false").getBytes(StandardCharsets.US_ASCII);
+        }
+        if (value instanceof TruffleString || value instanceof LuaString || value instanceof String
+                || value instanceof Long || value instanceof Double || value instanceof LuaNumber) {
+            return LuaStringSupport.toBytes(value, 2, "format");
+        }
+        TruffleString text = com.zhhz.truffle.lua.nodes.util.LuaCoerceToStringNodeGen.create().execute(value);
+        return LuaStringSupport.toBytes(text, 2, "format");
     }
 
     private static boolean isIntegerConversion(int conversion) {
@@ -576,7 +696,13 @@ public final class StringLibrary {
         if (value instanceof LuaBoolean booleanValue) {
             return Boolean.toString(booleanValue.getValue()).getBytes(StandardCharsets.US_ASCII);
         }
-        if (value instanceof Long || value instanceof Double) {
+        if (value instanceof Double number) {
+            return LuaNumberFormat.formatQ(number).getBytes(StandardCharsets.US_ASCII);
+        }
+        if (value instanceof LuaNumber number) {
+            return LuaNumberFormat.formatQ(number.getValue()).getBytes(StandardCharsets.US_ASCII);
+        }
+        if (value instanceof Long) {
             return LuaStringSupport.toBytes(value, 2, "format");
         }
         byte[] bytes = LuaStringSupport.toBytes(value, 2, "format");

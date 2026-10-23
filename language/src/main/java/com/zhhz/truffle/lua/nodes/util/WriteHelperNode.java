@@ -129,7 +129,7 @@ public abstract class WriteHelperNode extends Node {
 
     @CompilerDirectives.TruffleBoundary
     private static RuntimeException indexError(Node node, Object object) {
-        return LuaException.create("attempt to index a " + LuaTypesUtil.getTypeName(object) + " value", node);
+        return LuaException.create("attempt to index a " + LuaTypesUtil.getRuntimeTypeName(object) + " value", node);
     }
 
     /**
@@ -141,7 +141,7 @@ public abstract class WriteHelperNode extends Node {
             slowPathWrite(null, luaTable, key, value, DynamicObjectLibrary.getUncached(), InteropLibrary.getUncached());
             return;
         }
-        throw LuaException.create("attempt to index a " + LuaTypesUtil.getTypeName(table) + " value", null);
+        throw LuaException.create("attempt to index a " + LuaTypesUtil.getRuntimeTypeName(table) + " value", null);
     }
 
     /**
@@ -175,7 +175,7 @@ public abstract class WriteHelperNode extends Node {
                 LuaTable metatable = context.getEffectiveMetatable(current);
                 newIndexMeta = (metatable == null) ? LuaNil.SINGLETON : metatable.rawget(LuaMetatables.__NEWINDEX, objLib);
                 if (newIndexMeta == null || newIndexMeta == LuaNil.SINGLETON) {
-                    throw LuaException.create("attempt to index a " + LuaTypesUtil.getTypeName(current) + " value", node);
+                    throw LuaException.create("attempt to index a " + LuaTypesUtil.getRuntimeTypeName(current) + " value", node);
                 }
             }
 

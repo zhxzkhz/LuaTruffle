@@ -1333,7 +1333,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
                 // --- 对于非声明的普通赋值 `x = 10` ---
                 // 1. 【进行查找】调用已经实现的作用域查找方法
-                return getLuaWriteVariableNode(name);
+                return getLuaWriteVariableNode(name, varNameContext.NAME().getSymbol());
             }
             case LuaParser.VarIndexedContext indexedCtx -> {
                 LuaExpressionNode tableNode = expressionVisitor.visit(indexedCtx.prefixexp());
@@ -1471,7 +1471,7 @@ public class LuaNodeParser extends LuaBaseParser {
 
         if (names.size() == 1 && funcNameCtx.COL() == null) {
             TruffleString varName = asTruffleString(names.getFirst().getSymbol(), false);
-            return getLuaWriteVariableNode(varName);
+            return getLuaWriteVariableNode(varName, names.getFirst().getSymbol());
         }
 
         // --- 情况 B: 带路径的函数名 `function a.b.c() ...` ---
@@ -1503,21 +1503,19 @@ public class LuaNodeParser extends LuaBaseParser {
         return LuaWriteTableNodeGen.create(currentReceiver, finalKeyNode);
     }
 
-    private LuaWriteVariableNode getLuaWriteVariableNode(TruffleString varName) {
+    private LuaWriteVariableNode getLuaWriteVariableNode(TruffleString varName, Token token) {
         VariableResolutionResult result = findVariable(varName);
         if (result == null) {
             return createGlobalWrite(varName);
         } else {
-            LuaWriteVariableNode writeNode;
+            if (result.attribute() == LocalAttribute.CONST || result.attribute() == LocalAttribute.CLOSE) {
+                throw parseError(token, "attempt to assign to const variable '"
+                        + varName.toJavaStringUncached() + "'");
+            }
             if (result.depth() == 0) {
-                writeNode = LuaWriteLocalVariableNodeGen.create(result.slotIndex(), result.localSlot(), false);
-            } else {
-                writeNode = LuaWriteUpvalueNodeGen.create(result.upvalueIndex());
+                return LuaWriteLocalVariableNodeGen.create(result.slotIndex(), result.localSlot(), false);
             }
-            if (result.attribute() == LocalAttribute.CONST) {
-                return new LuaWriteConstVariableNode(writeNode);
-            }
-            return writeNode;
+            return LuaWriteUpvalueNodeGen.create(result.upvalueIndex());
         }
     }
 
@@ -2120,7 +2118,7 @@ public class LuaNodeParser extends LuaBaseParser {
                             throwInvalidEscape(token, "invalid escape sequence");
                         }
                         i++;
-                        int uniVal = 0;
+                        long uniVal = 0;
                         int uniDigits = 0;
                         while (i < rawBytes.length && (char) rawBytes[i] != '}') {
                             int d = hexDigit((char) rawBytes[i]);
@@ -2130,20 +2128,18 @@ public class LuaNodeParser extends LuaBaseParser {
                             uniVal = uniVal * 16 + d;
                             uniDigits++;
                             i++;
+                            if (uniVal > 0x7FFFFFFFL) {
+                                // 标准 Lua readutf8esc：数值超限错误在数字累积处触发，
+                                // near 文本止于最后一个数字（不含 '}' 与闭引号）
+                                throwInvalidEscape(token, "UTF-8 value too large", rawBytes, i);
+                            }
                         }
                         if (i >= rawBytes.length || uniDigits == 0) {
                             throwInvalidEscape(token, "invalid escape sequence");
                         }
                         i++; // skip '}'
-                        if (!Character.isValidCodePoint(uniVal)) {
-                            // 标准 Lua readutf8esc：数值超限错误在数字累积处触发，
-                            // 词法缓冲区内容止于数字（不含 '}' 与闭引号），
-                            // near 文本须截断到数字末尾（i-1 为 '}' 的位置）
-                            throwInvalidEscape(token, "UTF-8 value too large", rawBytes, i - 1);
-                        }
-                        // 将 Unicode 码点按 UTF-8 编码写入字节流
-                        byte[] u8 = new String(Character.toChars(uniVal)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        out.write(u8, 0, u8.length);
+                        // 将码点按 Lua 的 UTF-8 扩展编码（最多 6 字节，允许到 0x7FFFFFFF）
+                        writeUtf8Escaped(out, uniVal);
                         break;
                     }
                     default:
@@ -2176,6 +2172,40 @@ public class LuaNodeParser extends LuaBaseParser {
             }
         }
         return TruffleString.fromByteArrayUncached(out.toByteArray(), LuaLanguage.STRING_ENCODING, true);
+    }
+
+    /**
+     * 按 Lua 的 {@code luaO_utf8esc} 编码码点：支持到 0x7FFFFFFF 的 5/6 字节扩展序列。
+     */
+    private static void writeUtf8Escaped(java.io.ByteArrayOutputStream out, long code) {
+        if (code < 0x80) {
+            out.write((int) code);
+        } else if (code < 0x800) {
+            out.write((int) (0xC0 | (code >> 6)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x10000) {
+            out.write((int) (0xE0 | (code >> 12)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x200000) {
+            out.write((int) (0xF0 | (code >> 18)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x4000000) {
+            out.write((int) (0xF8 | (code >> 24)));
+            out.write((int) (0x80 | ((code >> 18) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else {
+            out.write((int) (0xFC | (code >> 30)));
+            out.write((int) (0x80 | ((code >> 24) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 18) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        }
     }
 
     private void throwInvalidEscape(Token token, String message) {

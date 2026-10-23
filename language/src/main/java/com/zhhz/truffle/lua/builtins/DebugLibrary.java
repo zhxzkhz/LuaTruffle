@@ -142,8 +142,17 @@ public final class DebugLibrary {
             targetThread = thread;
         }
         String what = "flnSrtu";
-        if (arguments.length > base + 1 && stringValue(arguments[base + 1]) != null) {
-            what = stringValue(arguments[base + 1]);
+        if (arguments.length > base + 1) {
+            Object whatValue = arguments[base + 1];
+            if (whatValue != LuaNil.SINGLETON && whatValue != null) {
+                String text = stringValue(whatValue);
+                if (text == null) {
+                    throw com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError("debug.getinfo",
+                            base + 2, "string expected, got "
+                                    + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(whatValue));
+                }
+                what = text;
+            }
         }
 
         LuaContext context = context();
@@ -155,7 +164,7 @@ public final class DebugLibrary {
             if (info == null) {
                 return LuaNil.SINGLETON;
             }
-            return info.toInfoTable(context, what, null, level == 1 && context.isInHook());
+            return info.toInfoTable(context, what, null, level == 1 && context.isInHook(), base + 2);
         }
         if (target instanceof Number javaNumber) {
             long level = javaNumber.longValue();
@@ -163,7 +172,7 @@ public final class DebugLibrary {
             if (info == null) {
                 return LuaNil.SINGLETON;
             }
-            return info.toInfoTable(context, what, null, level == 1 && context.isInHook());
+            return info.toInfoTable(context, what, null, level == 1 && context.isInHook(), base + 2);
         }
 
         if (target instanceof LuaFunction function) {
@@ -173,7 +182,7 @@ public final class DebugLibrary {
             RootNode functionRoot = function.getCallTarget() instanceof RootCallTarget rootCallTarget
                     ? rootCallTarget.getRootNode() : null;
             return new LuaFrameInfo(null, null, null, function, null, functionRoot)
-                    .toInfoTable(context, what, active, false);
+                    .toInfoTable(context, what, active, false, base + 2);
         }
 
         throw LuaException.create("bad argument #1 to 'getinfo' (number or function expected)", null);
@@ -887,8 +896,7 @@ public final class DebugLibrary {
 
     @LuaBuiltin(name = "gethook")
     @TruffleBoundary
-    public static Object getHook(Object[] arguments) {
-        LuaContext context = context();
+    public static Object getHook(Object[] arguments) {        LuaContext context = context();
         // 可选首参数：目标线程（协程或主线程）
         LuaThread target = null;
         if (arguments.length > 0 && arguments[0] instanceof LuaThread thread) {
@@ -906,6 +914,26 @@ public final class DebugLibrary {
             return new LuaMultiValue(new Object[]{LuaNil.SINGLETON, maskStr, count});
         }
         return new LuaMultiValue(new Object[]{hook, maskStr, count});
+    }
+
+    /** 与标准 Lua 5.4.8 的 LUAI_MAXCCALLS 一致。 */
+    private static final int C_STACK_LIMIT = 200;
+
+    @LuaBuiltin(name = "setcstacklimit")
+    @TruffleBoundary
+    public static Object setCStackLimit(Object[] arguments) {
+        if (arguments.length == 0) {
+            throw com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError("debug.setcstacklimit",
+                    1, "number expected, got no value");
+        }
+        Object value = com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNodeGen.getUncached().execute(arguments[0]);
+        if (!(value instanceof Long) && !(value instanceof Double)) {
+            throw com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError("debug.setcstacklimit",
+                    1, "number expected, got "
+                            + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(arguments[0]));
+        }
+        // 5.4.8 的 lua_setcstacklimit 已废弃：忽略参数并返回固定的 LUAI_MAXCCALLS
+        return (long) C_STACK_LIMIT;
     }
 
     @LuaBuiltin(name = "debug")
@@ -1001,6 +1029,22 @@ public final class DebugLibrary {
         private com.zhhz.truffle.lua.bytecode.Proto proto() {
             if (function != null && function.isVmClosure()) {
                 return function.getProto();
+            }
+            return null;
+        }
+
+        /**
+         * 返回可用于静态查询的 Proto：字节码闭包用自身的 Proto；AST 函数用其
+         * {@link LuaRootNode#getProto()}（解析时附加，与源码同源，含参数/行号信息）。
+         */
+        private com.zhhz.truffle.lua.bytecode.Proto anyProto() {
+            com.zhhz.truffle.lua.bytecode.Proto p = proto();
+            if (p != null) {
+                return p;
+            }
+            RootNode r = frameRoot != null ? frameRoot : root();
+            if (r instanceof LuaRootNode luaRoot) {
+                return luaRoot.getProto();
             }
             return null;
         }
@@ -1133,11 +1177,13 @@ public final class DebugLibrary {
             return -1;
         }
 
-        private LuaTable toInfoTable(LuaContext context, String what, LuaFrameInfo active, boolean asHook) {
-            // 标准 Lua：what 中出现非法字符时报错（如 "X"）
+        private LuaTable toInfoTable(LuaContext context, String what, LuaFrameInfo active, boolean asHook,
+                                     int whatArgIndex) {
+            // 标准 Lua：what 中出现非法字符时报 bad argument（选项名不附带具体字符）
             for (int i = 0; i < what.length(); i++) {
                 if ("flnSrtuL".indexOf(what.charAt(i)) < 0) {
-                    throw LuaException.create("invalid option '" + what.charAt(i) + "'", null);
+                    throw com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.argumentError("debug.getinfo",
+                            whatArgIndex, "invalid option");
                 }
             }
             LuaTable table = new LuaTable(context.getTableShape());
@@ -1150,10 +1196,27 @@ public final class DebugLibrary {
                         String shortSrc = "[C]";
                         long lineDefined = -1L;
                         long lastLineDefined = -1L;
+                        com.zhhz.truffle.lua.bytecode.Proto p = anyProto();
                         if (isVmClosure()) {
                             // 字节码闭包：静态信息全部来自 Proto（与 C 端 lua_getinfo 'S' 一致）
-                            com.zhhz.truffle.lua.bytecode.Proto p = proto();
                             String src = p.source;
+                            source = src != null ? src : "=?";
+                            shortSrc = src != null ? chunkId(src) : "?";
+                            lineDefined = p.linedefined;
+                            lastLineDefined = p.lastlinedefined;
+                        } else if (lua && p != null) {
+                            // AST 函数：Proto 提供与标准 Lua 一致的定义行（主块为 0/0）
+                            SourceSection section = sourceSection();
+                            String src = p.source;
+                            if (section != null) {
+                                // 文件型 Source 视为 "@path"（真实 Lua 的源名格式），
+                                // 其余用 Source 的名字（load 传入的 chunk 名或 chunk 文本）
+                                String rawName = section.getSource().getName();
+                                if (section.getSource().getPath() != null && !rawName.startsWith("@")) {
+                                    rawName = "@" + rawName;
+                                }
+                                src = rawName;
+                            }
                             source = src != null ? src : "=?";
                             shortSrc = src != null ? chunkId(src) : "?";
                             lineDefined = p.linedefined;
@@ -1161,8 +1224,6 @@ public final class DebugLibrary {
                         } else if (lua) {
                             SourceSection section = sourceSection();
                             if (section != null) {
-                                // 文件型 Source 视为 "@path"（真实 Lua 的源名格式），
-                                // 其余用 Source 的名字（load 传入的 chunk 名或 chunk 文本）
                                 String rawName = section.getSource().getName();
                                 if (section.getSource().getPath() != null && !rawName.startsWith("@")) {
                                     rawName = "@" + rawName;
@@ -1210,23 +1271,34 @@ public final class DebugLibrary {
                     case 'f' -> table.rawset("func",
                             function != null ? function : LuaNil.SINGLETON);
                     case 'u' -> {
-                        if (isVmClosure()) {
-                            com.zhhz.truffle.lua.bytecode.Proto p = proto();
+                        com.zhhz.truffle.lua.bytecode.Proto p = anyProto();
+                        if (p != null) {
                             table.rawset("nups", (long) p.upvalues.length);
                             table.rawset("nparams", (long) p.numparams);
                             table.rawset("isvararg", p.isVararg != 0);
-                        } else {
+                        } else if (!isLuaFrame()) {
+                            // C 函数被视为可变参数函数（ldebug.c 的 funcinfo）
                             table.rawset("nups", 0L);
                             table.rawset("nparams", 0L);
-                            table.rawset("isvararg", false);
+                            table.rawset("isvararg", true);
+                        } else {
+                            RootNode fnRoot = frameRoot != null ? frameRoot : root();
+                            int nparams = fnRoot instanceof com.zhhz.truffle.lua.nodes.LuaRootNode luaRoot
+                                    && luaRoot.getParamCount() >= 0 ? luaRoot.getParamCount() : 0;
+                            boolean isVararg = fnRoot instanceof com.zhhz.truffle.lua.nodes.LuaRootNode luaRoot
+                                    && luaRoot.isVariadic();
+                            table.rawset("nups", 0L);
+                            table.rawset("nparams", (long) nparams);
+                            table.rawset("isvararg", isVararg);
                         }
                     }
                     case 't' -> table.rawset("istailcall", false);
                     case 'L' -> {
-                        if (isVmClosure()) {
-                            // 字节码闭包：活跃行取自 Proto.lineinfo（与 C 端 lua_getinfo 'L' 一致）
+                        com.zhhz.truffle.lua.bytecode.Proto p = anyProto();
+                        if (p != null) {
+                            // 字节码源码函数：活跃行取自 Proto.lineinfo（与 C 端 lua_getinfo 'L' 一致）
                             LuaTable lines = new LuaTable(context.getTableShape());
-                            for (int lineInfo : proto().lineinfo) {
+                            for (int lineInfo : p.lineinfo) {
                                 if (lineInfo > 0) {
                                     lines.rawset((Object) (long) lineInfo, true);
                                 }

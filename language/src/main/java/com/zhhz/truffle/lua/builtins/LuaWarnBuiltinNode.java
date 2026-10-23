@@ -42,7 +42,7 @@ public abstract class LuaWarnBuiltinNode extends LuaBuiltinNode {
             return Long.toString(number);
         }
         if (value instanceof Double number) {
-            return Double.toString(number);
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(number);
         }
         throw LuaException.create("bad argument #" + (index + 1) + " to 'warn' (string expected, got "
                 + LuaTypesUtil.getArgumentTypeName(value) + ")", this);

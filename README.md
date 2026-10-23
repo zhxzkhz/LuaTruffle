@@ -38,7 +38,12 @@
     *   `warn`：默认关闭，`warn("@on")` / `warn("@off")` 切换；启动参数 `-W` 直接开启，消息格式为 `Lua warning: ...`。
     *   `coroutine.close`：关闭挂起协程会执行其 to-be-closed 变量并返回 `true`；`__close` 或协程自身出错时返回 `false, err`；运行中/普通协程按参考实现的错误信息拒绝。
     *   `<const>` 赋值检查与 `<close>` to-be-closed 变量。
-*   **已知差异**：`_VERSION` 仍报告 `"Lua 5.3"`；字节码与 `string.dump` 为 5.3 格式；`math.random` 序列不保证与 PUC Lua 一致。
+    *   `math.random`：采用与 PUC Lua 5.4 相同的 xoshiro256** 算法与种子推导，序列（含 `math.random(0)` 的完整 64 位结果）与参考实现一致。
+    *   `debug.getinfo` 的 `S`/`u`/`L` 字段、`debug.setcstacklimit`、`string.gmatch` 的 `init` 参数、`collectgarbage` 的模式切换选项。
+    *   弱表：`__mode = "k"` / `"v"` / `"kv"`，可回收对象作为键/值时在 `collectgarbage()` 后移除（数字、字符串、布尔键不受影响）。
+    *   `utf8.char` 与 `"\u{...}"` 支持到 `0x7FFFFFFF`（5/6 字节扩展序列），`utf8.len`/`codepoint` 严格解码上限仍为 `0x10FFFF`。
+    *   CLI：`-l g=mod` 别名、`-W` 警告开关、无脚本时 `arg[0]` 为解释器路径。
+*   **已知差异**：`_VERSION` 仍报告 `"Lua 5.3"`；字节码与 `string.dump` 为 5.3 格式；`__gc` 终结器未实现（JVM 托管 GC 无法把已回收对象传给 `__gc`）；`collectgarbage` 的 `count`/`step`/`setpause` 为基于 JVM GC 的近似值；`package.searchers` 仅提供 Lua 文件与 preload 两种加载器。
 *   **Java 互操作**：
     *   宿主对象通过 `InteropLibrary` 暴露字段、方法与数组；Lua 下标从 1 开始映射到宿主 0 基下标，越界读取为 `nil`、越界写入报错。
     *   宿主 `Map` 的键值可像字段一样读写（`config.timeout = 30`）；`obj:method(args)` 按宿主成员方法调用（不额外补 `self`）。

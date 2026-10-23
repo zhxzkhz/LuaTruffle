@@ -157,12 +157,7 @@ public final class LuaNumber extends LuaValue  {
     // 提供一个比基类更具体的 asString/toString 实现
     @ExportMessage
     public String asString() {
-        // 如果这个double值可以被无损地表示为long，就以整数形式打印
-        if (value == (long) value) {
-            return Long.toString((long) value);
-        } else {
-            return Double.toString(value);
-        }
+        return LuaNumberFormat.toString(value);
     }
 
     @Override

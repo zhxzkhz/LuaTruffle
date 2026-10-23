@@ -312,7 +312,7 @@ public final class TableLibrary {
             return Long.toString(longValue);
         }
         if (value instanceof Double doubleValue) {
-            return doubleValue == doubleValue.longValue() ? Long.toString(doubleValue.longValue()) : Double.toString(doubleValue);
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(doubleValue);
         }
         throw LuaException.create("bad argument #" + argument + " to '" + function + "' (string expected, got "
                 + getTypeName(value) + ")", null);
@@ -335,11 +335,11 @@ public final class TableLibrary {
             return Integer.toString(integerValue);
         }
         if (value instanceof Double doubleValue) {
-            return doubleValue == doubleValue.longValue() ? Long.toString(doubleValue.longValue()) : Double.toString(doubleValue);
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(doubleValue);
         }
         if (value instanceof LuaNumber luaNumber) {
             return luaNumber.asString();
         }
-        throw LuaException.create("invalid value (" + getTypeName(value) + ") at index " + index + " in table.concat", null);
+        throw LuaException.create("invalid value (" + getTypeName(value) + ") at index " + index + " in table for 'concat'", null);
     }
 }

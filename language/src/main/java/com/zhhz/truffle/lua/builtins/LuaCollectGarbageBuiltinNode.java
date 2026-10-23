@@ -51,15 +51,23 @@ public abstract class LuaCollectGarbageBuiltinNode extends LuaBuiltinNode {
             case "isrunning":
                 return getContext().isGcRunning();
 
+            case "incremental":
+            case "generational": {
+                // 与 5.4 的 pushmode 一致：返回切换前的模式名
+                String previous = getContext().getGcMode();
+                getContext().setGcMode(option);
+                return com.zhhz.truffle.lua.runtime.LuaContext.toTruffleString(previous);
+            }
+
             case "setpause": {
                 long previous = getContext().getGcPause();
-                getContext().setGcPause(numberArgument(arguments, 1, "setpause"));
+                getContext().setGcPause(numberArgument(arguments, 1, 0));
                 return previous;
             }
 
             case "setstepmul": {
                 long previous = getContext().getGcStepMul();
-                getContext().setGcStepMul(numberArgument(arguments, 1, "setstepmul"));
+                getContext().setGcStepMul(numberArgument(arguments, 1, 0));
                 return previous;
             }
 
@@ -67,18 +75,20 @@ public abstract class LuaCollectGarbageBuiltinNode extends LuaBuiltinNode {
 
             case "collect":
             case "step":
-                System.gc(); // 【警告】可以尝试调用，但不保证立即执行！
-                // 模拟 FILE* 的 __gc 终结器：关闭已不可达的打开文件句柄。
-                getContext().collectFileHandles();
-                return "step".equals(option) ? true : LuaNil.SINGLETON;
-
             case "stop":
-                getContext().setGcRunning(false);
-                return LuaNil.SINGLETON;
-
-            case "restart":
-                getContext().setGcRunning(true);
-                return LuaNil.SINGLETON;
+            case "restart": {
+                if ("stop".equals(option)) {
+                    getContext().setGcRunning(false);
+                } else if ("restart".equals(option)) {
+                    getContext().setGcRunning(true);
+                } else {
+                    System.gc(); // 【警告】可以尝试调用，但不保证立即执行！
+                    // 模拟 FILE* 的 __gc 终结器：关闭已不可达的打开文件句柄。
+                    getContext().collectFileHandles();
+                }
+                // 5.4 的 luaB_collectgarbage 对这些选项返回整数结果
+                return "step".equals(option) ? Boolean.TRUE : 0L;
+            }
 
             default:
                 // 无法识别的选项：与标准 Lua 的 luaL_checkoption 一致
@@ -92,16 +102,17 @@ public abstract class LuaCollectGarbageBuiltinNode extends LuaBuiltinNode {
         }
     }
 
-    private static long numberArgument(Object[] arguments, int index, String option) {
+    /** 读取可选的数值参数；缺省（或 nil）时返回 {@code fallback}（5.4 的 luaL_optinteger 语义）。 */
+    private static long numberArgument(Object[] arguments, int index, long fallback) {
         if (index >= arguments.length || arguments[index] == null
                 || arguments[index] == LuaNil.SINGLETON) {
-            throw com.zhhz.truffle.lua.LuaException.create("bad argument #2 to 'collectgarbage' ("
-                    + option + " expects a number)", null);
+            return fallback;
         }
         Object value = arguments[index];
         if (value instanceof Long number) return number;
         if (value instanceof Double number) return number.longValue();
-        throw com.zhhz.truffle.lua.LuaException.create("bad argument #2 to 'collectgarbage' ("
-                + option + " expects a number)", null);
+        throw com.zhhz.truffle.lua.LuaException.create("bad argument #" + (index + 1)
+                + " to 'collectgarbage' (number expected, got "
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value) + ")", null);
     }
 }

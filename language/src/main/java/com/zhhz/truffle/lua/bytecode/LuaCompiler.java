@@ -1375,6 +1375,38 @@ public final class LuaCompiler {
 
     // ------------------------------------------------------------- 字符/数字辅助
 
+    /** 按 Lua 的 {@code luaO_utf8esc} 编码码点：支持到 0x7FFFFFFF 的 5/6 字节扩展序列。 */
+    private static void writeUtf8Escaped(java.io.ByteArrayOutputStream out, long code) {
+        if (code < 0x80) {
+            out.write((int) code);
+        } else if (code < 0x800) {
+            out.write((int) (0xC0 | (code >> 6)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x10000) {
+            out.write((int) (0xE0 | (code >> 12)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x200000) {
+            out.write((int) (0xF0 | (code >> 18)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x4000000) {
+            out.write((int) (0xF8 | (code >> 24)));
+            out.write((int) (0x80 | ((code >> 18) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        } else {
+            out.write((int) (0xFC | (code >> 30)));
+            out.write((int) (0x80 | ((code >> 24) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 18) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            out.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            out.write((int) (0x80 | (code & 0x3F)));
+        }
+    }
+
     private static int hexDigit(char c) {
         if (c >= '0' && c <= '9') {
             return c - '0';
@@ -1615,9 +1647,7 @@ public final class LuaCompiler {
                         if (i < rawBytes.length) {
                             i++;
                         }
-                        byte[] u8 = new String(Character.toChars(uniVal))
-                                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        out.write(u8, 0, u8.length);
+                        writeUtf8Escaped(out, uniVal & 0xFFFFFFFFL);
                     }
                     default -> {
                         if (next >= '0' && next <= '9') {

@@ -43,7 +43,7 @@ public abstract class LuaCoerceToStringNode extends Node {
     @Specialization
     @TruffleBoundary
     protected TruffleString fromDouble(double value) {
-        return toTruffleString(String.valueOf(value));
+        return toTruffleString(com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(value));
     }
 
     @Specialization

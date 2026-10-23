@@ -12,7 +12,7 @@ import com.zhhz.truffle.lua.nodes.util.LuaCoerceToIntegerNode;
 import com.zhhz.truffle.lua.nodes.util.LuaMetatableNode;
 import com.zhhz.truffle.lua.runtime.LuaMetatables;
 
-import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
+import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName;
 
 /**
  * 实现了Lua的按位左移 (<<) 和右移 (>>) 运算符。

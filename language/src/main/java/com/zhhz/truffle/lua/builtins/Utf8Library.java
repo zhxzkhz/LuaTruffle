@@ -15,11 +15,12 @@ import java.io.ByteArrayOutputStream;
 public final class Utf8Library {
 
     private static final long MAX_UNICODE = 0x10FFFFL;
+    private static final long MAX_UTF = 0x7FFFFFFFL;
 
     /** 与 lutf8lib.c 的 UTF8PATT 完全一致（Latin-1 字节串）。 */
-    public static final String CHARPATTERN = "[\u0000-\u007F\u00C2-\u00F4][\u0080-\u00BF]*";
+    public static final String CHARPATTERN = "[\u0000-\u007F\u00C2-\u00FD][\u0080-\u00BF]*";
 
-    private static final int[] LIMITS = {0xFF, 0x7F, 0x7FF, 0xFFFF};
+    private static final int[] LIMITS = {0xFF, 0x7F, 0x7FF, 0xFFFF, 0x1FFFFF, 0x3FFFFFF};
 
     private Utf8Library() {
     }
@@ -29,7 +30,7 @@ public final class Utf8Library {
         ByteArrayOutputStream output = new ByteArrayOutputStream(arguments.length);
         for (int i = 0; i < arguments.length; i++) {
             long code = LuaStringSupport.ensureInteger(arguments, i, "char");
-            if (code < 0 || code > MAX_UNICODE) {
+            if (code < 0 || code > MAX_UTF) {
                 throw LuaException.create("bad argument #" + (i + 1) + " to 'char' (value out of range)", null);
             }
             pushUtf8Char(output, code);
@@ -136,7 +137,7 @@ public final class Utf8Library {
         return n == 0 ? (long) position + 1 : LuaNil.SINGLETON;
     }
 
-    /** 将单个码点写入 UTF-8 字节序列。 */
+    /** 将单个码点写入 UTF-8 字节序列（支持到 0x7FFFFFFF 的 5/6 字节扩展）。 */
     static void pushUtf8Char(ByteArrayOutputStream output, long code) {
         if (code < 0x80) {
             output.write((int) code);
@@ -147,8 +148,21 @@ public final class Utf8Library {
             output.write((int) (0xE0 | (code >> 12)));
             output.write((int) (0x80 | ((code >> 6) & 0x3F)));
             output.write((int) (0x80 | (code & 0x3F)));
-        } else {
+        } else if (code < 0x200000) {
             output.write((int) (0xF0 | (code >> 18)));
+            output.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            output.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            output.write((int) (0x80 | (code & 0x3F)));
+        } else if (code < 0x4000000) {
+            output.write((int) (0xF8 | (code >> 24)));
+            output.write((int) (0x80 | ((code >> 18) & 0x3F)));
+            output.write((int) (0x80 | ((code >> 12) & 0x3F)));
+            output.write((int) (0x80 | ((code >> 6) & 0x3F)));
+            output.write((int) (0x80 | (code & 0x3F)));
+        } else {
+            output.write((int) (0xFC | (code >> 30)));
+            output.write((int) (0x80 | ((code >> 24) & 0x3F)));
+            output.write((int) (0x80 | ((code >> 18) & 0x3F)));
             output.write((int) (0x80 | ((code >> 12) & 0x3F)));
             output.write((int) (0x80 | ((code >> 6) & 0x3F)));
             output.write((int) (0x80 | (code & 0x3F)));
@@ -176,6 +190,9 @@ public final class Utf8Library {
         int result = 0;
         int count = 0;
         int current = first;
+        if (first >= 0xFE) {
+            return -1;
+        }
         while ((current & 0x40) != 0) {
             count++;
             if (position + count >= source.length) {
@@ -189,7 +206,7 @@ public final class Utf8Library {
             current = (current << 1) & 0xFF;
         }
         result |= (current & 0x7F) << (count * 5);
-        if (count > 3 || result > MAX_UNICODE || result <= LIMITS[count]) {
+        if (count > 5 || result > MAX_UNICODE || result <= LIMITS[count]) {
             return -1;
         }
         if (out != null) {

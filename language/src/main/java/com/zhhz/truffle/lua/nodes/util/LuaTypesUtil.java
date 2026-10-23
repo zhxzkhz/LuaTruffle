@@ -98,14 +98,22 @@ public final class LuaTypesUtil {
     }
 
     /**
+     * 运行期类型错误（算术/索引/调用/长度/比较等）使用的类型名，等价于 {@code luaT_objtypename}：
+     * 优先取元表的 {@code __name}，否则退回基本类型名。
+     */
+    public static String getRuntimeTypeName(Object value) {
+        return getArgumentTypeName(value);
+    }
+
+    /**
      * 比较运算的类型错误消息，与标准 Lua 的 {@code luaG_ordererror} 一致：
      * 同类型为 {@code attempt to compare two <type> values}，
      * 否则为 {@code attempt to compare <t1> with <t2>}。
      */
     @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     public static String orderErrorMessage(Object first, Object second) {
-        String t1 = getTypeName(first);
-        String t2 = getTypeName(second);
+        String t1 = getRuntimeTypeName(first);
+        String t2 = getRuntimeTypeName(second);
         if (t1.equals(t2)) {
             return "attempt to compare two " + t1 + " values";
         }

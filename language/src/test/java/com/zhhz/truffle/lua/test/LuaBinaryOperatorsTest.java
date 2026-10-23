@@ -40,6 +40,23 @@ public class LuaBinaryOperatorsTest  extends AbstractLuaTest {
     }
 
     @Test
+    public void testRuntimeErrorsUseNameMetafield() {
+        assertEquals("attempt to perform arithmetic on a Point value", context.eval("lua", """
+                local ok, m = pcall(function()
+                    return setmetatable({}, {__name = 'Point'}) + 1
+                end)
+                return (m:gsub('^.-:%d+: ', ''):gsub(' %(.*$', ''))
+                """).asString());
+        assertEquals("attempt to call a Point value", context.eval("lua", """
+                local ok, m = pcall(function()
+                    local t = setmetatable({}, {__name = 'Point'})
+                    return t()
+                end)
+                return (m:gsub('^.-:%d+: ', ''):gsub(' %(.*$', ''))
+                """).asString());
+    }
+
+    @Test
     public void testSubtraction() {
         assertEquals(5.0, runLua("10 - 5").asDouble());
         assertEquals(5.5, runLua("10.5 - 5").asDouble());

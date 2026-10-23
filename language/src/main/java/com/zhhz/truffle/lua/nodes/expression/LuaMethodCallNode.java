@@ -166,7 +166,7 @@ public final class LuaMethodCallNode extends LuaExpressionNode {
             }
         }
         return "attempt to call a "
-                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(functionValue)
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName(functionValue)
                 + " value (method '" + methodName + "')";
     }
 

@@ -176,7 +176,7 @@ public class LuaGenericForRepeatingNode extends Node implements RepeatingNode {
      * 例如 {@code for k,v in 3 do end} → {@code <chunk>:<line>: attempt to call a number value}。
      */
     private RuntimeException callError(Object iteratorFunc) {
-        String message = "attempt to call a " + LuaTypesUtil.getTypeName(iteratorFunc) + " value";
+        String message = "attempt to call a " + LuaTypesUtil.getRuntimeTypeName(iteratorFunc) + " value";
         SourceSection root = getRootNode().getSourceSection();
         if (root != null && root.isAvailable() && root.getSource() != null && callLine > 0) {
             message = LuaException.chunkId(root.getSource().getName()) + ":" + callLine + ": " + message;

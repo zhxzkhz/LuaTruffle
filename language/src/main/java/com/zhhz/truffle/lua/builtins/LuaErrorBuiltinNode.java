@@ -79,27 +79,12 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
     }
 
     /**
-     * Lua 5.3.0 的 lua_isstring 语义：字符串与数字可强制转换为字符串（返回其文本），
-     * 其余类型返回 null。
+     * 只有真正的字符串才在 {@code level > 0} 时附加位置前缀；数字等其它对象保持原值，
+     * 由 pcall 原样返回（与 {@code luaB_error} 的 {@code lua_type == LUA_TSTRING} 判断一致）。
      */
     private static String coercibleString(Object value) {
         TruffleString ts = asString(value);
-        if (ts != null) {
-            return ts.toJavaStringUncached();
-        }
-        if (value instanceof Long number) {
-            return number.toString();
-        }
-        if (value instanceof Double number) {
-            return number.isInfinite() || number.isNaN()
-                    ? Double.toString(number)
-                    : (number == Math.rint(number) ? number.longValue() + ".0" : number.toString());
-        }
-        if (value instanceof LuaNumber number) {
-            double d = number.getValue();
-            return d == Math.rint(d) && !Double.isInfinite(d) ? (long) d + ".0" : Double.toString(d);
-        }
-        return null;
+        return ts != null ? ts.toJavaStringUncached() : null;
     }
 
     /**
@@ -111,6 +96,15 @@ public abstract class LuaErrorBuiltinNode extends LuaBuiltinNode {
      */
     @TruffleBoundary
     private String formatErrorObject(Object errorObject) {
+        if (errorObject instanceof Long number) {
+            return Long.toString(number);
+        }
+        if (errorObject instanceof Double number) {
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(number);
+        }
+        if (errorObject instanceof LuaNumber number) {
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(number.getValue());
+        }
         LuaContext context = getContext();
         LuaTable metatable = context.getEffectiveMetatable(errorObject);
         boolean hasTostring = metatable != null

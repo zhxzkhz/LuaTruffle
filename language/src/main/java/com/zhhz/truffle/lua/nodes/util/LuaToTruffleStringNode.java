@@ -124,14 +124,7 @@ public abstract class LuaToTruffleStringNode extends Node {
 
     @TruffleBoundary
     private static String doubleToLuaString(double value) {
-        if (Double.isNaN(value)) return "nan";
-        if (Double.isInfinite(value)) return value > 0 ? "inf" : "-inf";
-        // 整数值加 ".0"（Lua 5.3 语义）
-        String s = Double.toString(value);
-        if (s.indexOf('.') < 0 && s.indexOf('E') < 0 && s.indexOf('N') < 0) {
-            s = s + ".0";
-        }
-        return s;
+        return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(value);
     }
 
     @Specialization

@@ -115,7 +115,7 @@ public abstract class LuaConcatNode extends LuaBinaryNode {
             Object bad = !isStringOrNumber(left) ? left : right;
             String suffix = operandSuffix(!isStringOrNumber(left) ? getLeftNode() : getRightNode());
             throw LuaException.runtimeError("attempt to concatenate a "
-                    + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(bad) + " value" + suffix, this);
+                    + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName(bad) + " value" + suffix, this);
         }
 
         return concatNode.execute(toStrLeft.execute(this, left), toStrRight.execute(this, right), LuaLanguage.STRING_ENCODING, true);

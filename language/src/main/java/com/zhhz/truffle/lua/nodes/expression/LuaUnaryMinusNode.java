@@ -58,7 +58,7 @@ public abstract class LuaUnaryMinusNode extends LuaExpressionNode {
         }
 
         throw LuaException.runtimeError("attempt to perform arithmetic on a "
-                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(value) + " value"
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName(value) + " value"
                 + getOperandNode().getErrorSuffix(), this);
     }
 

@@ -248,7 +248,7 @@ public abstract class LuaReadTableNode extends LuaExpressionNode {
      * 其余类型（nil/number/boolean/function 等）按 Lua 语义报 "attempt to index a X value"。
      */
     private static Object finishMissingIndex(Node node, Object table, String indexSuffix) {
-        String typeName = LuaTypesUtil.getTypeName(table);
+        String typeName = LuaTypesUtil.getRuntimeTypeName(table);
         if ("table".equals(typeName) || "string".equals(typeName)) {
             return LuaNil.SINGLETON;
         }

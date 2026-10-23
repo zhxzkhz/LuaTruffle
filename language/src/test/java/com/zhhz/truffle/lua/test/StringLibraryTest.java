@@ -143,6 +143,31 @@ public class StringLibraryTest extends AbstractLuaTest {
     }
 
     @Test
+    public void testNumberFormattingMatchesC() {
+        assertTrue(eval("""
+                return tostring(1/3) == '0.33333333333333'
+                    and tostring(2^63) == '9.2233720368548e+18'
+                    and tostring(math.huge) == 'inf'
+                    and tostring(-math.huge) == '-inf'
+                    and tostring(0/0) == 'nan'
+                    and tostring(1.0) == '1.0'
+                    and string.format('%q', 1/3) == '0x1.5555555555555p-2'
+                    and string.format('%q', -0.0) == '-0x0p+0'
+                    and string.format('%q', math.huge) == '1e9999'
+                    and string.format('%q', 0/0) == '(0/0)'
+                    and string.format('%a', 1.0) == '0x1p+0'
+                    and string.format('%a', 0.1) == '0x1.999999999999ap-4'
+                    and string.format('%.17g', 0.1) == '0.10000000000000001'
+                    and string.format('%08.3g', 1.5) == '000001.5'
+                    and string.format('%G', 0/0) == 'NAN'
+                    and string.format('%s', nil) == 'nil'
+                    and string.format('%s', 1/3) == '0.33333333333333'
+                    and string.format('%p', 1) == '(null)'
+                    and #string.format('%p', {}) == 16
+                """).asBoolean());
+    }
+
+    @Test
     public void testInvalidArgumentsAreCatchable() {
         assertFalse(eval("local ok = pcall(function() string.char(256) end); return ok").asBoolean());
         assertFalse(eval("local ok = pcall(function() string.match('a', '[') end); return ok").asBoolean());

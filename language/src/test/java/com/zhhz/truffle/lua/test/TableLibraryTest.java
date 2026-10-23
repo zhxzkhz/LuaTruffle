@@ -45,6 +45,7 @@ public class TableLibraryTest extends AbstractLuaTest {
     @Test
     public void testConcatDefaultsRangesAndNumbers() {
         assertEquals("1,two,3.5", eval("return table.concat({1, 'two', 3.5}, ',')").asString());
+        assertEquals("1.0|0.33333333333333", eval("return table.concat({1.0, 1/3}, '|')").asString());
         assertEquals("b-c", eval("return table.concat({'a', 'b', 'c', 'd'}, '-', 2, 3)").asString());
         assertEquals("", eval("return table.concat({'a'}, nil, 2, 1)").asString());
 
@@ -191,6 +192,37 @@ public class TableLibraryTest extends AbstractLuaTest {
                 return invalidComparator == false
                     and incomparableValues == false
                     and comparatorError == false
+                """).asBoolean());
+    }
+
+    @Test
+    public void testWeakValuesAndKeysAreCollected() {
+        assertTrue(eval("""
+                local weakValues = setmetatable({}, {__mode = 'v'})
+                local weakKeys = setmetatable({}, {__mode = 'k'})
+                local function populate()
+                    local value = {}
+                    local key = {}
+                    weakValues[1] = value
+                    weakKeys[key] = 'kept?'
+                end
+                populate()
+                for i = 1, 10 do collectgarbage() end
+                return weakValues[1] == nil and next(weakKeys) == nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testWeakTableKeepsNonCollectableKeys() {
+        assertTrue(eval("""
+                local weakKeys = setmetatable({}, {__mode = 'k'})
+                weakKeys[1] = 'number'
+                weakKeys['text'] = 'string'
+                weakKeys[true] = 'boolean'
+                for i = 1, 5 do collectgarbage() end
+                return weakKeys[1] == 'number'
+                    and weakKeys['text'] == 'string'
+                    and weakKeys[true] == 'boolean'
                 """).asBoolean());
     }
 }

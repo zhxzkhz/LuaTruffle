@@ -41,12 +41,48 @@ public final class LuaTable extends LuaValue {
     /** 当元表的 {@code __mode} 含 'v' 时，值为弱引用（可被 JVM GC 回收）。 */
     private boolean weakValues;
 
+    /** 当元表的 {@code __mode} 含 'k' 时，可回收对象键存放在弱哈希部分。 */
+    private boolean weakKeys;
+    private java.util.HashMap<WeakKeyRef, Object> weakKeyPart;
+    private java.lang.ref.ReferenceQueue<Object> weakKeyQueue;
+
+    /**
+     * 弱表中的可回收对象键。使用身份相等（Lua 表键语义），键被回收后由
+     * {@link #weakKeyQueue} 通知删除对应条目。
+     */
+    static final class WeakKeyRef extends WeakReference<Object> {
+        private final int hash;
+
+        WeakKeyRef(Object key, java.lang.ref.ReferenceQueue<Object> queue) {
+            super(key, queue);
+            this.hash = System.identityHashCode(key);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof WeakKeyRef ref)) {
+                return false;
+            }
+            Object mine = get();
+            return mine != null && mine == ref.get();
+        }
+    }
+
     // 遍历缓存：缓存形状对应的哈希键数组及 (键 -> 位置) 索引，避免 next 每次
     // 重建键数组并做 O(n) 线性查找，导致 pairs 遍历整体退化为 O(n^2)。
     // 当 shape 身份改变（哈希部分结构变化）时失效重建。
     private Shape cachedHashShape;
     private Object[] cachedHashKeyArray;
     private java.util.HashMap<Object, Integer> cachedHashKeyIndex;
+    private List<WeakKeyRef> cachedWeakKeys;
 
     /**
      * 创建一个新的、空的 LuaTable。
@@ -104,8 +140,12 @@ public final class LuaTable extends LuaValue {
 
         // 如果键不是一个有效的数组索引，或者索引越界，
         // 我们就在内部的 DynamicObject (properties) 中查找它。
+        Object normalizedKey = normalizeHashKey(key);
+        if (this.weakKeys && isCollectableKey(normalizedKey)) {
+            return weakKeyGet(normalizedKey);
+        }
         // objLib.getOrDefault 是一个高性能的操作，它利用了 Truffle 的 Shape 优化。
-        return unwrapWeak(objLib.getOrDefault(this, normalizeHashKey(key), LuaNil.SINGLETON));
+        return unwrapWeak(objLib.getOrDefault(this, normalizedKey, LuaNil.SINGLETON));
     }
 
     public Object rawget(Object key) {
@@ -138,9 +178,13 @@ public final class LuaTable extends LuaValue {
         if (value == LuaNil.SINGLETON) {
             // 标准 Lua 在把已存在的键赋为 nil 时保留一个“死键”（dead key），
             // 以便在遍历过程中删除当前键后 next 仍能定位后续键。若键不存在则不创建。
-            if (objLib.containsKey(this, normalizedKey)) {
+            if (this.weakKeys && isCollectableKey(normalizedKey)) {
+                weakKeySetNil(normalizedKey);
+            } else if (objLib.containsKey(this, normalizedKey)) {
                 objLib.put(this, normalizedKey, LuaNil.SINGLETON);
             }
+        } else if (this.weakKeys && isCollectableKey(normalizedKey)) {
+            weakKeyStore(normalizedKey, value);
         } else {
             objLib.put(this, normalizedKey, weakValues ? wrapWeakValue(value) : value);
         }
@@ -327,6 +371,14 @@ public final class LuaTable extends LuaValue {
                 size++;
             }
         }
+        if (this.weakKeyPart != null) {
+            purgeClearedWeakKeys();
+            for (Object value : this.weakKeyPart.values()) {
+                if (value != LuaNil.SINGLETON) {
+                    size++;
+                }
+            }
+        }
         return size;
     }
 
@@ -347,13 +399,24 @@ public final class LuaTable extends LuaValue {
         Object[] rawHashKeys = objLib.getKeyArray(this);
         List<Object> liveHashKeys = new ArrayList<>(rawHashKeys.length);
         for (Object key : rawHashKeys) {
-            if (objLib.getOrDefault(this, key, LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+            Object value = objLib.getOrDefault(this, key, LuaNil.SINGLETON);
+            if (value != LuaNil.SINGLETON && unwrapWeak(value) != LuaNil.SINGLETON) {
                 liveHashKeys.add(key);
+            }
+        }
+        if (this.weakKeyPart != null) {
+            purgeClearedWeakKeys();
+            for (java.util.Map.Entry<WeakKeyRef, Object> entry : this.weakKeyPart.entrySet()) {
+                Object key = entry.getKey().get();
+                Object value = entry.getValue();
+                if (key != null && value != LuaNil.SINGLETON && unwrapWeak(value) != LuaNil.SINGLETON) {
+                    liveHashKeys.add(key);
+                }
             }
         }
         List<Object> arrayKeyList = new ArrayList<>();
         for (int i = 0; i < this.arraySize; i++) {
-            if (this.arrayPart[i] != null) {
+            if (this.arrayPart[i] != null && unwrapWeak(this.arrayPart[i]) != LuaNil.SINGLETON) {
                 arrayKeyList.add((double) (i + 1));
             }
         }
@@ -386,23 +449,116 @@ public final class LuaTable extends LuaValue {
         return value;
     }
 
+    /** 只有可回收对象才能作为弱表的弱键；数字/字符串/布尔等被视为值。 */
+    static boolean isCollectableKey(Object key) {
+        return key instanceof LuaValue value
+                && !(value instanceof LuaNil)
+                && !(value instanceof LuaBoolean)
+                && !(value instanceof LuaNumber)
+                && !(value instanceof LuaString);
+    }
+
+    /** 弱键读取（哈希查找与清理都放在边界外，避免把 HashMap 操作编入运行时编译的节点）。 */
+    @TruffleBoundary
+    private Object weakKeyGet(Object key) {
+        purgeClearedWeakKeys();
+        Object value = this.weakKeyPart.get(new WeakKeyRef(key, null));
+        return value == null ? LuaNil.SINGLETON : unwrapWeak(value);
+    }
+
+    /** 写入弱键条目（保留 nil 墓碑）。 */
+    @TruffleBoundary
+    private void weakKeyStore(Object key, Object value) {
+        ensureWeakKeyPart();
+        purgeClearedWeakKeys();
+        this.weakKeyPart.put(new WeakKeyRef(key, this.weakKeyQueue),
+                this.weakValues ? wrapWeakValue(value) : value);
+        this.cachedWeakKeys = null;
+    }
+
+    /** 把已存在的弱键值标记为 nil（保留死键以便 next 继续遍历）。 */
+    @TruffleBoundary
+    private void weakKeySetNil(Object key) {
+        purgeClearedWeakKeys();
+        WeakKeyRef lookup = new WeakKeyRef(key, null);
+        if (this.weakKeyPart.containsKey(lookup)) {
+            this.weakKeyPart.put(lookup, LuaNil.SINGLETON);
+        }
+    }
+
+    @TruffleBoundary
+    private void ensureWeakKeyPart() {
+        if (this.weakKeyPart == null) {
+            this.weakKeyPart = new java.util.HashMap<>();
+            this.weakKeyQueue = new java.lang.ref.ReferenceQueue<>();
+        }
+    }
+
+    /** 清理已被 JVM GC 回收的弱键条目。 */
+    @TruffleBoundary
+    private void purgeClearedWeakKeys() {
+        if (this.weakKeyPart == null) {
+            return;
+        }
+        java.lang.ref.Reference<?> ref;
+        while ((ref = this.weakKeyQueue.poll()) != null) {
+            this.weakKeyPart.remove(ref);
+            this.cachedWeakKeys = null;
+        }
+    }
+
     /**
      * 元表变更时更新弱值模式，并把既有条目在强引用与弱引用之间转换。
      * （测试里 {@code setmetatable(x, {__mode='kv'})} 通常发生在元素写入之后。）
      */
+    @TruffleBoundary
     void updateWeakMode(LuaTable metatable) {
-        boolean weak = false;
+        String mode = "";
         if (metatable != null) {
-            Object mode = metatable.rawget(LuaMetatables.__MODE);
-            if (mode instanceof TruffleString modeString) {
-                weak = modeString.toJavaStringUncached().indexOf('v') >= 0;
+            Object modeValue = metatable.rawget(LuaMetatables.__MODE);
+            if (modeValue instanceof TruffleString modeString) {
+                mode = modeString.toJavaStringUncached();
             }
         }
-        if (weak == this.weakValues) {
+        boolean newWeakValues = mode.indexOf('v') >= 0;
+        boolean newWeakKeys = mode.indexOf('k') >= 0;
+
+        if (newWeakKeys != this.weakKeys) {
+            DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
+            if (newWeakKeys) {
+                ensureWeakKeyPart();
+                for (Object key : objLib.getKeyArray(this)) {
+                    Object normalized = normalizeHashKey(key);
+                    if (isCollectableKey(normalized)) {
+                        Object value = objLib.getOrDefault(this, key, LuaNil.SINGLETON);
+                        objLib.removeKey(this, key);
+                        if (value != LuaNil.SINGLETON) {
+                            weakKeyPart.put(new WeakKeyRef(normalized, weakKeyQueue), value);
+                        }
+                    }
+                }
+            } else {
+                if (weakKeyPart != null) {
+                    for (java.util.Map.Entry<WeakKeyRef, Object> entry : weakKeyPart.entrySet()) {
+                        Object key = entry.getKey().get();
+                        Object value = entry.getValue();
+                        if (key != null && value != LuaNil.SINGLETON) {
+                            objLib.put(this, key, value);
+                        }
+                    }
+                    weakKeyPart = null;
+                    weakKeyQueue = null;
+                }
+            }
+            this.weakKeys = newWeakKeys;
+            this.cachedWeakKeys = null;
+        }
+
+        if (newWeakValues == this.weakValues) {
             return;
         }
         DynamicObjectLibrary objLib = DynamicObjectLibrary.getUncached();
-        if (weak) {
+        if (newWeakValues) {
             for (int i = 0; i < arrayPart.length; i++) {
                 if (arrayPart[i] != null && !(arrayPart[i] instanceof WeakReference)) {
                     arrayPart[i] = wrapWeakValue(arrayPart[i]);
@@ -412,6 +568,14 @@ public final class LuaTable extends LuaValue {
                 Object v = objLib.getOrDefault(this, key, LuaNil.SINGLETON);
                 if (v != LuaNil.SINGLETON && !(v instanceof WeakReference)) {
                     objLib.put(this, key, wrapWeakValue(v));
+                }
+            }
+            if (weakKeyPart != null) {
+                for (java.util.Map.Entry<WeakKeyRef, Object> entry : weakKeyPart.entrySet()) {
+                    Object v = entry.getValue();
+                    if (v != LuaNil.SINGLETON && !(v instanceof WeakReference)) {
+                        entry.setValue(wrapWeakValue(v));
+                    }
                 }
             }
         } else {
@@ -427,8 +591,16 @@ public final class LuaTable extends LuaValue {
                     objLib.put(this, key, referent == null ? LuaNil.SINGLETON : referent);
                 }
             }
+            if (weakKeyPart != null) {
+                for (java.util.Map.Entry<WeakKeyRef, Object> entry : weakKeyPart.entrySet()) {
+                    if (entry.getValue() instanceof WeakReference<?> ref) {
+                        Object referent = ref.get();
+                        entry.setValue(referent == null ? LuaNil.SINGLETON : referent);
+                    }
+                }
+            }
         }
-        this.weakValues = weak;
+        this.weakValues = newWeakValues;
     }
 
     private static boolean isArrayIndex(long value) {
@@ -544,37 +716,93 @@ public final class LuaTable extends LuaValue {
 
         // --- 状态 1: 遍历的开始 (key 是 nil) ---
         if (key == null || key == LuaNil.SINGLETON) {
-            // a. 先从数组部分开始找第一个非 nil 的元素
-            for (int i = 0; i < this.arrayPart.length; i++) {
-                if (this.arrayPart[i] != null) {
-                    return (long) (i + 1); // Lua 索引是从 1 开始的（Long 才是 Lua 数字，Integer 会退化成 userdata）
-                }
+            Object arrayKey = nextLiveArrayKey(0);
+            if (arrayKey != LuaNil.SINGLETON) {
+                return arrayKey;
             }
-            // b. 数组部分为空，从哈希部分找第一个“活键”
-            return nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
+            Object hashKey = nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
+            if (hashKey != LuaNil.SINGLETON) {
+                return hashKey;
+            }
+            return nextLiveWeakKey(0);
         }
 
         // --- 状态 2: 当前 key 落在数组部分（1..arrayLimit 为合法数组索引） ---
         int arrayKey = toArrayIndex(key);
         if (arrayKey > 0 && arrayKey <= this.arrayLimit) {
-            // 从当前索引的下一个开始继续扫描数组部分（当前键即使已被删除也能继续）
-            for (int i = arrayKey; i < this.arrayPart.length; i++) {
-                if (this.arrayPart[i] != null) {
-                    return (long) (i + 1);
-                }
+            Object nextArrayKey = nextLiveArrayKey(arrayKey);
+            if (nextArrayKey != LuaNil.SINGLETON) {
+                return nextArrayKey;
             }
-            // 数组部分遍历完毕，转到哈希部分
-            return nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
+            Object hashKey = nextLiveHashKey(objLib.getKeyArray(this), 0, objLib);
+            if (hashKey != LuaNil.SINGLETON) {
+                return hashKey;
+            }
+            return nextLiveWeakKey(0);
         }
 
         // --- 状态 3: 当前 key 在哈希部分 ---
+        Object normalizedKey = normalizeHashKey(key);
         Object[] propKeys = cachedHashKeys(objLib);
-        Integer index = hashKeyIndexMap(propKeys).get(normalizeHashKey(key));
-        if (index == null) {
-            // 键不存在：标准 Lua 抛出 "invalid key to 'next'"
-            throw LuaException.create("invalid key to 'next'", null);
+        Integer index = hashKeyIndexMap(propKeys).get(normalizedKey);
+        if (index != null) {
+            Object hashKey = nextLiveHashKey(propKeys, index + 1, objLib);
+            if (hashKey != LuaNil.SINGLETON) {
+                return hashKey;
+            }
+            return nextLiveWeakKey(0);
         }
-        return nextLiveHashKey(propKeys, index + 1, objLib);
+        if (this.weakKeys && isCollectableKey(normalizedKey)) {
+            purgeClearedWeakKeys();
+            List<WeakKeyRef> weakKeys = weakKeyRefs();
+            for (int i = 0; i < weakKeys.size(); i++) {
+                if (weakKeys.get(i).get() == normalizedKey) {
+                    return nextLiveWeakKey(i + 1);
+                }
+            }
+        }
+        // 键不存在：标准 Lua 抛出 "invalid key to 'next'"
+        throw LuaException.create("invalid key to 'next'", null);
+    }
+
+    /** 从 0-based 下标 {@code from} 起返回第一个非空数组键（1-based）。 */
+    private Object nextLiveArrayKey(int from) {
+        for (int i = from; i < this.arrayPart.length; i++) {
+            if (this.arrayPart[i] != null && unwrapWeak(this.arrayPart[i]) != LuaNil.SINGLETON) {
+                return (long) (i + 1);
+            }
+        }
+        return LuaNil.SINGLETON;
+    }
+
+    @TruffleBoundary
+    private List<WeakKeyRef> weakKeyRefs() {
+        if (this.cachedWeakKeys == null) {
+            this.cachedWeakKeys = this.weakKeyPart == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(this.weakKeyPart.keySet());
+        }
+        return this.cachedWeakKeys;
+    }
+
+    /** 从弱键列表的 {@code from} 起返回第一个值为非 nil 的对象键。 */
+    @TruffleBoundary
+    private Object nextLiveWeakKey(int from) {
+        if (this.weakKeyPart == null) {
+            return LuaNil.SINGLETON;
+        }
+        purgeClearedWeakKeys();
+        List<WeakKeyRef> keys = weakKeyRefs();
+        for (int i = from; i < keys.size(); i++) {
+            Object key = keys.get(i).get();
+            if (key != null) {
+                Object value = this.weakKeyPart.get(keys.get(i));
+                if (value != null && value != LuaNil.SINGLETON) {
+                    return key;
+                }
+            }
+        }
+        return LuaNil.SINGLETON;
     }
 
     /**
@@ -616,7 +844,8 @@ public final class LuaTable extends LuaValue {
      */
     private Object nextLiveHashKey(Object[] propKeys, int from, DynamicObjectLibrary objLib) {
         for (int i = from; i < propKeys.length; i++) {
-            if (objLib.getOrDefault(this, propKeys[i], LuaNil.SINGLETON) != LuaNil.SINGLETON) {
+            Object value = objLib.getOrDefault(this, propKeys[i], LuaNil.SINGLETON);
+            if (value != LuaNil.SINGLETON && unwrapWeak(value) != LuaNil.SINGLETON) {
                 return propKeys[i];
             }
         }

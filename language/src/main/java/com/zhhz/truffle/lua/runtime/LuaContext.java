@@ -148,7 +148,7 @@ public final class LuaContext {
     // collectgarbage 的状态（复刻标准 Lua 的 GC 控制接口；JVM 托管 GC 下仅模拟状态）。
     private boolean gcRunning = true;
     private long gcPause = 200;
-    private long gcStepMul = 200;
+    private long gcStepMul = 100;
 
     public boolean isGcRunning() {
         return gcRunning;
@@ -172,6 +172,17 @@ public final class LuaContext {
 
     public void setGcStepMul(long stepMul) {
         this.gcStepMul = stepMul;
+    }
+
+    /** GC 模式（5.4 默认 generational；collectgarbage("incremental"/"generational") 切换）。 */
+    private String gcMode = "generational";
+
+    public String getGcMode() {
+        return gcMode;
+    }
+
+    public void setGcMode(String mode) {
+        this.gcMode = mode;
     }
 
     // debug.sethook 钩子（见 LuaLineHook 与 DebugLibrary.sethook）。
@@ -419,7 +430,8 @@ public final class LuaContext {
             if (!opt.startsWith("-") || opt.equals("-")) {
                 break; // found script path
             }
-            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")) {
+            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")
+                    || opt.equals("-W") || opt.equals("--version")) {
                 scriptStart++;
             } else if (opt.equals("-l") || opt.equals("-e")) {
                 scriptStart += 2; // option + argument
@@ -429,30 +441,37 @@ public final class LuaContext {
                 break; // unknown option, treat as script path
             }
         }
-        
-        // arg[0] = script path, arg[1..n] = script args
-        if (scriptStart < applicationArguments.length) {
-            arguments.rawset(0L, toTruffleString(applicationArguments[scriptStart]));
-        }
-        // Store script arguments as varargs for the main chunk
-        int numScriptArgs = applicationArguments.length - scriptStart - 1;
-        if (numScriptArgs > 0) {
-            Object[] varargs = new Object[numScriptArgs];
-            for (int i = 0; i < numScriptArgs; i++) {
-                varargs[i] = toTruffleString(applicationArguments[scriptStart + 1 + i]);
+
+        if (scriptStart >= applicationArguments.length) {
+            // 无脚本（仅选项或 stdin）：与标准 Lua 5.4 一致，arg[0] 为解释器，
+            // 其余原始参数（选项）占据正整数下标，没有负下标。
+            for (int i = 0; i < applicationArguments.length; i++) {
+                arguments.rawset((long) i, toTruffleString(applicationArguments[i]));
             }
-            this.scriptVarargs = varargs;
+            this.globals.rawset(toTruffleString("arg"), arguments, DynamicObjectLibrary.getUncached());
+        } else {
+            // arg[0] = script path, arg[1..n] = script args
+            arguments.rawset(0L, toTruffleString(applicationArguments[scriptStart]));
+            // Store script arguments as varargs for the main chunk
+            int numScriptArgs = applicationArguments.length - scriptStart - 1;
+            if (numScriptArgs > 0) {
+                Object[] varargs = new Object[numScriptArgs];
+                for (int i = 0; i < numScriptArgs; i++) {
+                    varargs[i] = toTruffleString(applicationArguments[scriptStart + 1 + i]);
+                }
+                this.scriptVarargs = varargs;
+            }
+            for (int i = scriptStart + 1; i < applicationArguments.length; i++) {
+                arguments.rawset((long) i - scriptStart, toTruffleString(applicationArguments[i]));
+            }
+            // arg[-1] = launcher, arg[-2..-n] = options (in reverse order)
+            int negIdx = -1;
+            for (int i = Math.min(scriptStart - 1, applicationArguments.length - 1); i >= 0; i--) {
+                arguments.rawset((long) negIdx, toTruffleString(applicationArguments[i]));
+                negIdx--;
+            }
+            this.globals.rawset(toTruffleString("arg"), arguments, DynamicObjectLibrary.getUncached());
         }
-        for (int i = scriptStart + 1; i < applicationArguments.length; i++) {
-            arguments.rawset((long) i - scriptStart, toTruffleString(applicationArguments[i]));
-        }
-        // arg[-1] = launcher, arg[-2..-n] = options (in reverse order)
-        int negIdx = -1;
-        for (int i = Math.min(scriptStart - 1, applicationArguments.length - 1); i >= 0; i--) {
-            arguments.rawset((long) negIdx, toTruffleString(applicationArguments[i]));
-            negIdx--;
-        }
-        this.globals.rawset(toTruffleString("arg"), arguments, DynamicObjectLibrary.getUncached());
         //初始化LuaBoolean
         LuaBoolean.get(this,true);
         LuaBoolean.get(this,false);
@@ -917,7 +936,8 @@ public final class LuaContext {
             if (opt.equals("-E")) {
                 return true;
             }
-            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")) {
+            if (opt.equals("-E") || opt.equals("-i") || opt.equals("-v")
+                    || opt.equals("-W") || opt.equals("--version")) {
                 i++;
             } else if (opt.equals("-l") || opt.equals("-e")) {
                 i += 2; // option + argument

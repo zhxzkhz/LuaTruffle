@@ -85,12 +85,19 @@ public final class LuaMain {
 
         int scriptIndex = portableTests ? 1 : 0;
 
-        // Parse interpreter options: -E, -l, -e, -i, -v
+        String programName;
+        try {
+            programName = createLauncherCommand();
+        } catch (IOException e) {
+            programName = "lua";
+        }
+
+        // Parse interpreter options: -E, -l, -e, -i, -v, -W
         boolean ignoreEnv = false;
         boolean interactive = false;
         boolean showVersion = false;
-        List<String> evalStatements = new ArrayList<>();
-        List<String> loadModules = new ArrayList<>();
+        boolean enableWarnings = false;
+        List<OptionAction> actions = new ArrayList<>();
         // Preserve raw option tokens for the arg table (everything before script path)
         List<String> rawOptions = new ArrayList<>();
 
@@ -108,6 +115,11 @@ public final class LuaMain {
                 interactive = true;
                 rawOptions.add(opt);
                 scriptIndex++;
+            } else if (opt.equals("-W")) {
+                // 打开警告输出（等价于脚本开始时调用 warn("@on")）
+                enableWarnings = true;
+                rawOptions.add(opt);
+                scriptIndex++;
             } else if (opt.equals("-v") || opt.equals("--version")) {
                 // 标准 lua：打印版本行到 stdout 后继续处理其余参数（不退出）
                 System.out.print("Lua 5.3 (LuaTruffle)  Compatible with Lua 5.3, "
@@ -118,39 +130,36 @@ public final class LuaMain {
             } else if (opt.equals("-l")) {
                 rawOptions.add(opt);
                 scriptIndex++;
-                if (args.length > scriptIndex) {
-                    loadModules.add(args[scriptIndex]);
+                if (args.length > scriptIndex && !args[scriptIndex].startsWith("-")) {
+                    actions.add(new OptionAction('l', args[scriptIndex]));
                     rawOptions.add(args[scriptIndex]);
                     scriptIndex++;
                 } else {
-                    System.err.println("lua: '-l' needs argument");
-                    System.err.println("usage: lua [options] [script [args]]...");
+                    printUsage(programName, "'-l' needs argument");
                     System.exit(1);
                 }
             } else if (opt.equals("-e")) {
                 rawOptions.add(opt);
                 scriptIndex++;
-                if (args.length > scriptIndex) {
-                    evalStatements.add(args[scriptIndex]);
+                if (args.length > scriptIndex && !args[scriptIndex].startsWith("-")) {
+                    actions.add(new OptionAction('e', args[scriptIndex]));
                     rawOptions.add(args[scriptIndex]);
                     scriptIndex++;
                 } else {
-                    System.err.println("lua: '-e' needs argument");
-                    System.err.println("usage: lua [options] [script [args]]...");
+                    printUsage(programName, "'-e' needs argument");
                     System.exit(1);
                 }
             } else if (opt.startsWith("-e")) {
-                evalStatements.add(opt.substring(2));
+                actions.add(new OptionAction('e', opt.substring(2)));
                 rawOptions.add(opt);
                 scriptIndex++;
             } else if (opt.startsWith("-l")) {
-                loadModules.add(opt.substring(2));
+                actions.add(new OptionAction('l', opt.substring(2)));
                 rawOptions.add(opt);
                 scriptIndex++;
             } else {
                 // 标准 lua：不识别的选项直接报错退出（如 -h、-Ex、-vv）
-                System.err.println("lua: unrecognized option '" + opt + "'");
-                System.err.println("usage: lua [options] [script [args]]...");
+                printUsage(programName, "unrecognized option '" + opt + "'");
                 System.exit(1);
             }
         }
@@ -184,12 +193,14 @@ public final class LuaMain {
         List<String> argList = new ArrayList<>();
         argList.add(createLauncherCommand());
         argList.addAll(rawOptions);
-        argList.add(resourcesPath);
-        argList.addAll(Arrays.asList(scriptArguments));
+        if (!noScript) {
+            argList.add(resourcesPath);
+            argList.addAll(Arrays.asList(scriptArguments));
+        }
         String[] applicationArguments = argList.toArray(new String[0]);
 
-        System.exit(executeSource(source, applicationArguments, portableTests, evalStatements, loadModules,
-            interactive, resourcesPath, noScript, showVersion));
+        System.exit(executeSource(source, applicationArguments, portableTests, actions,
+            interactive, resourcesPath, noScript, showVersion, enableWarnings));
     }
 
     private static Thread getWatcher(String interruptFile) {
@@ -218,10 +229,27 @@ public final class LuaMain {
         return watcher;
     }
 
+    /** 打印与标准 lua 一致的命令行用法（错误信息前缀为解释器路径）。 */
+    private static void printUsage(String programName, String message) {
+        System.err.println(programName + ": " + message);
+        System.err.println("usage: " + programName + " [options] [script [args]]");
+        System.err.println("Available options are:");
+        System.err.println("  -e stat   execute string 'stat'");
+        System.err.println("  -i        enter interactive mode after executing 'script'");
+        System.err.println("  -l mod    require library 'mod' into global 'mod'");
+        System.err.println("  -l g=mod  require library 'mod' into global 'g'");
+        System.err.println("  -v        show version information");
+        System.err.println("  -E        ignore environment variables");
+        System.err.println("  -W        turn warnings on");
+        System.err.println("  --        stop handling options");
+        System.err.println("  -         stop handling options and execute stdin");
+    }
+
     private static String createLauncherCommand() throws IOException {
         String modulePath = System.getProperty("jdk.module.path");
         if (modulePath == null || modulePath.isBlank()) {
-            return "lua";
+            // native image：arg[-1] 是解释器可执行文件路径（对应 C 的 argv[0]）
+            return ProcessHandle.current().info().command().orElse("lua");
         }
         boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
         // Use a fixed script name based on the module path hash so that parent and child
@@ -242,9 +270,9 @@ public final class LuaMain {
     }
 
     private static int executeSource(Source source, String[] arguments, boolean portableTests,
-                                     List<String> evalStatements, List<String> loadModules,
+                                     List<OptionAction> actions,
                                      boolean interactive, String resourcesPath, boolean noScript,
-                                     boolean showVersion) {
+                                     boolean showVersion, boolean enableWarnings) {
         // stdin 直接共享给 Context：io.read、debug.debug 等通过 env.in() 读取。
         // 注意不能给空流——否则 -e 中的 debug.debug() 会立即读到 EOF。
         // REPL 的 BufferedReader 在 -e/-l 语句之后才创建，顺序读取不会互相抢占。
@@ -338,17 +366,33 @@ public final class LuaMain {
             if (portableTests) {
                 context.eval(Lua, "_port = true");
             }
-            // Execute -l module loads (before -e statements, matching standard Lua behavior)
-            // Standard Lua behavior: require(mod), and if result is non-nil, set _G[mod] = result
-            for (String mod : loadModules) {
-                // Escape the module name for use in a Lua string literal
-                String escapedMod = mod.replace("\\", "\\\\").replace("'", "\\'");
-                String code = "local r = require('" + escapedMod + "'); if r ~= nil then local m = '" + escapedMod + "'; _G[m] = r end";
-                context.eval(Lua, code);
+            if (enableWarnings) {
+                context.eval(Lua, "warn('@on')");
             }
-            // Execute -e statements
-            for (String stmt : evalStatements) {
-                context.eval(Lua, stmt);
+            // Execute -l/-e in command-line order (standard Lua processes options in order).
+            for (OptionAction action : actions) {
+                if (action.kind() == 'l') {
+                    String spec = action.argument();
+                    // Standard Lua: "-l g=mod" loads mod and assigns the result to global g;
+                    // without '=', the global name is the module name with any '-suffix' removed.
+                    String globalName;
+                    String moduleName;
+                    int eq = spec.indexOf('=');
+                    if (eq < 0) {
+                        moduleName = spec;
+                        int dash = spec.indexOf('-');
+                        globalName = dash < 0 ? spec : spec.substring(0, dash);
+                    } else {
+                        globalName = spec.substring(0, eq);
+                        moduleName = spec.substring(eq + 1);
+                    }
+                    String escapedMod = moduleName.replace("\\", "\\\\").replace("'", "\\'");
+                    String escapedGlobal = globalName.replace("\\", "\\\\").replace("'", "\\'");
+                    String code = "local r = require('" + escapedMod + "'); _G['" + escapedGlobal + "'] = r";
+                    context.eval(Lua, code);
+                } else {
+                    context.eval(Lua, action.argument());
+                }
             }
             // Validate that 'arg' is still a table (standard Lua expects this
             // when passing script arguments as varargs to the main chunk)
@@ -366,7 +410,7 @@ public final class LuaMain {
                 // - 显式 "-"：整个 stdin 作为一个脚本执行；
                 // - 无脚本、stdin 为终端：REPL；非终端：stdin 作为一个脚本。
                 boolean explicitStdin = !noScript;
-                boolean noStdinInput = noScript && (!evalStatements.isEmpty() || showVersion);
+                boolean noStdinInput = noScript && (hasAction(actions, 'e') || showVersion);
                 if (interactive) {
                     // REPL（在方法尾部统一处理）
                 } else if (noStdinInput) {
@@ -389,7 +433,7 @@ public final class LuaMain {
             }
             // 无脚本且无 -e/-l 时也要触发一次解析，
             // 保证 LUA_INIT 与 package.path 初始化在进入 REPL 之前完成
-            if (source == null && evalStatements.isEmpty() && loadModules.isEmpty() && !portableTests) {
+            if (source == null && actions.isEmpty() && !portableTests) {
                 context.eval(Lua, "");
             }
             // Enter interactive mode if -i was specified
@@ -638,6 +682,19 @@ public final class LuaMain {
             }
         }
         return bestLine > lastLine || (bestLine == lastLine && bestCol > lastLineLength);
+    }
+
+    private static boolean hasAction(List<OptionAction> actions, char kind) {
+        for (OptionAction action : actions) {
+            if (action.kind() == kind) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 命令行上按顺序出现的 -l / -e 动作。 */
+    private record OptionAction(char kind, String argument) {
     }
 
     private static final java.util.regex.Pattern LINE_COL_PATTERN =

@@ -61,7 +61,7 @@ public abstract class LuaBitwiseNotNode extends LuaExpressionNode {
                     + " has no integer representation", this);
         }
         return LuaException.runtimeError("attempt to perform bitwise operation on a "
-                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(operand) + " value"
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName(operand) + " value"
                 + getOperandNode().getErrorSuffix(), this);
     }
 }

@@ -965,7 +965,24 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
                 return x
                 """;
         PolyglotException ex = assertThrows(PolyglotException.class, () -> eval(code));
-        assertTrue(ex.getMessage().contains("const"));
+        assertTrue(ex.getMessage().contains("attempt to assign to const variable 'x'"), ex.getMessage());
+
+        // 标准 Lua 在编译期（load）就拒绝，而不是运行到赋值语句才报错
+        Value result = eval("""
+                local f, e = load('local x <const> = 1; x = 2; return x')
+                return f == nil, tostring(e)
+                """);
+        assertTrue(result.getArrayElement(0).asBoolean());
+        assertTrue(result.getArrayElement(1).asString().contains("attempt to assign to const variable 'x'"));
+    }
+
+    @Test
+    public void testCloseLocalCannotBeReassigned() {
+        PolyglotException ex = assertThrows(PolyglotException.class, () -> eval("""
+                local x <close> = setmetatable({}, {__close = function() end})
+                x = 2
+                """));
+        assertTrue(ex.getMessage().contains("attempt to assign to const variable 'x'"), ex.getMessage());
     }
 
     @Test

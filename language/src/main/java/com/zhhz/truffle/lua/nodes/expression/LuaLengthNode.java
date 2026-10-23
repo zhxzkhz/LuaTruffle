@@ -84,7 +84,7 @@ public abstract class LuaLengthNode extends LuaExpressionNode {
 
         // 抛出标准的Lua错误信息
         throw LuaException.runtimeError("attempt to get length of a "
-                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName(operand) + " value"
+                + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName(operand) + " value"
                 + getOperandNode().getErrorSuffix(), this);
     }
 

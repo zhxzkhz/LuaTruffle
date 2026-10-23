@@ -53,10 +53,10 @@ final class LuaStringSupport {
         return text.getBytes(StandardCharsets.UTF_8);
     }
 
-    /** {@code Double.toString} 在 Native Image 中会牵出资源包/线程创建，放在边界里。 */
+    /** 浮点转文本使用 C 的 {@code %.14g}（Lua 语义），并放在边界里。 */
     @com.oracle.truffle.api.CompilerDirectives.TruffleBoundary
     private static String doubleText(double number) {
-        return number == (long) number ? Long.toString((long) number) : Double.toString(number);
+        return com.zhhz.truffle.lua.runtime.LuaNumberFormat.toString(number);
     }
 
     /**

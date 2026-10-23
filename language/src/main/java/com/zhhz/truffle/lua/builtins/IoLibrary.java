@@ -468,7 +468,10 @@ public final class IoLibrary {
         if (value instanceof TruffleString string)
             return TruffleString.CopyToByteArrayNode.getUncached().execute(string, com.zhhz.truffle.lua.LuaLanguage.STRING_ENCODING);
         if (value instanceof Long number) return Long.toString(number).getBytes(StandardCharsets.US_ASCII);
-        if (value instanceof Double number) return Double.toString(number).getBytes(StandardCharsets.US_ASCII);
+        if (value instanceof Double number)
+            return com.zhhz.truffle.lua.runtime.LuaNumberFormat
+                    .formatG(number, com.zhhz.truffle.lua.runtime.LuaNumberFormat.TOSTRING_PRECISION, false, false)
+                    .getBytes(StandardCharsets.US_ASCII);
         throw argumentError(argument, function, "string expected, got "
                 + com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getArgumentTypeName(value));
     }

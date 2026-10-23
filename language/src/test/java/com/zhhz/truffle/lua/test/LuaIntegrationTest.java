@@ -206,17 +206,15 @@ public class LuaIntegrationTest extends AbstractLuaTest {
     }
 
     @Test
-    public void testErrorNumberGetsPositionPrefixLikeLua530() {
-        // Lua 5.3.0 的 lua_isstring 语义：数字消息同样加位置前缀，且前缀后的
-        // 字符串成为错误对象（pcall 返回它）
+    public void testErrorNumberKeepsOriginalValue() {
+        // 只有字符串消息会加位置前缀；数字错误对象原样返回（luaB_error 语义）
         Value result = eval("""
                 local ok, err = pcall(function() error(10) end)
                 return ok, err, type(err)
                 """);
         assertFalse(result.getArrayElement(0).asBoolean());
-        assertTrue(result.getArrayElement(1).asString().endsWith(":1: 10"),
-                result.getArrayElement(1).asString());
-        assertEquals("string", result.getArrayElement(2).asString());
+        assertEquals(10, result.getArrayElement(1).asInt());
+        assertEquals("number", result.getArrayElement(2).asString());
     }
 
     @Test

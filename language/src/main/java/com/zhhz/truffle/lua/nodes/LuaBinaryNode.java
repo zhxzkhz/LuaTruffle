@@ -48,7 +48,7 @@ import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaNumber;
 
-import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getTypeName;
+import static com.zhhz.truffle.lua.nodes.util.LuaTypesUtil.getRuntimeTypeName;
 
 /**
  * 接受两个参数的操作的实用基类
@@ -84,7 +84,7 @@ public abstract class LuaBinaryNode extends LuaExpressionNode {
             bad = right;
             badNode = getRightNode();
         }
-        return LuaException.runtimeError("attempt to perform arithmetic on a " + getTypeName(bad)
+        return LuaException.runtimeError("attempt to perform arithmetic on a " + getRuntimeTypeName(bad)
                 + " value" + operandSuffix(badNode), this);
     }
 
@@ -103,7 +103,7 @@ public abstract class LuaBinaryNode extends LuaExpressionNode {
             bad = right;
             badNode = getRightNode();
         }
-        return LuaException.runtimeError("attempt to perform bitwise operation on a " + getTypeName(bad)
+        return LuaException.runtimeError("attempt to perform bitwise operation on a " + getRuntimeTypeName(bad)
                 + " value" + operandSuffix(badNode), this);
     }
 
@@ -125,7 +125,7 @@ public abstract class LuaBinaryNode extends LuaExpressionNode {
                 throw new RuntimeException(LuaException.messageOf(e));
             }
         }
-        throw new RuntimeException("attempt to perform arithmetic on a " + getTypeName(value) + " value");
+        throw new RuntimeException("attempt to perform arithmetic on a " + getRuntimeTypeName(value) + " value");
     }
 
 
