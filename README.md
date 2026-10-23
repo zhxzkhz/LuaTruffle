@@ -40,8 +40,9 @@
     *   `<const>` 赋值检查与 `<close>` to-be-closed 变量。
 *   **已知差异**：`_VERSION` 仍报告 `"Lua 5.3"`；字节码与 `string.dump` 为 5.3 格式；`math.random` 序列不保证与 PUC Lua 一致。
 *   **Java 互操作**：
-    *   宿主对象通过 `InteropLibrary` 暴露字段、方法与数组；Lua 下标从 1 开始映射到宿主 0 基下标，越界读取为 `nil`。
-    *   `obj:method(args)` 按宿主成员方法调用（不额外补 `self`）；宿主 `null` 统一映射为 Lua `nil`。
+    *   宿主对象通过 `InteropLibrary` 暴露字段、方法与数组；Lua 下标从 1 开始映射到宿主 0 基下标，越界读取为 `nil`、越界写入报错。
+    *   宿主 `Map` 的键值可像字段一样读写（`config.timeout = 30`）；`obj:method(args)` 按宿主成员方法调用（不额外补 `self`）。
+    *   宿主 `null` 统一映射为 Lua `nil`；Lua table 也向宿主暴露数组元素读写（`Value.get/setArrayElement`）。
     *   Lua 函数可作为宿主回调：宿主侧用 `Value.asValue(arg)` 包装后即可 `execute`。
 
 ## 🚀 性能基准
@@ -121,6 +122,9 @@ mvn -pl language test
 # 构建可运行的类路径（生成 standalone/cp.txt，依赖已安装到本地仓库）
 mvn -q -pl launcher,standalone -am install -DskipTests
 mvn -q -pl standalone package -DskipTests
+# 依赖版本变化后必须重新生成，否则 Truffle 与 GraalVM 的 libgraal 版本不匹配会报
+# UnsatisfiedLinkError: ...LibGraalScope.attachThreadTo
+mvn -q -pl standalone dependency:build-classpath "-Dmdep.outputFile=$((Get-Location).Path)\standalone\cp.txt"
 
 # 运行官方 all.lua（--portable-tests 跳过依赖本地环境的部分）
 java -ea --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow \
