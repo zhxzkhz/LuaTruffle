@@ -125,7 +125,7 @@ public abstract class LuaEqualNode extends LuaBinaryNode {
      * 2. 引用不等 -> 尝试查找 __eq 元方法
      * 3. 没找到元方法 -> false
      */
-    @Specialization(replaces = {"doBoolean", "doLong", "doDouble", "doTruffleString", "doNil", "doFunction"}, limit = "3")
+    @Specialization(limit = "3")
     protected static boolean doGeneric(Object left, Object right,
                                        @CachedLibrary("left") InteropLibrary leftInterop,
                                        @CachedLibrary("right") InteropLibrary rightInterop,

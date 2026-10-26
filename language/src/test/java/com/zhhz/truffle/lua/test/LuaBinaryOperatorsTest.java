@@ -125,6 +125,25 @@ public class LuaBinaryOperatorsTest  extends AbstractLuaTest {
     }
 
     @Test
+    public void testEqualityAfterGenericFallback() {
+        assertTrue(context.eval("lua", """
+                local function eq(a, b) return a == b end
+                local ok = eq("function", "function")
+                ok = ok and eq(1000000000000, 1000000000000)
+                ok = ok and eq(1.5, 1.5)
+                ok = ok and eq(true, true)
+                ok = ok and eq(nil, nil)
+                eq({}, {})
+                ok = ok and eq("function", "function")
+                ok = ok and eq(1000000000000, 1000000000000)
+                ok = ok and eq(1.5, 1.5)
+                ok = ok and eq(true, true)
+                ok = ok and eq(nil, nil)
+                return ok
+                """).asBoolean());
+    }
+
+    @Test
     public void testLogicalAnd() {
         // and 返回第一个 "falsy" (false 或 nil) 操作数，否则返回第二个操作数
         assertFalse(runLua("false and 10").asBoolean());
