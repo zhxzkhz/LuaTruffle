@@ -8,6 +8,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.LuaException;
 import com.zhhz.truffle.lua.nodes.util.LuaCoerceToNumberNode;
+import com.zhhz.truffle.lua.nodes.util.LuaTypesUtil;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 @GenerateInline(false)
 
@@ -18,14 +19,14 @@ public abstract class LuaToNumberBuiltinNode extends LuaBuiltinNode {
     @TruffleBoundary // 数字解析是慢路径
     public Object doToNumber(Object[] arguments,
                              @Cached(value = "create()", neverDefault = true) LuaCoerceToNumberNode toNumberNode) {
-        if (arguments.length < 1 || arguments[0] == LuaNil.SINGLETON) {
-            // Lua 5.3: tonumber()/tonumber(nil) 报 "bad argument #1 ... (value expected)"
+        if (arguments.length < 1) {
+            // 零参数：luaL_checkany 报 "value expected"（5.1–5.4 一致，官方套件 errors.lua:54）
             throw LuaException.create("bad argument #1 to 'tonumber' (value expected)", null);
         }
 
         Object value = arguments[0];
 
-        // --- 情况 1: 一个参数 tonumber(e) ---
+        // --- 情况 1: 一个参数 tonumber(e)：nil 与不可转换的值均返回 nil，不报错 ---
         if (arguments.length == 1) {
             var v = toNumberNode.execute(value);
             if (v == null) return LuaNil.SINGLETON;
@@ -34,24 +35,59 @@ public abstract class LuaToNumberBuiltinNode extends LuaBuiltinNode {
 
         // --- 情况 2: 两个参数 tonumber(e, base) ---
         else {
+            // base 为 nil 时按标准转换处理（lua_isnoneornil）
+            if (arguments[1] == LuaNil.SINGLETON || arguments[1] == null) {
+                var v = toNumberNode.execute(value);
+                if (v == null) return LuaNil.SINGLETON;
+                return v;
+            }
+            // 5.4 顺序：先按 luaL_checkinteger 校验 base，再要求 e 是字符串，最后校验范围
+            long base = coerceBase(arguments[1]);
             if (!(value instanceof TruffleString strValue)) {
-                // e 必须是字符串
-                return LuaNil.SINGLETON;
+                throw LuaException.create("bad argument #1 to 'tonumber' (string expected, got "
+                        + LuaTypesUtil.getArgumentTypeName(value) + ")", null);
             }
-            if (!(arguments[1] instanceof Long)) {
-                // base 必须是整数
-                return LuaNil.SINGLETON;
-            }
-
-            long base = (Long) arguments[1];
-
-            // 检查 base 的范围
             if (base < 2 || base > 36) {
                 throw LuaException.create("bad argument #2 to 'tonumber' (base out of range)", this);
             }
-
             return parseStringWithBase(strValue, (int) base);
         }
+    }
+
+    /**
+     * 复刻标准 Lua 的 {@code luaL_checkinteger}：整数直接用；整数值浮点收窄；
+     * 字符串按数字解析（容忍首尾空白，支持负数）；其余报 "number expected, got X"。
+     */
+    private long coerceBase(Object baseArg) {
+        if (baseArg instanceof Long l) {
+            return l;
+        }
+        if (baseArg instanceof Number number) {
+            if (baseArg instanceof Double || baseArg instanceof Float) {
+                double d = number.doubleValue();
+                if (Double.isNaN(d) || Double.isInfinite(d)
+                        || d != Math.rint(d) || d < -9223372036854775808.0 || d >= 9223372036854775808.0) {
+                    throw noIntegerRepresentation();
+                }
+            }
+            return number.longValue();
+        }
+        if (baseArg instanceof TruffleString ts) {
+            Object parsed = LuaCoerceToNumberNode.parseLuaNumber(ts.toJavaStringUncached());
+            if (parsed instanceof Long l) {
+                return l;
+            }
+            if (parsed instanceof Double) {
+                throw noIntegerRepresentation();
+            }
+            throw LuaException.create("bad argument #2 to 'tonumber' (number expected, got string)", null);
+        }
+        throw LuaException.create("bad argument #2 to 'tonumber' (number expected, got "
+                + LuaTypesUtil.getArgumentTypeName(baseArg) + ")", null);
+    }
+
+    private RuntimeException noIntegerRepresentation() {
+        return LuaException.create("bad argument #2 to 'tonumber' (number has no integer representation)", null);
     }
 
     /**

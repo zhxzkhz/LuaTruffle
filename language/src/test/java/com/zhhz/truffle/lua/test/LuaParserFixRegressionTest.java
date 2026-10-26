@@ -1277,6 +1277,87 @@ public class LuaParserFixRegressionTest extends AbstractLuaTest {
     }
 
     @Test
+    public void testToNumberAcceptsNilButRequiresAnArgument() {
+        assertTrue(eval("""
+                local ok, err = pcall(tonumber)
+                return tonumber(nil) == nil
+                    and ok == false
+                    and err:find('value expected') ~= nil
+                    and tonumber('123') == 123
+                """).asBoolean());
+    }
+
+    @Test
+    public void testToNumberWithBaseRequiresString() {
+        assertTrue(eval("""
+                local ok1, err1 = pcall(tonumber, nil, 10)
+                local ok2, err2 = pcall(tonumber, 123, 10)
+                return ok1 == false and err1:find('string expected, got nil') ~= nil
+                    and ok2 == false and err2:find('string expected, got number') ~= nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testToNumberBaseTypeCoercionMatchesLua() {
+        assertTrue(eval("""
+                local ok, err = pcall(tonumber, '10', '-2')
+                return tonumber('10', nil) == 10
+                    and tonumber('10', '2') == 2
+                    and tonumber('10', 2.0) == 2
+                    and tonumber('2', '  10  ') == 2
+                    and ok == false and err:find('base out of range') ~= nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testToNumberBaseTypeErrorsMatchLua() {
+        assertTrue(eval("""
+                local ok1, e1 = pcall(tonumber, '10', 2.5)
+                local ok2, e2 = pcall(tonumber, '10', {})
+                local ok3, e3 = pcall(tonumber, '10', 'abc')
+                local ok4, e4 = pcall(tonumber, 123, {})
+                local ok5, e5 = pcall(tonumber, 123, 1)
+                return ok1 == false and e1:find('integer representation') ~= nil
+                    and ok2 == false and e2:find('number expected, got table') ~= nil
+                    and ok3 == false and e3:find('number expected, got string') ~= nil
+                    and ok4 == false and e4:find('number expected, got table') ~= nil
+                    and ok5 == false and e5:find('string expected, got number') ~= nil
+                """).asBoolean());
+    }
+
+    @Test
+    public void testVarargsNotLeakedToFunctionsCalledWithTooFewArgs() {
+        // 模拟 launcher 的 arguments 布局（launcher、脚本路径、脚本参数）：
+        // 固定参数不足的函数其 ... 必须为空，不得回退读取 arg 表
+        try (var context = newContextBuilder("lua").arguments("lua",
+                new String[]{"lua", "script.lua", "subId=20000", "force=92"}).build()) {
+            Value result = context.eval("lua", """
+                    local forward = function(subId, force, ...)
+                        return select('#', ...)
+                    end
+                    local chain = function(...)
+                        return (function(...) return select('#', ...) end)(...)
+                    end
+                    return forward(), chain()
+                    """);
+            assertEquals(0L, result.getArrayElement(0).asLong());
+            assertEquals(0L, result.getArrayElement(1).asLong());
+        }
+    }
+
+    @Test
+    public void testMainChunkVarargsReflectArgTableModifications() {
+        // main chunk 的 ... 来自 arg 表（lua.c pushargs 语义）：-e 修改 arg[1] 后可见
+        try (var context = newContextBuilder("lua").arguments("lua",
+                new String[]{"lua", "script.lua", "a", "b"}).build()) {
+            context.eval("lua", "arg[1] = 'MODIFIED'");
+            Value result = context.eval("lua", "return select('#', ...), (select(1, ...))");
+            assertEquals(2L, result.getArrayElement(0).asLong());
+            assertEquals("MODIFIED", result.getArrayElement(1).asString());
+        }
+    }
+
+    @Test
     public void testArithmeticStringCoercionProducesFloat() {
         assertEquals("3.0", eval("return tostring('1' + 2)").asString());
         assertEquals("-2.0", eval("return tostring(-'2')").asString());

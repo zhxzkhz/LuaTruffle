@@ -6,6 +6,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.zhhz.truffle.lua.nodes.LuaExpressionNode;
 import com.zhhz.truffle.lua.runtime.LuaContext;
+import com.zhhz.truffle.lua.runtime.LuaFunction;
 import com.zhhz.truffle.lua.runtime.LuaMultiValue;
 import com.zhhz.truffle.lua.runtime.LuaNil;
 import com.zhhz.truffle.lua.runtime.LuaTable;
@@ -40,14 +41,16 @@ public final class LuaReadVarargsNode extends LuaExpressionNode {
     }
 
     /**
-     * Get frame arguments, falling back to the 'arg' table when the frame has
-     * no varargs (e.g., for the main chunk). This allows -e statements that
-     * modify arg[1] to be visible via ... in the main chunk.
+     * Get frame arguments, falling back to the 'arg' table only for the main
+     * chunk: it is evaluated via context.eval, so its arguments carry no
+     * function object (lua.c pushargs reads the arg table at script start).
+     * Regular Lua functions always receive the callee at index 0 — when called
+     * with fewer arguments than fixed params their varargs must be empty,
+     * not the arg table's script arguments.
      */
     private Object[] getFrameArguments(VirtualFrame frame) {
         Object[] args = frame.getArguments();
-        int startIndex = 1 + fixedParamCount;
-        if (startIndex >= args.length) {
+        if (args.length == 0 || !(args[0] instanceof LuaFunction)) {
             return getVarargsFromArgTable(args);
         }
         return args;
